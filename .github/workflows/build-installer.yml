@@ -153,8 +153,10 @@ jobs:
           prerelease: ${{ github.event.inputs.prerelease == 'true' }}
           draft: false
           fail_on_unmatched_files: true
+          # ⚠ 附件的文件名必须是纯 ASCII：GitHub Releases 会把中文名「消毒」掉
+          #   （实测 型号查询-安装包-v2.1.exe → -.-v2.1.exe），所以这里用英文名。
           files: |
-            out/型号查询-安装包-v${{ steps.ver.outputs.num }}.exe
+            out/ModelLookup-Setup-${{ steps.ver.outputs.num }}.exe
             out/ModelLookup.exe
 
       - name: 汇总

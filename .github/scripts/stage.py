@@ -5,6 +5,11 @@
     PowerShell 脚本里写中文文件名，在 runner 上很容易被控制台/脚本编码搞坏，
     生成出乱码名字的文件。Python 源码默认 UTF-8，文件名稳定。
 
+⚠ 为什么安装包在 out/ 里用**英文名** ModelLookup-Setup-<版本>.exe：
+    GitHub Releases 的 asset 文件名**只接受 ASCII**，中文会被自动「消毒」替换掉
+    （实测 `型号查询-安装包-v2.1.exe` 上传后变成 `-.-v2.1.exe`）。
+    所以凡是进 Release 附件的文件，一律用 ASCII 名；中文名只在下载页说明里体现。
+
 用法: python .github/scripts/stage.py <版本号，如 2.0>
 """
 import os
@@ -34,7 +39,7 @@ def main():
         raise SystemExit("找不到安装包 %s；dist_installer 里只有：%s" % (src_inst, got))
 
     pairs = [
-        (src_inst, "型号查询-安装包-v%s.exe" % ver),
+        (src_inst, "ModelLookup-Setup-%s.exe" % ver),
         (os.path.join(ROOT, "app", "dist", "ModelLookup.exe"), "ModelLookup.exe"),
         (os.path.join(ROOT, "使用说明.txt"), "使用说明.txt"),
         (os.path.join(ROOT, "型号查询-公布版.html"), "型号查询-公布版.html"),
@@ -46,7 +51,7 @@ def main():
         else:
             print("  ! 跳过（源文件不存在）：%s" % a)
 
-    for need in ("型号查询-安装包-v%s.exe" % ver, "ModelLookup.exe"):
+    for need in ("ModelLookup-Setup-%s.exe" % ver, "ModelLookup.exe"):
         p = os.path.join(out, need)
         if not os.path.isfile(p):
             raise SystemExit("必需的产物没生成：" + p)
@@ -55,3 +60,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
