@@ -1,38 +1,40 @@
 # -*- coding: utf-8 -*-
 """
-型号查询 · 隆阳电器
-=====================
-单文件桌面工具：
-  · 双击 → 起本地服务 + 用默认浏览器打开离线查询页（数据已内嵌，秒开）
-  · 页面上「从金山文档更新数据」→ 用保存的登录态拉最新在线表 → 重新生成页面 → 自动刷新
-  · 也支持把从金山文档下载的 xlsx 直接拖到 exe 图标上重建
+型号查询 · 隆阳电器（公布版）
+================================
+独立窗口的桌面软件（自带 WebView2 内核，无地址栏 / 无浏览器外壳）：
 
-自检: 型号查询.exe --check     （结果写到 exe 同目录 exe_check.log）
+  · 双击 → 弹出一个自己的窗口，里面就是查询界面（数据已内嵌，秒开）
+  · 页面上 / 菜单里「从金山文档更新」→ 自动拉最新在线表 → 重建 → 自动刷新
+      · 已登录：后台静默完成，窗口都不闪
+      · 未登录：弹出「登录金山文档」窗口，扫码后自动继续
+  · 也支持把从金山文档下载的 xlsx 拖到 exe 图标上重建
+
+自检:  型号查询.exe --check        （结果写到 exe 同目录 exe_check.log）
 """
 import base64
 import io
 import json
 import os
-import queue
 import re
-import shutil
+import ssl
 import socket
 import sys
 import threading
 import time
 import traceback
-import webbrowser
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# 顶层 import（不能放进函数里）：放函数内会被 PyInstaller 判定为「延迟/可选」而不打包
+# ⚠ 顶层 import（不能放进函数里）：放进函数体内会被 PyInstaller 判定为「延迟/可选」而不打包
 import openpyxl  # noqa: E402
+import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "1.0"
+APP_VERSION = "2.0"
+APP_ID = "ModelLookup"
 
 ONLINE_SHARE = "https://www.kdocs.cn/l/ch7gwGTP9De4"
 FILE_SHARE = "ch7gwGTP9De4"
@@ -56,7 +58,7 @@ def res_dir():
 
 
 def work_dir():
-    d = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "ModelLookup")
+    d = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), APP_ID)
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -315,80 +317,11 @@ def render(payload, template=None):
     return template.replace("/*__DATA__*/", raw, 1)
 
 
-# ------------------------------------------------------------------ 金山文档
-
-def load_cookies():
-    for p in (wp("cookies.json"), rp("cookies.json")):
-        if os.path.isfile(p):
-            try:
-                d = json.load(io.open(p, encoding="utf-8-sig"))
-                cs = d.get("result", {}).get("cookies", [])
-                if cs:
-                    return "; ".join("%s=%s" % (c["name"], c["value"]) for c in cs), p
-            except Exception:
-                continue
-    return None, None
-
-
-def kdocs_download(ck, log):
-    """下载在线表 → 返回 xlsx 字节。"""
-    hdrs = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "zh-CN,zh;q=0.9",
-            "Referer": "https://www.kdocs.cn/l/" + FILE_SHARE, "Cookie": ck,
-            "Origin": "https://www.kdocs.cn"}
-
-    def get(url, timeout=120):
-        req = urllib.request.Request(url, headers=hdrs)
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r, r.read()
-
-    # 0) 登录态体检
-    try:
-        r, raw = get("https://www.kdocs.cn/api/v3/office/file/" + FILE_SHARE)
-        meta = json.loads(raw.decode("utf-8", "ignore"))
-        if str(meta.get("result")) in ("userNotLogin", "fail") or meta.get("code") in (40000, 401):
-            raise RuntimeError("登录态已过期")
-        f = (meta.get("file") or {})
-        log("在线表：%s（%s，改于 %s）" % (
-            f.get("name"), f.get("size"),
-            time.strftime("%Y-%m-%d %H:%M", time.localtime(f.get("modify_time", 0) or 0))))
-    except RuntimeError:
-        raise
-    except Exception as e:
-        log("元信息读取失败（继续尝试下载）：%r" % (e,))
-
-    # 1) 下载
-    for u in ("https://www.kdocs.cn/api/v3/office/file/%s/download" % FILE_ID,
-              "https://www.kdocs.cn/api/v3/office/file/%s/download" % FILE_SHARE):
-        try:
-            r, raw = get(u)
-            if raw[:2] == b"PK":
-                log("已下载 %d 字节" % len(raw))
-                return raw
-            txt = raw[:600].decode("utf-8", "ignore")
-            m = re.search(r'https?://[^"\'\s]+', txt)
-            if m:
-                u2 = m.group(0).replace("\\u0026", "&").replace("\\/", "/")
-                r2, raw2 = get(u2)
-                if raw2[:2] == b"PK":
-                    log("已下载 %d 字节（直链）" % len(raw2))
-                    return raw2
-            low = txt.lower()
-            if "notlogin" in low or "登录" in txt:
-                raise RuntimeError("登录态已过期，请重新登录金山文档")
-            log("端点返回非文件：%s" % txt[:150].replace("\n", " "))
-        except RuntimeError:
-            raise
-        except urllib.error.HTTPError as e:
-            log("下载端点 HTTP %s" % e.code)
-        except Exception as e:
-            log("下载端点失败：%r" % (e,))
-    raise RuntimeError("下载失败：拿不到 xlsx（登录态可能已过期）")
-
-
 # ------------------------------------------------------------------ 状态
 
 STATE = {"status": "idle", "msg": "", "built": "", "rev": 0}
 SLOCK = threading.Lock()
+LOG = []
 
 
 def set_state(status=None, msg=None, rev=None, built=None):
@@ -408,9 +341,176 @@ def read_state():
         return dict(STATE)
 
 
+# ------------------------------------------------------------------ 网络
+
+def http_get(url, headers=None, timeout=180):
+    hdrs = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "zh-CN,zh;q=0.9"}
+    hdrs.update(headers or {})
+    req = urllib.request.Request(url, headers=hdrs)
+    for ctx in (ssl.create_default_context(), ssl._create_unverified_context()):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+        except ssl.SSLError:
+            continue
+    raise RuntimeError("网络请求失败：" + url[:80])
+
+
+def fetch_xlsx_by_url(url, log):
+    code, raw = http_get(url, timeout=300)
+    if raw[:2] == b"PK":
+        log("已下载 %.2f MB" % (len(raw) / 1048576.0))
+        return raw
+    raise RuntimeError("直链返回的不是文件（HTTP %s）" % code)
+
+
+# ------------------------------------------------------------------ 金山文档：走内嵌窗口
+
+# 在「已经是 kdocs 域」的窗口里跑同步 XHR —— 同源，自动带上该窗口的登录态，
+# 不用把 cookie 搬到 Python 这边来（陌生电脑扫码后一样能用）
+SYNC_XHR = (
+    "(function(){try{"
+    "var x=new XMLHttpRequest();"
+    "x.open('GET','/api/v3/office/file/" + FILE_ID + "/download',false);"
+    "x.send();"
+    "return x.status+'|'+String(x.responseText);"
+    "}catch(e){return 'ERR|'+e.message;}})()"
+)
+
+MAIN_WIN = None
+LOGIN_WIN = None
+LOGIN_CLOSED = threading.Event()
+
+
+def js_eval(win, script, default=None):
+    if win is None:
+        return default
+    try:
+        return win.evaluate_js(script)
+    except Exception:
+        return default
+
+
+def kdocs_ready(win):
+    return str(js_eval(win, "location.host", "") or "").endswith("kdocs.cn")
+
+
+def direct_url_from_window(log):
+    """返回 (直链, 错误)。错误 'NOTLOGIN' 表示窗口没登录。"""
+    if LOGIN_WIN is None or LOGIN_CLOSED.is_set():
+        return None, "登录窗口不可用"
+    if not kdocs_ready(LOGIN_WIN):
+        return None, "NOTLOGIN"
+    r = js_eval(LOGIN_WIN, SYNC_XHR)
+    if r is None:
+        return None, "执行脚本失败"
+    r = str(r)
+    if r.startswith("ERR|"):
+        return None, r[4:]
+    _, _, txt = r.partition("|")
+    if txt[:2] == "PK":
+        return None, "端点直接返回了文件"
+    try:
+        d = json.loads(txt)
+    except Exception:
+        return None, "返回非 JSON：" + txt[:160]
+    if str(d.get("result")).lower() in ("usernotlogin", "notlogin"):
+        return None, "NOTLOGIN"
+    du = d.get("download_url") or d.get("url") or ""
+    if isinstance(du, str) and du.startswith("http"):
+        return du, None
+    return None, "拿不到直链：" + txt[:160]
+
+
+def open_login_window(log):
+    """把登录窗口导航到在线表所在域，等页面就绪。"""
+    set_state("running", "正在打开金山文档…")
+    log("打开金山文档页面…")
+    LOGIN_WIN.load_url(ONLINE_SHARE)
+    for _ in range(40):
+        time.sleep(0.5)
+        if LOGIN_CLOSED.is_set():
+            return False
+        if kdocs_ready(LOGIN_WIN) and js_eval(LOGIN_WIN, "document.readyState") == "complete":
+            time.sleep(1.0)
+            return True
+    return kdocs_ready(LOGIN_WIN)
+
+
+def obtain_download_url(log, allow_prompt=True, wait_s=900):
+    """拿到 xlsx 的签名直链。已登录会静默完成；未登录则弹窗等人扫码。"""
+    if LOGIN_WIN is None or LOGIN_CLOSED.is_set():
+        raise RuntimeError("登录窗口不可用，无法从在线表更新")
+
+    if not kdocs_ready(LOGIN_WIN):
+        open_login_window(log)
+
+    # 先静默重试：在线表是公开分享的，页面加载后十几秒匿名会话往往就能拿到直链
+    # —— 别一上来就弹扫码窗吓人，绝大部分人根本不用登录
+    set_state("running", "正在连接在线表…（如果需要登录，会自动弹出扫码窗口）")
+    for i in range(8):
+        du, err = direct_url_from_window(log)
+        if du:
+            log("静默取到直链（用时约 %d 秒）" % (i * 2))
+            return du
+        if i == 0 and err != "NOTLOGIN":
+            log("直链异常：%s（继续重试）" % err)
+        time.sleep(2.5)
+
+    if not allow_prompt:
+        raise RuntimeError("拿不到下载直链（在线表可能需要登录）")
+
+    log("静默期没拿到：弹出登录窗口等人扫码")
+    try:
+        LOGIN_WIN.show()
+    except Exception:
+        pass
+    set_state("login", "请在弹出的窗口里用微信/手机扫码登录金山文档，登录后会自动继续（无需点任何按钮）")
+
+    t0 = time.time()
+    tick = 0
+    while time.time() - t0 < wait_s:
+        time.sleep(3)
+        if LOGIN_CLOSED.is_set():
+            raise RuntimeError("登录窗口被关闭，已取消更新")
+        du, err = direct_url_from_window(log)
+        if du:
+            log("登录成功，取到直链")
+            try:
+                LOGIN_WIN.hide()
+            except Exception:
+                pass
+            return du
+        tick += 1
+        if tick % 4 == 0:
+            left = int((wait_s - (time.time() - t0)) / 60)
+            set_state("login", "等待扫码登录中…（还剩约 %d 分钟；登录成功后自动继续）" % max(left, 1))
+    try:
+        LOGIN_WIN.hide()
+    except Exception:
+        pass
+    raise RuntimeError("等待登录超时，已取消更新")
+
+
+def pick_xlsx(log, log_dir_scan=True):
+    """在线表若有本地最新 xlsx 也不必扫盘 —— 直接返回 None（走网络）。"""
+    return None
+
+
 # ------------------------------------------------------------------ 更新流程
 
 _update_lock = threading.Lock()
+
+
+def load_current_payload():
+    """当前数据：优先工作目录里的（更新后落在那），否则用 exe 内嵌的。"""
+    p = wp("payload.json")
+    if not os.path.isfile(p):
+        p = rp("payload.json")
+    with io.open(p, encoding="utf-8") as f:
+        return json.load(f)
 
 
 def rebuild_from_xlsx(path, log):
@@ -428,39 +528,40 @@ def rebuild_from_xlsx(path, log):
     for ck, v in (old.get("imgs") or {}).items():
         payload["imgs"].setdefault(ck, v)
     html = render(payload)
-    out = wp("index.html")
-    with io.open(out, "w", encoding="utf-8") as f:
+    with io.open(wp("index.html"), "w", encoding="utf-8") as f:
         f.write(html)
     with io.open(wp("payload.json"), "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False)          # 记为「当前数据」，下次启动沿用
+        json.dump(payload, f, ensure_ascii=False)      # 记为「当前数据」，下次启动沿用
     log("页面已重建：%d 个型号 / %d 张图" % (len(payload["rows"]), len(payload["imgs"])))
     set_state(built=payload["meta"]["built"])
     return payload
 
 
-def do_update(log, xlsx_path=None):
+def do_update(log, xlsx_bytes=None, xlsx_path=None):
     if not _update_lock.acquire(blocking=False):
         return False, "已有更新在进行中"
     try:
-        if xlsx_path is None:
-            set_state("running", "正在读取登录态…")
-            ck, src = load_cookies()
-            if not ck:
-                set_state("error", "没有找到登录态，请在下方用「本地 Excel」方式更新")
-                return False, "没有登录态"
-            log("登录态来自 %s" % src)
-            set_state("running", "正在从金山文档下载…")
-            raw = kdocs_download(ck, log)
-            set_state("running", "正在写入临时文件…")
-            xlsx_path = wp("data.xlsx")
-            with open(xlsx_path, "wb") as f:
-                f.write(raw)
-        else:
+        if xlsx_bytes is not None:
+            set_state("running", "正在解析上传的 Excel…")
+            path = wp("data.xlsx")
+            with open(path, "wb") as f:
+                f.write(xlsx_bytes)
+            log("使用本地文件（%.2f MB）" % (len(xlsx_bytes) / 1048576.0))
+        elif xlsx_path:
             set_state("running", "正在解析本地 Excel…")
+            path = xlsx_path
             log("使用本地文件：%s" % xlsx_path)
+        else:
+            set_state("running", "正在连接金山文档…")
+            du = obtain_download_url(log)
+            set_state("running", "正在下载在线表…")
+            raw = fetch_xlsx_by_url(du, log)
+            path = wp("data.xlsx")
+            with open(path, "wb") as f:
+                f.write(raw)
 
         set_state("running", "正在解析并重建页面…")
-        rebuild_from_xlsx(xlsx_path, log)
+        rebuild_from_xlsx(path, log)
         set_state("done", "更新完成")
         return True, "更新完成"
     except Exception as e:
@@ -473,10 +574,10 @@ def do_update(log, xlsx_path=None):
         _update_lock.release()
 
 
-# ------------------------------------------------------------------ HTTP
+# ------------------------------------------------------------------ HTTP（本地服务：给窗口里的页面用）
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ModelLookup/1.0"
+    server_version = "ModelLookup/2.0"
 
     def log_message(self, *a):
         pass
@@ -495,7 +596,9 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
-        path = urllib.parse.urlparse(self.path).path
+        u = urllib.parse.urlparse(self.path)
+        path = u.path
+
         if path in ("/", "/index.html"):
             p = wp("index.html")
             if not os.path.isfile(p):
@@ -504,17 +607,32 @@ class Handler(BaseHTTPRequestHandler):
             with io.open(p, "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
             return
-        if path == "/api/state":
-            s = read_state()
+
+        if path == "/api/ping":
+            self._send(200, json.dumps({"app": APP_ID, "ver": APP_VERSION}, ensure_ascii=False))
+            return
+
+        if path == "/api/focus":
             try:
-                s["built"] = s.get("built") or json.load(
-                    io.open(rp("payload.json"), encoding="utf-8"))["meta"]["built"]
+                MAIN_WIN.restore()
+                MAIN_WIN.show()
             except Exception:
                 pass
+            self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            return
+
+        if path == "/api/state":
+            s = read_state()
+            if not s.get("built"):
+                try:
+                    s["built"] = json.load(io.open(rp("payload.json"), encoding="utf-8"))["meta"]["built"]
+                except Exception:
+                    pass
             self._send(200, json.dumps(s, ensure_ascii=False))
             return
+
         if path == "/api/update":
-            if read_state()["status"] == "running":
+            if read_state()["status"] in ("running", "login"):
                 self._send(200, json.dumps({"ok": False, "msg": "正在更新中，请稍候"},
                                            ensure_ascii=False))
                 return
@@ -522,14 +640,62 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=do_update, args=(LOG.append,), daemon=True).start()
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             return
+
+        if path == "/api/cancel":
+            set_state("error", "已取消")
+            self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            return
+
         self._send(404, json.dumps({"ok": False, "msg": "not found"}, ensure_ascii=False))
 
-
-LOG = []
+    def do_POST(self):
+        u = urllib.parse.urlparse(self.path)
+        if u.path != "/api/upload":
+            self._send(404, json.dumps({"ok": False, "msg": "not found"}, ensure_ascii=False))
+            return
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(n)
+            # 页面用 base64 传（避免 multipart 解析）
+            txt = raw.decode("utf-8", "ignore").strip()
+            if txt.startswith("data:"):
+                txt = txt.split(",", 1)[-1]
+            data = base64.b64decode(txt)
+            if data[:2] != b"PK":
+                raise RuntimeError("这不是一个 xlsx 文件")
+            if read_state()["status"] in ("running", "login"):
+                self._send(200, json.dumps({"ok": False, "msg": "正在更新中，请稍候"},
+                                           ensure_ascii=False))
+                return
+            set_state("running", "正在解析上传的 Excel…")
+            threading.Thread(target=do_update, args=(LOG.append,), kwargs={"xlsx_bytes": data},
+                             daemon=True).start()
+            self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+        except Exception as e:
+            self._send(200, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
 
 
 # 固定端口：localStorage 是按 origin 隔离的，端口一变用户标的「已发布」「我的定价」就全丢
 PORTS = [17321, 17322, 17323, 17324, 17325, 17326, 17327, 17328]
+HOST = "127.0.0.1"
+
+
+def port_alive(port, timeout=0.6):
+    """返回 True 表示本程序已经在跑（而不是别的程序占着端口）。"""
+    try:
+        with urllib.request.urlopen("http://%s:%d/api/ping" % (HOST, port), timeout=timeout) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        return d.get("app") == APP_ID
+    except Exception:
+        return False
+
+
+def activate_existing(port):
+    try:
+        urllib.request.urlopen("http://%s:%d/api/focus" % (HOST, port), timeout=1.5).read()
+        return True
+    except Exception:
+        return False
 
 
 def start_server():
@@ -537,22 +703,22 @@ def start_server():
     port = 0
     for p in PORTS:
         try:
-            httpd = ThreadingHTTPServer(("127.0.0.1", p), Handler)
+            httpd = ThreadingHTTPServer((HOST, p), Handler)
             port = p
             break
         except OSError:
             continue
-    if httpd is None:                       # 全被占了才退回随机端口
+    if httpd is None:                       # 全被别的东西占了才退回随机端口
         s = socket.socket()
-        s.bind(("127.0.0.1", 0))
+        s.bind((HOST, 0))
         port = s.getsockname()[1]
         s.close()
-        httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        httpd = ThreadingHTTPServer((HOST, port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd, port
 
 
-# ------------------------------------------------------------------ GUI
+# ------------------------------------------------------------------ 窗口 / 应用
 
 def _dpi():
     try:
@@ -562,217 +728,200 @@ def _dpi():
         pass
 
 
-INK, SUB, LINE = "#1b2431", "#5b6577", "#e6eaf2"
-BRAND, BRAND_D, BRAND_L = "#2e6be6", "#1b47b8", "#eaf1ff"
-FONT = "Microsoft YaHei UI"
-
-
-def run_gui(httpd, port, root=None):
-    import tkinter as tk
-    from tkinter import ttk, filedialog
-
-    own = root is None
-    if own:
-        _dpi()
-        root = tk.Tk()
-    root.title("%s v%s · 隆阳电器" % (APP_NAME, APP_VERSION))
-    root.configure(bg="#f4f6fa")
-    root.minsize(560, 420)
-    W, H = 620, 470
-    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-    root.geometry("%dx%d+%d+%d" % (W, H, max(0, (sw - W) // 2), max(0, (sh - H) // 3)))
-
-    st = ttk.Style()
+def work_area():
+    """主显示器可用区域 (x, y, w, h)。"""
     try:
-        st.theme_use("clam")
+        import ctypes
+        import ctypes.wintypes as wt
+        r = wt.RECT()
+        if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):
+            w, h = r.right - r.left, r.bottom - r.top
+            if w > 200 and h > 200:
+                return r.left, r.top, w, h
     except Exception:
         pass
-    st.configure(".", font=(FONT, 10), background="#f4f6fa", foreground=INK)
-    st.configure("Panel.TFrame", background="#f4f6fa")
-    st.configure("Card.TFrame", background="#ffffff")
-    # ⚠ ttk 字体元组的 weight 必须写字符串 "bold"；写 True 会让该控件文字整个不渲染
-    st.configure("H.TLabel", font=(FONT, 13, "bold"), background="#f4f6fa", foreground=INK)
-    st.configure("Sub.TLabel", font=(FONT, 9), background="#f4f6fa", foreground=SUB)
-    st.configure("CardSub.TLabel", font=(FONT, 9), background="#ffffff", foreground=SUB)
-    st.configure("Ok.TLabel", font=(FONT, 10, "bold"), background="#ffffff", foreground="#0f7d45")
-    st.configure("Err.TLabel", font=(FONT, 10, "bold"), background="#ffffff", foreground="#d64545")
-    st.configure("Primary.TButton", font=(FONT, 10, "bold"), foreground="#ffffff",
-                 background=BRAND, borderwidth=0, padding=(14, 9))
-    st.map("Primary.TButton", background=[("active", BRAND_D), ("disabled", "#a9c0ee")])
-    st.configure("Soft.TButton", font=(FONT, 10), foreground=BRAND_D,
-                 background=BRAND_L, borderwidth=0, padding=(12, 8))
-    st.map("Soft.TButton", background=[("active", "#dbe7ff")])
+    return 0, 0, 1280, 800
 
-    top = ttk.Frame(root, style="Panel.TFrame")
-    top.pack(fill="x", padx=18, pady=(16, 8))
-    ttk.Label(top, text="型号查询", style="H.TLabel").pack(anchor="w")
-    ttk.Label(top, text="隆阳电器 · 滞销 / 样机清理明细（公布版）", style="Sub.TLabel").pack(anchor="w", pady=(2, 0))
 
-    card = ttk.Frame(root, style="Card.TFrame")
-    card.pack(fill="x", padx=18, pady=(4, 10))
-    inner = tk.Frame(card, bg="#ffffff")
-    inner.pack(fill="x", padx=14, pady=12)
+def fit_window(want_w, want_h):
+    """窗口别比屏幕还大（远程桌面 / 小屏笔记本上很常见）。"""
+    x, y, W, H = work_area()
+    w = min(want_w, max(900, int(W * 0.94)))
+    h = min(want_h, max(620, int(H * 0.94)))
+    return w, h, x + (W - w) // 2, y + (H - h) // 2
 
-    lbl_state = tk.Label(inner, text="就绪", bg="#ffffff", fg="#0f7d45",
-                         font=(FONT, 10, "bold"), anchor="w")
-    lbl_state.pack(fill="x")
-    lbl_msg = tk.Label(inner, text="", bg="#ffffff", fg=SUB, font=(FONT, 9),
-                       anchor="w", justify="left", wraplength=520)
-    lbl_msg.pack(fill="x", pady=(3, 0))
 
-    btns = tk.Frame(root, bg="#f4f6fa")
-    btns.pack(fill="x", padx=18)
-    b_open = ttk.Button(btns, text="打开查询页", style="Primary.TButton",
-                        command=lambda: webbrowser.open("http://127.0.0.1:%d/" % port))
-    b_upd = ttk.Button(btns, text="从金山文档更新", style="Soft.TButton", command=lambda: on_update(None))
-    b_loc = ttk.Button(btns, text="用本地 Excel 更新", style="Soft.TButton", command=lambda: on_local())
-    for b in (b_open, b_upd, b_loc):
-        b.pack(side="left", padx=(0, 8))
+def _webview2_pv():
+    """已安装的 WebView2 运行时版本（没有就返回 None）。"""
+    try:
+        import winreg
+        keys = [
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"
+                                       r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\EdgeUpdate\Clients"
+                                       r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+            (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\EdgeUpdate\Clients"
+                                      r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+        ]
+        for root, sub in keys:
+            try:
+                with winreg.OpenKey(root, sub) as k:
+                    v = winreg.QueryValueEx(k, "pv")[0]
+                if v and v != "0.0.0.0":
+                    return v
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return None
 
-    tk.Label(root, text="运行日志", bg="#f4f6fa", fg=SUB, font=(FONT, 9),
-             anchor="w").pack(fill="x", padx=18, pady=(14, 4))
-    box = tk.Frame(root, bg="#ffffff", highlightthickness=1, highlightbackground=LINE)
-    box.pack(fill="both", expand=True, padx=18, pady=(0, 16))
-    txt = tk.Text(box, bg="#ffffff", fg="#33404f", relief="flat", wrap="word",
-                  font=("Consolas", 9), padx=10, pady=8, height=10)
-    txt.pack(fill="both", expand=True)
-    txt.configure(state="disabled")
-    sb = ttk.Scrollbar(box, command=txt.yview)
-    txt.configure(yscrollcommand=sb.set)
 
-    Q = queue.Queue()
-    LOG.append(lambda m: Q.put(("log", str(m))))
-    STOP = {"v": False}
+def build_menu():
+    from webview.menu import Menu, MenuAction, MenuSeparator
 
-    def append_line(s):
-        txt.configure(state="normal")
-        txt.insert("end", time.strftime("[%H:%M] ") + s.rstrip() + "\n")
-        txt.see("end")
-        txt.configure(state="disabled")
+    def upd():
+        threading.Thread(target=do_update, args=(LOG.append,), daemon=True).start()
 
-    def set_busy(busy):
-        for b in (b_upd, b_loc):
-            b.configure(state="disabled" if busy else "normal")
+    def about():
+        webview.windows[0].evaluate_js(
+            "alert('型号查询 v%s\\n\\n隆阳电器 · 滞销/样机清理明细（公布版）\\n"
+            "数据来源：金山文档在线表\\n内置 %s')" % (APP_VERSION, _built_desc())
+        )
 
-    def show(state, msg):
-        col = {"ok": "#0f7d45", "err": "#d64545"}.get(state, BRAND_D)
-        lbl_state.configure(text={"ok": "✔ 更新完成", "err": "✘ 更新失败"}.get(state, "● 正在更新…"),
-                            fg=col)
-        lbl_msg.configure(text=msg or "")
-
-    last = {"s": "idle"}
-
-    def pump():
+    def source():
         try:
-            while True:
-                kind, payload = Q.get_nowait()
-                if kind == "log":
-                    append_line(payload)
-                elif kind == "result":
-                    ok, msg = payload
-                    set_busy(False)
-                    show("ok" if ok else "err", msg)
-                    if ok:
-                        webbrowser.open("http://127.0.0.1:%d/" % port)
-        except queue.Empty:
+            import webbrowser
+            webbrowser.open(ONLINE_SHARE)
+        except Exception:
             pass
 
-        if not STOP["v"]:
-            s = read_state()
-            cur = s.get("status")
-            if cur == "running":
-                set_busy(True)
-                show("run", s.get("msg") or "")
-            elif cur != last["s"]:              # 只在状态跳变时刷一次，避免和页面抢状态
-                if cur == "done":
-                    show("ok", "数据已更新到最新")
-                    set_busy(False)
-                elif cur == "error":
-                    show("err", s.get("msg") or "")
-                    set_busy(False)
-            last["s"] = cur
-        if STOP["v"]:
-            return
-        root.after(350, pump)
+    return [
+        Menu("数据(&D)", [
+            MenuAction("从金山文档更新", upd),
+            MenuAction("打开在线表（浏览器）", source),
+        ]),
+        Menu("帮助(&H)", [
+            MenuAction("关于", about),
+        ]),
+    ]
 
-    def work(xlsx):
-        if not xlsx:
-            Q.put(("log", "开始从金山文档更新…"))
-        else:
-            Q.put(("log", "使用本地文件：%s" % xlsx))
-        ok, msg = do_update(lambda m: Q.put(("log", str(m))), xlsx)
-        Q.put(("result", (ok, msg)))
 
-    def on_update(xlsx):
-        if read_state()["status"] == "running":
-            return
-        set_busy(True)
-        show("run", "正在启动更新…")
-        set_state("running", "正在连接金山文档…")
-        threading.Thread(target=work, args=(xlsx,), daemon=True).start()
+def _built_desc():
+    try:
+        p = load_current_payload()
+        return "%d 个型号 / %d 张机图 · 数据 %s" % (
+            len(p["rows"]), len(p.get("imgs") or {}), p["meta"].get("built"))
+    except Exception:
+        return "数据未就绪"
 
-    def on_local():
-        p = filedialog.askopenfilename(title="选择从金山文档下载的 Excel",
-                                       filetypes=[("Excel 工作簿", "*.xlsx *.xls"), ("所有文件", "*.*")])
-        if p:
-            on_update(p)
 
-    def on_close():
-        STOP["v"] = True
+def warn_no_webview2():
+    """没有 WebView2 运行时 → 用原生 MessageBox 说清楚，别让用户干瞪眼。"""
+    msg = ("本机缺少 Microsoft Edge WebView2 运行时，程序没法显示界面。\n\n"
+           "装一下就好（免费，2MB）：\n"
+           "https://go.microsoft.com/fwlink/p/?LinkId=2124703\n\n"
+           "装完重新打开本程序即可。")
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, msg, APP_NAME, 0x10)
+    except Exception:
+        pass
+
+
+def run_app(httpd, port, startup_xlsx=None):
+    global MAIN_WIN, LOGIN_WIN
+    url = "http://%s:%d/" % (HOST, port)
+
+    _dpi()                                  # 必须在量屏幕 / 建窗前：否则算出来是缩放前的尺寸
+    w, h, x, y = fit_window(1480, 940)
+    lw, lh, lx, ly = fit_window(1180, 860)
+
+    MAIN_WIN = webview.create_window(
+        "%s · 隆阳电器（公布版）" % APP_NAME,
+        url=url,
+        width=w, height=h, x=x, y=y,
+        min_size=(900, 600),
+        background_color="#f5f7fb",
+        text_select=True,
+        menu=build_menu(),
+    )
+    # 登录窗口：先建好藏着，需要扫码时才 show()（创建必须发生在 start() 之前）
+    LOGIN_WIN = webview.create_window(
+        "登录金山文档 · 扫码后不用点任何按钮",
+        html="<body style='background:#fff;font:14px \"Microsoft YaHei\";padding:30px;color:#5b6577'>"
+             "正在打开金山文档…</body>",
+        width=lw, height=lh, x=lx, y=ly, min_size=(700, 520), hidden=True,
+    )
+
+    def on_login_closed():
+        LOGIN_CLOSED.set()
+
+    try:
+        LOGIN_WIN.events.closed += on_login_closed
+    except Exception:
+        pass
+
+    def on_main_closed():
+        set_state("error", "窗口已关闭")
+        try:
+            if LOGIN_WIN is not None and not LOGIN_CLOSED.is_set():
+                LOGIN_WIN.destroy()
+        except Exception:
+            pass
         try:
             httpd.shutdown()
         except Exception:
             pass
-        try:
-            root.destroy()
-        except Exception:
-            pass
 
-    root.protocol("WM_DELETE_WINDOW", on_close)
-    append_line("本机服务已启动：http://127.0.0.1:%d/" % port)
-    append_line("页面里点「从金山文档更新数据」也可直接更新。")
-    pump()
-    if own:
-        root.mainloop()
-    return root
+    try:
+        MAIN_WIN.events.closed += on_main_closed
+    except Exception:
+        pass
 
+    def after_start():
+        LOG.append(lambda m: print("[%s] %s" % (APP_NAME, m)))
+        LOG.append(lambda m: None)
+        if startup_xlsx:
+            time.sleep(1.0)
+            do_update(LOG.append, xlsx_path=startup_xlsx)
 
-# ------------------------------------------------------------------ 启动
-
-def load_current_payload():
-    """当前数据：优先工作目录里的（一键更新后落在那），否则用 exe 内嵌的。"""
-    p = wp("payload.json")
-    if not os.path.isfile(p):
-        p = rp("payload.json")
-    with io.open(p, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def bootstrap():
-    """用当前数据渲染 index.html —— 每次启动都重建，保证页面与数据永远一致。"""
-    payload = load_current_payload()
-    out = wp("index.html")
-    with io.open(out, "w", encoding="utf-8") as f:
-        f.write(render(payload))
-    return out
+    webview.start(after_start, gui="edgechromium", debug=False,
+                  private_mode=False, storage_path=wp("webview"),
+                  http_server=False)
 
 
 def main():
+    if not webview2_ok():
+        warn_no_webview2()
+        return
+
+    # 已经在跑 → 把那个窗口叫到前面来，别开第二个（否则端口变了，本地标记会丢）
+    for p in PORTS:
+        if port_alive(p):
+            if activate_existing(p):
+                return
+
     arg = None
     for a in sys.argv[1:]:
         if a.lower().endswith((".xlsx", ".xls")) and os.path.isfile(a):
             arg = a
             break
+
     bootstrap()
     httpd, port = start_server()
-    if arg:
-        def _bg():
-            do_update(LOG.append, arg)
-            webbrowser.open("http://127.0.0.1:%d/" % port)
-        threading.Thread(target=_bg, daemon=True).start()
-    else:
-        webbrowser.open("http://127.0.0.1:%d/" % port)
-    run_gui(httpd, port)
+    run_app(httpd, port, arg)
+
+
+def webview2_ok():
+    return _webview2_pv() is not None
+
+
+def bootstrap():
+    """用当前数据渲染 index.html —— 每次启动都重建，保证页面与数据永远一致。"""
+    payload = load_current_payload()
+    with io.open(wp("index.html"), "w", encoding="utf-8") as f:
+        f.write(render(payload))
+    return wp("index.html")
 
 
 # ------------------------------------------------------------------ 自检
@@ -784,37 +933,55 @@ def _check():
     out.append("exe = %s" % sys.executable)
     out.append("资源目录 = %s" % res_dir())
     out.append("工作目录 = %s" % work_dir())
-    ok = True
+    out.append("WebView2 运行时 = %s %s" % (_webview2_pv() or "无", "✅" if webview2_ok() else "❌"))
+    ok = webview2_ok()
 
     try:
-        import tkinter
-        r = tkinter.Tk()
-        r.destroy()
-        out.append("tkinter = %s ✅" % tkinter.TkVersion)
+        out.append("pywebview = %s ✅" % (getattr(webview, "__version__", "?"),))
     except Exception as e:
         ok = False
-        out.append("tkinter ❌ %r" % (e,))
+        out.append("pywebview ❌ %r" % (e,))
+
+    # ⚠ 这条必须留着：winforms 顶层硬依赖 webview.platforms.win32，
+    #   打包时把它 excludes 掉，pywebview 会误导性地报「You must have pythonnet installed」
+    try:
+        import webview.platforms.winforms as _wf   # noqa: F401
+        out.append("winforms 后端 = 可导入 ✅")
+    except Exception as e:
+        ok = False
+        out.append("winforms 后端 ❌ 界面根本起不来！%r" % (e,))
+
+    for mod in ("clr", "pythonnet"):
+        try:
+            __import__(mod)
+            out.append("%s ✅" % mod)
+        except Exception as e:
+            ok = False
+            out.append("%s ❌ %r" % (mod, e))
 
     try:
-        import openpyxl
         out.append("openpyxl = %s ✅" % openpyxl.__version__)
     except Exception as e:
         ok = False
         out.append("openpyxl ❌ 缺了会导致没法解析表格！%r" % (e,))
 
-    for name in ("template.html", "payload.json", "cookies.json"):
+    for name in ("template.html", "payload.json", "images_cache.json"):
         p = rp(name)
         if os.path.isfile(p):
-            out.append("%s = %.1f KB ✅" % (name, os.path.getsize(p) / 1024.0))
+            out.append("%s = %.2f MB ✅" % (name, os.path.getsize(p) / 1048576.0))
         else:
             ok = False
             out.append("%s ❌ 打包漏带！" % name)
+
+    if is_frozen() and os.path.isfile(rp("cookies.json")):
+        ok = False
+        out.append("❌ 打包里带了 cookies.json（本机登录态），不应该外发！")
 
     try:
         with io.open(rp("payload.json"), encoding="utf-8") as f:
             p = json.load(f)
         n_img = len(p.get("imgs") or {})
-        img_ok = all(isinstance(v, str) and v.startswith("data:image/jpeg;base64,")
+        img_ok = all(isinstance(v, str) and v.startswith("data:image/")
                      for v in (p.get("imgs") or {}).values())
         out.append("payload: 型号 %d 个 / 图 %d 张 / dataURL 格式 %s ✅"
                    % (len(p["rows"]), n_img, "正常" if img_ok else "异常"))
@@ -827,15 +994,11 @@ def _check():
         ok = False
         out.append("渲染试跑 ❌ %r" % (e,))
 
-    ck, src = load_cookies()
-    out.append("登录态：%s（%s）%s" % ("有" if ck else "无", src or "-", "✅" if ck else "⚠"))
-
     try:
         httpd, port = start_server()
-        req = urllib.request.Request("http://127.0.0.1:%d/api/state" % port)
-        with urllib.request.urlopen(req, timeout=6) as r:
-            s = json.loads(r.read().decode("utf-8"))
-        out.append("本地服务 = 端口 %d / state=%s ✅" % (port, s.get("status")))
+        with urllib.request.urlopen("http://%s:%d/api/ping" % (HOST, port), timeout=6) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        out.append("本地服务 = 端口 %d / app=%s ✅" % (port, d.get("app")))
         httpd.shutdown()
     except Exception as e:
         ok = False
@@ -852,14 +1015,22 @@ def _check():
     if is_frozen():
         mb = os.path.getsize(sys.executable) / 1048576.0
         out.append("exe 体积 = %.2f MB" % mb)
-        if mb > 45:
-            out.append("⚠ 体积偏大，可能又有大依赖被拖进来了")
+        if mb > 90:
+            out.append("⚠ 体积偏大，检查是不是把 numpy/PIL 之类拖进来了")
 
     out.append("判定：自检%s" % ("通过 ✅" if ok else "失败 ❌"))
     txt = "\n".join(out)
-    with io.open(os.path.join(os.path.dirname(sys.executable), "exe_check.log"),
-                 "w", encoding="utf-8") as f:
-        f.write(txt)
+    logdir = os.path.dirname(sys.executable) if is_frozen() else os.path.dirname(os.path.abspath(__file__))
+    try:
+        with io.open(os.path.join(logdir, "exe_check.log"), "w", encoding="utf-8") as f:
+            f.write(txt)
+    except Exception:
+        pass
+    try:
+        sys.stdout.write(txt + "\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
     return txt
 
 
@@ -870,5 +1041,9 @@ if __name__ == "__main__":
         try:
             main()
         except Exception:
-            import tkinter.messagebox as mb
-            mb.showerror(APP_NAME, "启动失败：\n\n" + traceback.format_exc())
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(None, traceback.format_exc(),
+                                                 APP_NAME + " 启动失败", 0x10)
+            except Exception:
+                pass

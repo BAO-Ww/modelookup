@@ -62,6 +62,23 @@ dist_*/
 *.spec.bak
 exe_check.log
 
+# ---- 本机调试用的一次性脚本与产物 ----
+_probe*.py
+_probe*.log
+_smoke*.py
+_smoke*.png
+_smoke*.log
+_test_*.py
+_test_*.log
+_test_*.png
+_freshprofile/
+_fresh.xlsx
+_probe_dl.xlsx
+_wv2setup.exe
+_install.log
+_t/
+installer/*.log
+
 # ---- 下载的数据表 ----
 *.xlsx
 *.xls

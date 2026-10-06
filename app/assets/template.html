@@ -334,8 +334,10 @@ footer a:hover{text-decoration:underline}
     </div>
     <div class="updbar" id="updbar" hidden>
       <button class="chip" id="updbtn">↻ 从金山文档更新数据</button>
+      <button class="chip" id="updlocal" title="把从金山文档下载下来的 xlsx 直接传进来重建">📂 用本地 Excel 更新</button>
       <span class="upnote" id="updmsg"></span>
     </div>
+    <input type="file" id="xlsxfile" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none">
     <input type="file" id="imgfile" accept="image/*" style="display:none">
     <input type="file" id="jsonfile" accept=".json,application/json" style="display:none">
 
@@ -833,13 +835,7 @@ function run(){
   moreEl.hidden = true;
   shown = 0;
   var hasFilter = !!(curBrand || curCat || curKind || flagStock || flagSend || pminV != null || pmaxV != null);
-  if (!q && !hasFilter){
-    hintEl.innerHTML = '共 <b>' + ALL.length.toLocaleString('zh-CN') + '</b> 个型号'
-      + ' <span class="dot"></span> 已发布 <b>' + Object.keys(MARKED).length + '</b> 个'
-      + ' <span class="dot"></span> 缺图 <b>' + missCount() + '</b> 个'
-      + ' <span class="dot"></span> 支持型号模糊匹配与品类搜索';
-    return;
-  }
+  var browse = !q && !hasFilter;      // 刚打开软件：直接列全部，别给一个空白窗口
   var res = q ? (search(q) || []) : allFiltered();
   cur = res;
   if (!res.length){ hintEl.innerHTML = '无匹配结果'; listEl.innerHTML = emptyHTML(q || '当前筛选'); return; }
@@ -852,6 +848,11 @@ function run(){
     }
     bits = '找到 <b>' + res.length + '</b> 条'
       + (exact ? '（精确型号 <b>' + exact + '</b> 条）' : (catm === res.length ? '（按品类/名称匹配）' : '（模糊匹配）'));
+  } else if (browse){
+    bits = '共 <b>' + ALL.length.toLocaleString('zh-CN') + '</b> 个型号'
+      + ' <span class="dot"></span> 已发布 <b>' + Object.keys(MARKED).length + '</b> 个'
+      + ' <span class="dot"></span> 缺图 <b>' + missCount() + '</b> 个'
+      + ' <span class="dot"></span> 支持型号模糊匹配与品类搜索';
   } else {
     bits = '筛选到 <b>' + res.length + '</b> 条';
   }
@@ -959,30 +960,78 @@ pclearBtn.addEventListener('click', function(){ pminEl.value = ''; pmaxEl.value 
 document.getElementById('expimg').addEventListener('click', exportMyImgs);
 document.getElementById('impimg').addEventListener('click', importMyImgs);
 
-/* ================= 一键更新（只有通过本地服务打开时才出现） ================= */
+/* ================= 一键更新（跑在软件自带窗口里 / 走本地服务时才出现） ================= */
 (function(){
   if (location.protocol !== 'http:') return;
-  var bar = document.getElementById('updbar');
-  var btn = document.getElementById('updbtn');
-  var msg = document.getElementById('updmsg');
+  var bar   = document.getElementById('updbar');
+  var btn   = document.getElementById('updbtn');
+  var blocal= document.getElementById('updlocal');
+  var msg   = document.getElementById('updmsg');
+  var fin   = document.getElementById('xlsxfile');
   bar.hidden = false;
+
+  function busy(on, label){
+    btn.disabled = on; blocal.disabled = on;
+    btn.textContent = on ? (label || '正在更新…') : '↻ 从金山文档更新数据';
+  }
+  function reset(){ busy(false); }
+
   function poll(){
     fetch('/api/state', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
-      if (s.status === 'running'){ msg.innerHTML = '<span class="spin"></span>' + esc(s.msg || '正在更新…'); setTimeout(poll, 1200); }
-      else if (s.status === 'done'){ msg.innerHTML = '✅ 更新完成，正在刷新…'; setTimeout(function(){ location.reload(); }, 700); }
-      else if (s.status === 'error'){ msg.innerHTML = '❌ 更新失败：' + esc(s.msg || ''); btn.disabled = false; btn.textContent = '↻ 重试'; }
+      if (s.status === 'running'){
+        msg.innerHTML = '<span class="spin"></span>' + esc(s.msg || '正在更新…');
+        busy(true, '正在更新…'); setTimeout(poll, 1200);
+      } else if (s.status === 'login'){
+        msg.innerHTML = '<span class="spin"></span>' + esc(s.msg || '等待扫码登录…');
+        busy(true, '等待扫码…'); setTimeout(poll, 1500);
+      } else if (s.status === 'done'){
+        msg.innerHTML = '✅ 更新完成，正在刷新…';
+        setTimeout(function(){ location.reload(); }, 700);
+      } else if (s.status === 'error'){
+        msg.innerHTML = '❌ 更新失败：' + esc(s.msg || '');
+        reset();
+      } else {
+        reset();
+      }
     }).catch(function(){ setTimeout(poll, 1500); });
   }
+
   btn.addEventListener('click', function(){
-    btn.disabled = true; btn.textContent = '正在更新…';
+    if (btn.disabled) return;
+    busy(true, '正在更新…');
     msg.innerHTML = '<span class="spin"></span>正在连接金山文档…';
     fetch('/api/update', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
-      if (!r.ok){ msg.textContent = '更新失败：' + (r.msg || ''); btn.disabled = false; btn.textContent = '↻ 重试'; return; }
+      if (!r.ok){ msg.textContent = '更新失败：' + (r.msg || ''); reset(); return; }
       poll();
-    }).catch(function(e){ msg.textContent = '请求失败：' + e; btn.disabled = false; btn.textContent = '↻ 重试'; });
+    }).catch(function(e){ msg.textContent = '请求失败：' + e; reset(); });
   });
+
+  blocal.addEventListener('click', function(){
+    if (blocal.disabled) return;
+    fin.value = '';
+    fin.click();
+  });
+  fin.addEventListener('change', function(){
+    var f = fin.files && fin.files[0];
+    if (!f) return;
+    busy(true, '正在上传…');
+    msg.innerHTML = '<span class="spin"></span>正在读取 ' + esc(f.name) + '…';
+    var fr = new FileReader();
+    fr.onload = function(){
+      var b64 = String(fr.result).split(',')[1] || '';
+      fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: b64 })
+        .then(function(r){ return r.json(); }).then(function(r){
+          if (!r.ok){ msg.textContent = '更新失败：' + (r.msg || ''); reset(); return; }
+          msg.innerHTML = '<span class="spin"></span>正在解析并重建页面…';
+          poll();
+        }).catch(function(e){ msg.textContent = '上传失败：' + e; reset(); });
+    };
+    fr.onerror = function(){ msg.textContent = '读文件失败'; reset(); };
+    fr.readAsDataURL(f);
+  });
+
   fetch('/api/state', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
-    if (s.status === 'running'){ btn.disabled = true; btn.textContent = '正在更新…'; poll(); }
+    if (s.status === 'running' || s.status === 'login'){ busy(true); poll(); }
   }).catch(function(){});
 })();
 
