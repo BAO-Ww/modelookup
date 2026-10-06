@@ -32,6 +32,11 @@ jobs:
   build:
     runs-on: windows-latest
 
+    env:
+      # ⚠ runner 控制台默认是 cp1252，Python 往 stdout 打中文会直接 UnicodeEncodeError
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+
     steps:
       - name: 拉代码
         uses: actions/checkout@v4
@@ -80,7 +85,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-build.txt
-          python -c "import openpyxl, webview, clr; print('依赖就绪：openpyxl', openpyxl.__version__)"
+          # 这行刻意用纯 ASCII：runner 控制台是 cp1252，打中文会 UnicodeEncodeError
+          python -c "import openpyxl, webview, clr, PyInstaller; print('deps ok:', openpyxl.__version__, PyInstaller.__version__)"
 
       - name: 打包 exe（PyInstaller）
         working-directory: app
@@ -94,9 +100,10 @@ jobs:
         shell: pwsh
         run: |
           .\ModelLookup.exe --check
-          Get-Content .\exe_check.log -Encoding utf8
           $log = Get-Content .\exe_check.log -Encoding utf8 -Raw
-          if ($log -notmatch '自检通过') { throw '成品自检没通过，见上面的 exe_check.log' }
+          $log
+          # 用 ASCII 哨兵判断，避免中文/编码问题
+          if ($log -notmatch 'RESULT: PASS') { throw '成品自检没通过，见上面的 exe_check.log' }
 
       - name: 装 Inno Setup 6.7.3
         shell: pwsh
@@ -119,18 +126,9 @@ jobs:
           Get-ChildItem ..\dist_installer
 
       - name: 整理产物（中文名安装包）
+        # ⚠ 交给 Python 做：PowerShell 里写中文文件名在 runner 上会被编码搞坏
         shell: pwsh
-        run: |
-          $ver = "${{ steps.ver.outputs.num }}"
-          if ([string]::IsNullOrWhiteSpace($ver) -or $ver -eq '0.0') { $ver = 'dev' }
-          $src = "dist_installer\ModelLookup-Setup-$ver.exe"
-          if (-not (Test-Path $src)) { throw "找不到 $src" }
-          New-Item -ItemType Directory -Force -Path out | Out-Null
-          Copy-Item $src "out\型号查询-安装包-v$ver.exe"
-          Copy-Item app\dist\ModelLookup.exe "out\ModelLookup.exe"
-          Copy-Item 使用说明.txt out\ -ErrorAction SilentlyContinue
-          Copy-Item 型号查询-公布版.html out\ -ErrorAction SilentlyContinue
-          Get-ChildItem out | Format-Table Name, Length
+        run: python .github/scripts/stage.py "${{ steps.ver.outputs.num }}"
 
       - name: 上传 Artifact（供检查 / 手动下载）
         uses: actions/upload-artifact@v4
