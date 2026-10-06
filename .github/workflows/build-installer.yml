@@ -41,6 +41,8 @@ jobs:
         with:
           python-version: '3.13'
           cache: pip
+          # 必须指到实际文件，否则 setup-python 默认只找 requirements.txt / pyproject.toml
+          cache-dependency-path: requirements-build.txt
 
       - name: 算版本号
         id: ver
