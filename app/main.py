@@ -933,8 +933,10 @@ def _check():
     out.append("exe = %s" % sys.executable)
     out.append("资源目录 = %s" % res_dir())
     out.append("工作目录 = %s" % work_dir())
-    out.append("WebView2 运行时 = %s %s" % (_webview2_pv() or "无", "✅" if webview2_ok() else "❌"))
-    ok = webview2_ok()
+    out.append("WebView2 运行时 = %s %s" % (_webview2_pv() or "无", "✅" if webview2_ok() else "（目标机需要）"))
+    # 注意：构建机上没有 WebView2 不算打包问题 —— 那是「运行环境」的事，
+    # 程序启动时会用原生弹窗提示用户装。所以这里只警告，不判失败。
+    ok = True
 
     try:
         out.append("pywebview = %s ✅" % (getattr(webview, "__version__", "?"),))

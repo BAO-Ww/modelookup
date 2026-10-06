@@ -2,12 +2,22 @@
 ;  型号查询 · 隆阳电器（公布版）—— Windows 安装包
 ;  用 Inno Setup 6 编译：
 ;     ISCC.exe modelookup.iss
+;     ISCC.exe /DMyAppVer=2.1 /DMyAppVerNum=2.1.0.0 modelookup.iss    ← CI 用这个注入版本号
 ;  产物：dist_installer\ModelLookup-Setup-<版本>.exe
 ; ============================================================
 
+; 版本号默认值；CI 用 /D 覆盖，平时本机直接编也会有一份完整可用的包
+#ifndef MyAppVer
+  #define MyAppVer "2.0"
+#endif
+#ifndef MyAppVerNum
+  #define MyAppVerNum "2.0.0.0"
+#endif
+
 #define AppName     "型号查询"
 #define AppNameFull "型号查询 · 隆阳电器"
-#define AppVer      "2.0"
+#define AppVer      MyAppVer
+#define AppVerNum   MyAppVerNum
 #define AppPublisher "隆阳电器"
 #define ExeName     "ModelLookup.exe"
 
@@ -17,10 +27,10 @@ AppName={#AppNameFull}
 AppVersion={#AppVer}
 AppVerName={#AppNameFull} v{#AppVer}
 AppPublisher={#AppPublisher}
-VersionInfoVersion=2.0.0.0
+VersionInfoVersion={#AppVerNum}
 VersionInfoDescription={#AppNameFull} 安装程序
 VersionInfoProductName={#AppNameFull}
-VersionInfoProductVersion=2.0.0.0
+VersionInfoProductVersion={#AppVerNum}
 
 ; 只装给当前用户，不需要管理员密码（装到别的电脑上最省事）
 DefaultDirName={localappdata}\Programs\ModelLookup
@@ -53,7 +63,8 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl,ChineseSimplified.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: checkedonce
 
 [Files]
-Source: "..\app\dist_v11\{#ExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; CI 和本机都构建到 app\dist\（同一个路径，两边行为一致）
+Source: "..\app\dist\{#ExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\型号查询-公布版.html"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\使用说明.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; WebView2 引导安装器：只在缺运行时的电脑上才装（2MB，随包分发）
