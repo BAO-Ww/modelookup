@@ -414,8 +414,7 @@ _update_lock = threading.Lock()
 
 
 def rebuild_from_xlsx(path, log):
-    with io.open(rp("payload.json"), encoding="utf-8") as f:
-        old = json.load(f)
+    old = load_current_payload()
     cache = old.get("imgs") or {}
     # 全量图库（assets/images_cache.json）优先，老 payload 的图兜底
     for p in (rp("images_cache.json"),):
@@ -432,6 +431,8 @@ def rebuild_from_xlsx(path, log):
     out = wp("index.html")
     with io.open(out, "w", encoding="utf-8") as f:
         f.write(html)
+    with io.open(wp("payload.json"), "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)          # 记为「当前数据」，下次启动沿用
     log("页面已重建：%d 个型号 / %d 张图" % (len(payload["rows"]), len(payload["imgs"])))
     set_state(built=payload["meta"]["built"])
     return payload
@@ -575,12 +576,13 @@ def run_gui(httpd, port, root=None):
     st.configure(".", font=(FONT, 10), background="#f4f6fa", foreground=INK)
     st.configure("Panel.TFrame", background="#f4f6fa")
     st.configure("Card.TFrame", background="#ffffff")
-    st.configure("H.TLabel", font=(FONT, 13, True), background="#f4f6fa", foreground=INK)
+    # ⚠ ttk 字体元组的 weight 必须写字符串 "bold"；写 True 会让该控件文字整个不渲染
+    st.configure("H.TLabel", font=(FONT, 13, "bold"), background="#f4f6fa", foreground=INK)
     st.configure("Sub.TLabel", font=(FONT, 9), background="#f4f6fa", foreground=SUB)
     st.configure("CardSub.TLabel", font=(FONT, 9), background="#ffffff", foreground=SUB)
-    st.configure("Ok.TLabel", font=(FONT, 10, True), background="#ffffff", foreground="#0f7d45")
-    st.configure("Err.TLabel", font=(FONT, 10, True), background="#ffffff", foreground="#d64545")
-    st.configure("Primary.TButton", font=(FONT, 10, True), foreground="#ffffff",
+    st.configure("Ok.TLabel", font=(FONT, 10, "bold"), background="#ffffff", foreground="#0f7d45")
+    st.configure("Err.TLabel", font=(FONT, 10, "bold"), background="#ffffff", foreground="#d64545")
+    st.configure("Primary.TButton", font=(FONT, 10, "bold"), foreground="#ffffff",
                  background=BRAND, borderwidth=0, padding=(14, 9))
     st.map("Primary.TButton", background=[("active", BRAND_D), ("disabled", "#a9c0ee")])
     st.configure("Soft.TButton", font=(FONT, 10), foreground=BRAND_D,
@@ -723,14 +725,21 @@ def run_gui(httpd, port, root=None):
 
 # ------------------------------------------------------------------ 启动
 
+def load_current_payload():
+    """当前数据：优先工作目录里的（一键更新后落在那），否则用 exe 内嵌的。"""
+    p = wp("payload.json")
+    if not os.path.isfile(p):
+        p = rp("payload.json")
+    with io.open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
 def bootstrap():
-    """确保 index.html 存在（首次从内嵌 payload 渲染）。"""
+    """用当前数据渲染 index.html —— 每次启动都重建，保证页面与数据永远一致。"""
+    payload = load_current_payload()
     out = wp("index.html")
-    if not os.path.isfile(out):
-        with io.open(rp("payload.json"), encoding="utf-8") as f:
-            payload = json.load(f)
-        with io.open(out, "w", encoding="utf-8") as f:
-            f.write(render(payload))
+    with io.open(out, "w", encoding="utf-8") as f:
+        f.write(render(payload))
     return out
 
 
