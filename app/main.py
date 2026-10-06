@@ -528,12 +528,26 @@ class Handler(BaseHTTPRequestHandler):
 LOG = []
 
 
+# 固定端口：localStorage 是按 origin 隔离的，端口一变用户标的「已发布」「我的定价」就全丢
+PORTS = [17321, 17322, 17323, 17324, 17325, 17326, 17327, 17328]
+
+
 def start_server():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    httpd = None
+    port = 0
+    for p in PORTS:
+        try:
+            httpd = ThreadingHTTPServer(("127.0.0.1", p), Handler)
+            port = p
+            break
+        except OSError:
+            continue
+    if httpd is None:                       # 全被占了才退回随机端口
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd, port
 
