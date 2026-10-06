@@ -96,32 +96,37 @@ jobs:
           Get-ChildItem dist
 
       - name: 成品自检（--check）
-        working-directory: app/dist
+        # ⚠ 交给 Python 跑：exe 是 GUI 子系统，PowerShell 用 & 调用**不会等它结束**，
+        #   会立刻返回然后读不到日志。subprocess 才可靠。
         shell: pwsh
-        run: |
-          .\ModelLookup.exe --check
-          $log = Get-Content .\exe_check.log -Encoding utf8 -Raw
-          $log
-          # 用 ASCII 哨兵判断，避免中文/编码问题
-          if ($log -notmatch 'RESULT: PASS') { throw '成品自检没通过，见上面的 exe_check.log' }
+        run: python .github/scripts/check_exe.py app/dist/ModelLookup.exe
 
       - name: 装 Inno Setup 6.7.3
+        id: inno
         shell: pwsh
         run: |
           $url = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe'
           Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\innosetup.exe"
           Start-Process -FilePath "$env:TEMP\innosetup.exe" `
             -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait
-          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) {
-            throw 'Inno Setup 没装上'
-          }
+          # 装到哪个目录取决于是不是管理员装的，三个常见位置都探一遍
+          $cands = @(
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe',
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $cands | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw 'Inno Setup 没装上：找不到 ISCC.exe' }
+          Write-Host "ISCC = $iscc"
+          "iscc=$iscc" >> $env:GITHUB_OUTPUT
 
       - name: 编译安装包
         working-directory: installer
         shell: pwsh
         run: |
-          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
-          & $iscc "/DMyAppVer=${{ steps.ver.outputs.num }}" "/DMyAppVerNum=${{ steps.ver.outputs.num4 }}" modelookup.iss
+          & "${{ steps.inno.outputs.iscc }}" `
+            "/DMyAppVer=${{ steps.ver.outputs.num }}" `
+            "/DMyAppVerNum=${{ steps.ver.outputs.num4 }}" modelookup.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC 编译失败：$LASTEXITCODE" }
           Get-ChildItem ..\dist_installer
 

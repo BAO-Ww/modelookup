@@ -1,4 +1,4 @@
-; 型号查询 安装程序 —— 简体中文「部分翻译」覆盖层
+﻿; 型号查询 安装程序 —— 简体中文「部分翻译」覆盖层
 ; 用法（在 .iss 里）:
 ;   [Languages]
 ;   Name: "chinese"; MessagesFile: "compiler:Default.isl,ChineseSimplified.isl"

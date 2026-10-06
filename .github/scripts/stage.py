@@ -17,7 +17,9 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 
 def main():
     ver = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-    if not ver or ver == "0.0":
+    # ⚠ 不要自作聪明把 0.0 换成 dev：安装包名是 Inno 按 /DMyAppVer=<原值> 编出来的，
+    #   这里一改名就找不到文件了。分支构建就是 0.0，产物名也用 0.0。
+    if not ver:
         ver = "dev"
 
     out = os.path.join(ROOT, "out")
