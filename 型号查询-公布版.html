@@ -365,6 +365,18 @@ function save(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e
 var MARKED = load(MARK_KEY, {});
 var PRICES = load(PRICE_KEY, {});
 var MYIMGS = load(IMG_KEY, {});
+/* 换数据源（本地价格表 → 金山文档在线表）之前的旧记录也认：新版 key 还空着就搬过来 */
+(function(){
+  var pairs = [[MARK_KEY, 'xy-published-v1', function(v){ MARKED = v; save(MARK_KEY, v); }],
+               [PRICE_KEY, 'xy-prices-v1',    function(v){ PRICES = v; save(PRICE_KEY, v); }],
+               [IMG_KEY,   'xy-imgs-v1',      function(v){ MYIMGS = v; save(IMG_KEY, v); }]];
+  for (var i = 0; i < pairs.length; i++){
+    var cur = load(pairs[i][0], {});
+    if (Object.keys(cur).length) continue;
+    var old = load(pairs[i][1], {});
+    if (Object.keys(old).length) pairs[i][2](old);
+  }
+})();
 function saveMarks(){ save(MARK_KEY, MARKED); }
 function savePrices(){ save(PRICE_KEY, PRICES); }
 function saveMyImgs(){ save(IMG_KEY, MYIMGS); }
