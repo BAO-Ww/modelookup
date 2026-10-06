@@ -1021,6 +1021,8 @@ def _check():
             out.append("⚠ 体积偏大，检查是不是把 numpy/PIL 之类拖进来了")
 
     out.append("判定：自检%s" % ("通过 ✅" if ok else "失败 ❌"))
+    # ASCII 哨兵：CI 拿这行判断成败，不受控制台编码影响
+    out.append("RESULT: %s" % ("PASS" if ok else "FAIL"))
     txt = "\n".join(out)
     logdir = os.path.dirname(sys.executable) if is_frozen() else os.path.dirname(os.path.abspath(__file__))
     try:
