@@ -73,11 +73,36 @@ modelookup/
 ├─ fetch_images_kdocs.py     # 官网机型库补图
 ├─ fetch_missing.py          # 海尔商城补图
 ├─ template_kdocs.html       # 查询页模板（= app/assets/template.html 的源）
+├─ .github/
+│  ├─ workflows/build-installer.yml  # CI：自动打包 exe + 安装包，发 Release
+│  ├─ scripts/stage.py               # 整理产物（用 Python 写中文文件名，避免编码坏）
+│  └─ release-notes.md               # Release 说明正文
+├─ requirements-build.txt    # CI / 本机打包依赖
 ├─ _push.py / _release.py    # 走 GitHub API 推代码 / 发 Release（沙箱走不了 git push）
+├─ _ci.py                    # 查/等/触发 Actions（python _ci.py --wait / --dispatch v2.1）
 └─ 重建型号查询.bat           # 换月时把新 xlsx 拖上去即可
 ```
 
-## 自己重建
+## 让 GitHub 自动打包（推荐，正式出包走这条路）
+
+推上去之后**不用本机编译**，GitHub Actions 在 Windows runner 上自动：
+装 Python → 装依赖 → PyInstaller 打包 → 跑成品自检 → 装 Inno Setup → 编译安装包 → 发 Release。
+
+工作流：`.github/workflows/build-installer.yml`
+
+| 触发方式 | 结果 |
+| --- | --- |
+| 手动点 **Run workflow** 并填版本号（如 `v2.1`） | 构建 + **发 Release** |
+| 推 `v*` 标签 | 构建 + **发 Release** |
+| 推 `main` | 只构建、上传 Artifact（**不发 Release**），用来验证能编过 |
+
+发出来的 Release 里会有两个附件：`型号查询-安装包-vX.Y.exe`（安装包）和 `ModelLookup.exe`（绿色版）。
+
+> ⚠ 两点必须记住，都是踩过的坑：
+> 1. `actions/setup-python` 的 `cache: pip` **必须配 `cache-dependency-path: requirements-build.txt`**，否则它去找不存在的 `requirements.txt` 会直接挂。
+> 2. runner 控制台是 **cp1252**，Python 往 stdout 打中文会 `UnicodeEncodeError`。工作流里设了 `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1`，整理产物的那一步也交给 `.github/scripts/stage.py` 做（Python 源码是 UTF-8，中文文件名不会坏）。
+
+## 本机手工重建（改数据时用）
 
 ```bash
 # 1) 在线表 xlsx → 数据
@@ -90,13 +115,11 @@ python fetch_missing.py           # 海尔商城
 # 3) 生成单文件 HTML，并同步 app/assets/
 python build_kdocs.py
 
-# 4) 打包 exe
-cd app
-python -m PyInstaller --noconfirm --distpath dist_v11 --workpath build_v11 ModelLookup.spec
-
-# 5) 编译安装包（需 Inno Setup 6，ISCC.exe）
-cd ../installer
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" modelookup.iss
+# 4) 推上去让 GitHub 出包，或者本机自己编：
+python _push.py                                  # 推送 → CI 自动打包发包
+# 或者本机编：
+cd app && python -m PyInstaller --noconfirm --clean --distpath dist --workpath build ModelLookup.spec
+cd ../installer && "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" modelookup.iss
 ```
 
 依赖：`openpyxl`（解析表格）、`pywebview` + `pythonnet`（窗口层，Windows 走 WebView2）、
