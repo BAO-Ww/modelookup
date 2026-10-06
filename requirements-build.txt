@@ -1,0 +1,10 @@
+# 打包 exe 需要的依赖（CI 与本机一致）
+# 窗口层：pywebview 在 Windows 上走 WebView2，需要 pythonnet（会带上 clr_loader / cffi）
+pywebview==6.2.1
+pythonnet==3.2.0
+# 解析金山文档导出的 xlsx
+openpyxl==3.1.5
+# 打包
+pyinstaller==6.22.2
+# Pillow 只给 app/make_icon.py 生成 icon.ico 用；exe 里已 excludes 掉它
+Pillow>=11

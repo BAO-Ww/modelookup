@@ -1,0 +1,161 @@
+name: 构建 Windows 安装包
+
+# 三种触发：
+#   1. 手动点「Run workflow」，填版本号（例如 v2.1）→ 构建 + 发 Release
+#   2. 推 v* 标签 → 构建 + 发 Release
+#   3. 推到 main → 只构建并上传 Artifact（不发 Release），用来验证能编过
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（例如 v2.1）。留空则用分支构建，不发 Release'
+        required: false
+        default: ''
+      prerelease:
+        description: '标记为预发布（Pre-release）'
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+
+      - name: 装 Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: 算版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($v)) {
+            if ("${{ github.ref }}" -like 'refs/tags/*') {
+              $v = "${{ github.ref_name }}"
+            } else {
+              $v = ""          # 分支构建 → 不发 Release
+            }
+          }
+          if (-not [string]::IsNullOrWhiteSpace($v) -and $v -notmatch '^v') { $v = "v$v" }
+
+          if ([string]::IsNullOrWhiteSpace($v)) {
+            $num  = '0.0'
+            $num4 = '0.0.0.0'
+            $rel  = 'false'
+          } else {
+            $num   = $v.TrimStart('v')
+            $parts = $num.Split('.')
+            while ($parts.Count -lt 4) { $parts += '0' }
+            $num4  = ($parts[0..3] -join '.')
+            $rel   = 'true'
+          }
+          "tag=$v"     >> $env:GITHUB_OUTPUT
+          "num=$num"   >> $env:GITHUB_OUTPUT
+          "num4=$num4" >> $env:GITHUB_OUTPUT
+          "release=$rel" >> $env:GITHUB_OUTPUT
+          Write-Host "版本：tag=$v num=$num num4=$num4 release=$rel"
+
+      - name: 装构建依赖
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-build.txt
+          python -c "import openpyxl, webview, clr; print('依赖就绪：openpyxl', openpyxl.__version__)"
+
+      - name: 打包 exe（PyInstaller）
+        working-directory: app
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --distpath dist --workpath build ModelLookup.spec
+          Get-ChildItem dist
+
+      - name: 成品自检（--check）
+        working-directory: app/dist
+        shell: pwsh
+        run: |
+          .\ModelLookup.exe --check
+          Get-Content .\exe_check.log -Encoding utf8
+          $log = Get-Content .\exe_check.log -Encoding utf8 -Raw
+          if ($log -notmatch '自检通过') { throw '成品自检没通过，见上面的 exe_check.log' }
+
+      - name: 装 Inno Setup 6.7.3
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe'
+          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\innosetup.exe"
+          Start-Process -FilePath "$env:TEMP\innosetup.exe" `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait
+          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) {
+            throw 'Inno Setup 没装上'
+          }
+
+      - name: 编译安装包
+        working-directory: installer
+        shell: pwsh
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          & $iscc "/DMyAppVer=${{ steps.ver.outputs.num }}" "/DMyAppVerNum=${{ steps.ver.outputs.num4 }}" modelookup.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 编译失败：$LASTEXITCODE" }
+          Get-ChildItem ..\dist_installer
+
+      - name: 整理产物（中文名安装包）
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.ver.outputs.num }}"
+          if ([string]::IsNullOrWhiteSpace($ver) -or $ver -eq '0.0') { $ver = 'dev' }
+          $src = "dist_installer\ModelLookup-Setup-$ver.exe"
+          if (-not (Test-Path $src)) { throw "找不到 $src" }
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item $src "out\型号查询-安装包-v$ver.exe"
+          Copy-Item app\dist\ModelLookup.exe "out\ModelLookup.exe"
+          Copy-Item 使用说明.txt out\ -ErrorAction SilentlyContinue
+          Copy-Item 型号查询-公布版.html out\ -ErrorAction SilentlyContinue
+          Get-ChildItem out | Format-Table Name, Length
+
+      - name: 上传 Artifact（供检查 / 手动下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: 型号查询-${{ steps.ver.outputs.tag || 'dev' }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: 发布 Release
+        if: steps.ver.outputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: 型号查询 ${{ steps.ver.outputs.tag }}
+          body_path: .github/release-notes.md
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          draft: false
+          fail_on_unmatched_files: true
+          files: |
+            out/型号查询-安装包-v${{ steps.ver.outputs.num }}.exe
+            out/ModelLookup.exe
+
+      - name: 汇总
+        shell: pwsh
+        run: |
+          Write-Host "版本：${{ steps.ver.outputs.tag }}"
+          Get-ChildItem out | ForEach-Object {
+            Write-Host ("  {0,-34} {1,10:N2} MB" -f $_.Name, ($_.Length / 1MB))
+          }
