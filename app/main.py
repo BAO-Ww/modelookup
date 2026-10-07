@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-型号查询 · 隆阳电器（公布版）  v2.4
+型号查询 · 隆阳电器（公布版）  v2.5
 ====================================
 独立窗口的桌面软件（自带 WebView2 内核，无地址栏 / 无浏览器外壳）：
 
@@ -43,7 +43,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.4"
+APP_VERSION = "2.5"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -55,7 +55,7 @@ except Exception:
     pass
 # payload 结构版本：与 parse_kdocs.py 产出 meta.pv 对齐。
 # 改了 rows 的字段结构（加字段/改含义）就 +1，老缓存自动失效换用包内数据。
-PAYLOAD_VER = 24
+PAYLOAD_VER = 25
 
 ONLINE_SHARE = "https://www.kdocs.cn/l/ch7gwGTP9De4"
 FILE_SHARE = "ch7gwGTP9De4"
@@ -947,6 +947,113 @@ def load_current_payload():
         return json.load(f)
 
 
+# ------------------------------------------------------------------ 补贴表（深圳以旧换新集团商品中心）
+# 金山分享链接：https://www.kdocs.cn/l/cid8gbTzhB4c（不是公开表 —— 需要金山登录，
+# 在软件里登录一次 kdocs 即可，cookie 是持久化的，以后不用再登）。
+# 解析：按表头找「型号 / 商品编码 / 零售价」三列，型号归一化后与主表匹配。
+SUBSIDY_SHARE = "https://www.kdocs.cn/l/cid8gbTzhB4c"
+SUBSIDY_XLSX = "subsidy.xlsx"
+SUBSIDY_FID_CACHE = "subsidy_fileid.txt"
+
+
+def _norm_txt(v):
+    return str(v or "").strip()
+
+
+def parse_subsidy_rows(xlsx_path):
+    """以旧换新表 → [{mo(归一), c(69码), p(零售价)}]。"""
+    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    out = []
+    try:
+        for ws in wb.worksheets:
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                if any(_norm_txt(c) for c in (row or [])):
+                    rows.append(list(row))
+                # 83303 行的大表，全量读入（read_only 模式内存可控）
+            if not rows:
+                continue
+            # 找表头行：前 15 行里同时含「型号」「条码/编码」的那行
+            # 实表结构：1=商品条码(69码) 2=商品编码(助记码) 10=型号 20=售价
+            hi, i_mo, i_code, i_price = None, None, None, None
+            for ri, row in enumerate(rows[:15]):
+                cells = [_norm_txt(c) for c in row]
+                if "型号" in cells and ("商品条码" in cells or "商品编码" in cells):
+                    hi = ri
+                    for ci, h in enumerate(cells):
+                        if h == "型号" and i_mo is None:
+                            i_mo = ci
+                        elif h == "商品条码" and i_code is None:
+                            i_code = ci                     # 69码优先取条码列
+                        elif h == "商品编码" and i_code is None:
+                            i_code = ci
+                        elif (h == "售价" or h == "零售价") and i_price is None:
+                            i_price = ci
+                    break
+            if hi is None or i_mo is None or i_code is None:
+                continue
+            if i_price is None:
+                i_price = i_code + 1 if i_code + 1 < len(rows[hi]) else None
+            n = 0
+            for row in rows[hi + 1:]:
+                mo = norm_model(row[i_mo] if i_mo < len(row) else None)
+                code = _norm_txt(row[i_code] if i_code is not None and i_code < len(row) else None)
+                if not mo or not code:
+                    continue
+                pr = None
+                if i_price is not None and i_price < len(row):
+                    v = row[i_price]
+                    if isinstance(v, (int, float)):
+                        pr = float(v)
+                    else:
+                        v2 = re.sub(r"[^\d.]", "", str(v or ""))
+                        if v2:
+                            try:
+                                pr = float(v2)
+                            except ValueError:
+                                pr = None
+                out.append({"mo": mo, "c": code, "p": pr})
+                n += 1
+            if n:
+                break        # 第一个有数据的 sheet 就够
+    finally:
+        wb.close()
+    return out
+
+
+def attach_subsidy(payload, log):
+    """把以旧换新表的 69码+售价 挂到 rows 上（r['sub2']）。匹配不到的型号不动。"""
+    p = wp(SUBSIDY_XLSX)
+    if not os.path.isfile(p):
+        return
+    try:
+        subs = parse_subsidy_rows(p)
+    except Exception as e:
+        log("补贴表解析失败：%s（这轮不带补贴数据）" % e)
+        return
+    if not subs:
+        log("补贴表里没解析出数据（列名可能变了）")
+        return
+    exact = {}
+    for s in subs:
+        exact.setdefault(s["mo"], s)      # 同型号取第一条
+    # 兜底：尾号索引（如主表 CXW-358-C6Q90AGUD ↔ 表里 C6Q90AGUD 这类短型号）
+    tails = {}
+    for s in subs:
+        if len(s["mo"]) >= 6:
+            tails.setdefault(s["mo"][-6:], s)
+    n_hit = 0
+    for r in payload.get("rows") or []:
+        k = norm_model(r.get("mo"))
+        s = exact.get(k)
+        if not s and len(k) >= 6:
+            s = tails.get(k[-6:])         # 兜底：主表型号的 6 位尾号对表里的短型号
+        if s:
+            r["sub2"] = {"c": s["c"], "p": s["p"]}
+            n_hit += 1
+    log("补贴表：%d 条 → 命中表中 %d 个型号" % (len(subs), n_hit))
+
+
 def rebuild(log):
     """用工作目录里的 data.xlsx / price.xlsx 重建 payload。"""
     allrecs, month = [], ""
@@ -978,6 +1085,7 @@ def rebuild(log):
 
     payload = build_payload(allrecs, cache, month)
     payload["meta"]["src"] = ""
+    attach_subsidy(payload, log)          # 补贴表（以旧换新）：69码 + 售价
     set_payload(payload)
     with io.open(wp("payload.json"), "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)      # 记为「当前数据」，下次启动沿用
@@ -1103,13 +1211,210 @@ def yy_on_c3(win):
     return u.startswith("https://c3.yonyoucloud.com")
 
 
-def do_stock_update(log):
-    """拉用友实时库存：已登录静默拉完；未登录弹窗等人登录（登录一次，之后一直有效）。"""
+# ---------------- 免登录（2026-10 三次改版） ----------------
+# 之前：CAS 的 TGC 是会话级 cookie，软件一关就没了 → 每次重开都要重新登录。
+# 现在：登录成功后把窗口里的全部 cookie（含 HttpOnly 的会话 cookie）抓下来存盘，
+#       之后拉库存直接用 urllib 带 Cookie 头访问 c3 API —— 不开窗、不用登录态。
+#       会话在服务器端过期时（数天~数周不等）才需要再登一次。
+YY_COOKIE_FILE = "yy_cookies.json"
+YY_API_HOST = "https://c3.yonyoucloud.com"
+
+
+def yy_cookies_load():
+    p = wp(YY_COOKIE_FILE)
+    if os.path.isfile(p):
+        try:
+            with io.open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d.get("cookies"), dict) and d["cookies"]:
+                return d
+        except Exception:
+            pass
+    return None
+
+
+def yy_cookies_save(pairs):
+    try:
+        with io.open(wp(YY_COOKIE_FILE), "w", encoding="utf-8") as f:
+            json.dump({"ts": time.strftime("%m-%d %H:%M"), "cookies": pairs},
+                      f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def yy_capture_cookies(log):
+    """登录成功后从用友窗口抓 cookie 存盘（SimpleCookie 列表 → {name: value}）。"""
+    try:
+        cks = YY_WIN.get_cookies() or []
+    except Exception as e:
+        log("抓 cookie 失败：%s（重启后可能要重登一次）" % e)
+        return
+    pairs = {}
+    for sc in cks:
+        try:
+            for name, morsel in sc.items():
+                if name and morsel.value:
+                    pairs[name] = morsel.value
+        except Exception:
+            continue
+    if pairs:
+        yy_cookies_save(pairs)
+        log("已保存用友会话（%d 个 cookie）——以后开软件不用再登录" % len(pairs))
+
+
+def yy_call_direct(page_index, page_size=YY_PAGE_SIZE, timeout=40):
+    """不走 WebView：urllib 带保存的 Cookie 直拉 report/list。
+    返回 (data, None) / (None, err)，err='NOTLOGIN' 表示会话失效。"""
+    saved = yy_cookies_load()
+    if not saved:
+        return None, "NOTLOGIN"
+    pairs = saved["cookies"]
+    body = json.dumps({
+        "page": {"pageSize": page_size, "pageIndex": page_index},
+        "billnum": "stock_stockanalysis",
+        "condition": {"commonVOs": []},
+        "locale": "zh_CN",
+        "serviceCode": "stock_stockanalysislist",
+        "groupSchemaId": YY_GROUP_SCHEMA,
+        "isIncludeMeta": True,
+        "ownDomain": "ustock",
+        "tplid": YY_TPLID,
+        "bEmptyWithoutFilterTree": False,
+    }, ensure_ascii=False).encode("utf-8")
+    hdrs = {
+        "Content-Type": "application/json;charset=utf-8",
+        "Domain-Key": "ustock",
+        "Cookie": "; ".join("%s=%s" % (k, v) for k, v in pairs.items()),
+        "Referer": YY_API_HOST + "/",
+        "Origin": YY_API_HOST,
+    }
+    xv = pairs.get("XSRF-TOKEN") or ""
+    if xv:
+        hdrs["X-XSRF-TOKEN"] = urllib.parse.unquote(xv)
+    req = urllib.request.Request(YY_API_HOST + YY_LIST_PATH, data=body, headers=hdrs)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            txt = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403) or "login" in (e.url or ""):
+            return None, "NOTLOGIN"
+        return None, "HTTP %d" % e.code
+    except Exception as e:
+        return None, str(e) or repr(e)
+    txt = txt.strip()
+    if not txt.startswith("{"):
+        return None, "NOTLOGIN"
+    try:
+        d = json.loads(txt)
+    except Exception:
+        return None, "返回非 JSON：" + txt[:120]
+    if str(d.get("code")) != "200":
+        msg = str(d.get("message") or "接口返回异常")
+        if "401" in msg or "登录" in msg or "token" in msg.lower():
+            return None, "NOTLOGIN"
+        return None, msg
+    return d.get("data") or {}, None
+
+
+def yy_pull_all(call_fn, log):
+    """分页拉全量（默认查询 = 全仓库类型）。call_fn(page_index) → (data, err)。"""
+    recs = []
+    total = None
+    page = 1
+    while page <= YY_PAGE_MAX:
+        data, err = call_fn(page)
+        if err:
+            return None, err
+        rows = data.get("recordList") or []
+        recs.extend(rows)
+        total = data.get("recordCount")
+        log("实时库存：已拉 %d / %s 行（第 %d 页）" % (len(recs), total, page))
+        set_state("running", "实时库存：已拉 %d / %s 行…" % (len(recs), total if total else len(recs)))
+        if total and len(recs) >= total:
+            break
+        if not rows:
+            break
+        page += 1
+        time.sleep(0.4)
+    return recs, None
+
+
+def yy_finish(recs, log):
+    """聚合 + 命中统计 + 落盘。"""
     global STOCK
-    if YY_WIN is None or YY_CLOSED.is_set():
-        set_state("error", "用友窗口不可用，重启软件再试")
+    # 按型号聚合（norm_model 与前端 norm() 严格一致，全角/空格/大小写都归一）
+    # whs = 每个仓的明细（2026-10 二次改版：卡片只显示「什么仓有几个」，不再显示可用/现存总数）
+    agg = {}
+    for r0 in recs:
+        mo = norm_model(r0.get(YY_K_MODEL))
+        if not mo:
+            continue
+        a = agg.setdefault(mo, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
+        try:
+            a["q"] += float(r0.get(YY_K_QTY) or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            av = float(r0.get(YY_K_AVAIL) or 0)
+        except (TypeError, ValueError):
+            av = 0.0
+        a["a"] += av
+        wt = str(r0.get(YY_K_WHTYPE) or "").strip() or "其他仓"
+        a["wt"][wt] = round(a["wt"].get(wt, 0.0) + av, 2)
+        wname = str(r0.get(YY_K_WH) or "").strip() or "未知仓"
+        k2 = (wname, wt)
+        a["whs"][k2] = round(a["whs"].get(k2, 0.0) + av, 2)
+
+    # whs: {(仓名, 类型): 数量} → 排序列表 [{w, t, n}]（数量多的在前）
+    for a in agg.values():
+        lst = [{"w": k[0], "t": k[1], "n": v} for k, v in a["whs"].items()]
+        lst.sort(key=lambda x: (-x["n"], x["w"]))
+        a["whs"] = lst
+
+    # 命中统计：跟当前表里的型号对一下
+    hit = 0
+    try:
+        rows_now = get_payload().get("rows") or []
+        for r1 in rows_now:
+            if norm_model(r1.get("mo")) in agg:
+                hit += 1
+    except Exception:
+        pass
+
+    ts = time.strftime("%m-%d %H:%M")
+    with STOCK_LOCK:
+        STOCK = {"ts": ts, "rows": len(recs), "stock": agg}
+    stock_save()
+    log("实时库存更新完成：%d 行 · %d 个型号 · 命中表中 %d 个型号" % (len(recs), len(agg), hit))
+    set_state("done", "实时库存已更新：%d 行 · 命中表中 %d 个型号（%s）" % (len(recs), hit, ts))
+
+
+def do_stock_update(log):
+    """拉用友实时库存：优先用存下的会话直拉（免登录）；失效才弹窗等人登录一次。"""
+    if not _update_lock.acquire(blocking=False):
+        set_state("error", "已有更新在进行中")
         return
     try:
+        # ---- 快路径：本地存过用友会话 → urllib 直拉，不开窗、不用登录
+        saved = yy_cookies_load()
+        if saved:
+            set_state("running", "正在连接用友 YonSuite（本地会话）…")
+            log("用本地保存的会话直拉（会话存于 %s）" % (saved.get("ts") or "?"))
+            data, err = yy_call_direct(1, 1)
+            if err is None:
+                recs, err = yy_pull_all(yy_call_direct, log)
+                if err is None:
+                    yy_finish(recs, log)
+                    return
+            if err != "NOTLOGIN":
+                set_state("error", "用友接口异常：%s" % err)
+                return
+            log("本地会话已失效，改走窗口登录…")
+
+        # ---- 慢路径：WebView 登录流程（登录成功后抓 cookie 存盘，下次走快路径）
+        if YY_WIN is None or YY_CLOSED.is_set():
+            set_state("error", "用友窗口不可用，重启软件再试")
+            return
         set_state("running", "正在连接用友 YonSuite…")
         log("打开用友工作台…")
         try:
@@ -1164,6 +1469,7 @@ def do_stock_update(log):
                     set_state("error", "登录后拉取失败：%s" % err)
                 return
             log("登录成功，会话已存住（下次不用再登）")
+            yy_capture_cookies(log)          # ← 关键：把会话 cookie 存下来，重启免登录
             try:
                 YY_WIN.hide()
             except Exception:
@@ -1172,77 +1478,18 @@ def do_stock_update(log):
             set_state("error", "用友接口异常：%s" % err)
             return
 
-        # 分页拉全量（默认查询 = 全仓库类型）
-        recs = []
-        total = None
-        page = 1
-        while page <= YY_PAGE_MAX:
-            data, err = yy_call(YY_WIN, page)
-            if err:
-                if err == "NOTLOGIN":
-                    set_state("error", "拉取中途会话失效，请重新点「更新实时库存」")
-                else:
-                    set_state("error", "用友接口异常：%s" % err)
-                return
-            rows = data.get("recordList") or []
-            recs.extend(rows)
-            total = data.get("recordCount")
-            log("实时库存：已拉 %d / %s 行（第 %d 页）" % (len(recs), total, page))
-            set_state("running", "实时库存：已拉 %d / %s 行…" % (len(recs), total if total else len(recs)))
-            if total and len(recs) >= total:
-                break
-            if not rows:
-                break
-            page += 1
-            time.sleep(0.4)
-
-        # 按型号聚合（norm_model 与前端 norm() 严格一致，全角/空格/大小写都归一）
-        # whs = 每个仓的明细（2026-10 二次改版：卡片只显示「什么仓有几个」，不再显示可用/现存总数）
-        agg = {}
-        for r0 in recs:
-            mo = norm_model(r0.get(YY_K_MODEL))
-            if not mo:
-                continue
-            a = agg.setdefault(mo, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
-            try:
-                a["q"] += float(r0.get(YY_K_QTY) or 0)
-            except (TypeError, ValueError):
-                pass
-            try:
-                av = float(r0.get(YY_K_AVAIL) or 0)
-            except (TypeError, ValueError):
-                av = 0.0
-            a["a"] += av
-            wt = str(r0.get(YY_K_WHTYPE) or "").strip() or "其他仓"
-            a["wt"][wt] = round(a["wt"].get(wt, 0.0) + av, 2)
-            wname = str(r0.get(YY_K_WH) or "").strip() or "未知仓"
-            k2 = (wname, wt)
-            a["whs"][k2] = round(a["whs"].get(k2, 0.0) + av, 2)
-
-        # whs: {(仓名, 类型): 数量} → 排序列表 [{w, t, n}]（数量多的在前）
-        for a in agg.values():
-            lst = [{"w": k[0], "t": k[1], "n": v} for k, v in a["whs"].items()]
-            lst.sort(key=lambda x: (-x["n"], x["w"]))
-            a["whs"] = lst
-
-        # 命中统计：跟当前表里的型号对一下
-        hit = 0
-        try:
-            rows_now = get_payload().get("rows") or []
-            for r1 in rows_now:
-                if norm_model(r1.get("mo")) in agg:
-                    hit += 1
-        except Exception:
-            pass
-
-        ts = time.strftime("%m-%d %H:%M")
-        with STOCK_LOCK:
-            STOCK = {"ts": ts, "rows": len(recs), "stock": agg}
-        stock_save()
-        log("实时库存更新完成：%d 行 · %d 个型号 · 命中表中 %d 个型号" % (len(recs), len(agg), hit))
-        set_state("done", "实时库存已更新：%d 行 · 命中表中 %d 个型号（%s）" % (len(recs), hit, ts))
+        recs, err = yy_pull_all(lambda p: yy_call(YY_WIN, p), log)
+        if err:
+            if err == "NOTLOGIN":
+                set_state("error", "拉取中途会话失效，请重新点「更新实时库存」")
+            else:
+                set_state("error", "用友接口异常：%s" % err)
+            return
+        yy_finish(recs, log)
     except Exception as e:
         set_state("error", "实时库存更新失败：%s" % e)
+    finally:
+        _update_lock.release()
 
 
 def do_update(log, xlsx_bytes=None, xlsx_path=None):
@@ -1293,6 +1540,22 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None):
             except Exception as e:
                 log("价格表这次没更新成功（%s），保留上一次的数据" % e)
 
+            # ---- ③ 补贴表（以旧换新 69码+售价；这张表要金山登录，没登录就沿用旧数据）
+            try:
+                set_state("running", "正在连接金山文档（补贴表）…")
+                sfid = probe_file_id(log, SUBSIDY_SHARE, cache_name=SUBSIDY_FID_CACHE)
+                if sfid:
+                    set_state("running", "正在下载补贴表…")
+                    du3 = obtain_download_url(log, sfid, SUBSIDY_SHARE,
+                                              allow_prompt=True, silent=4)
+                    raw3 = fetch_xlsx_by_url(du3, log)
+                    with open(wp(SUBSIDY_XLSX), "wb") as f:
+                        f.write(raw3)
+                else:
+                    log("补贴表 fileId 没拿到，沿用上一次的补贴数据")
+            except Exception as e:
+                log("补贴表这次没更新成功（%s），沿用上一次的数据" % e)
+
         set_state("running", "正在重建数据…")
         rebuild(log)
         set_state("done", "更新完成")
@@ -1310,7 +1573,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None):
 # ------------------------------------------------------------------ HTTP（本地服务：给窗口里的页面用）
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ModelLookup/2.4"
+    server_version = "ModelLookup/2.5"
 
     def log_message(self, *a):
         pass
