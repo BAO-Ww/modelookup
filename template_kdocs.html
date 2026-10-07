@@ -214,6 +214,7 @@ a.markbtn.web:hover{border-color:var(--brand);background:#dde9ff}
 .pill.ok{background:var(--ok-l);color:var(--ok);border-color:#c9e8d6}
 .pill.no{background:#f5f6f9;color:var(--ink3)}
 .pill.mute{background:#f5f6f9;color:var(--ink3)}
+.pill.sum{background:#eef4ff;color:#1d4fb8;font-weight:600}
 .lnk{
   border:0;background:transparent;color:var(--brand);font-size:12.5px;cursor:pointer;
   padding:2px 4px;font-family:inherit;text-decoration:underline;text-underline-offset:3px;
@@ -664,6 +665,233 @@ function calcUpdate(box){
   outEl.className = 'p-out ' + (profit >= 0 ? 'pos' : 'neg');
 }
 
+/* ================= 账号权限（云端 · Cloudflare Worker） =================
+   管理号 + 子账号。启动时校验 token（30 天有效），按权限隐藏内容。
+   权限由管理号在「账号管理」里逐项勾选。 */
+var AUTH = null;
+try { AUTH = JSON.parse(localStorage.getItem('ml_auth') || 'null'); } catch(e){ AUTH = null; }
+var AUTH_HOSTS = ['https://modelookup-auth.bao3053.workers.dev',
+                  'https://auth.baozang.kdns.fr'];
+var PERM_DEFS = [
+  ['live',        '库存行 + 汇总'],
+  ['subsidy',     '补贴栏'],
+  ['xianyu',      '闲鱼行（ID/价/利润）'],
+  ['calc',        '闲鱼定价 / 已发布 / 复制'],
+  ['meidi_cost',  '美的系成本价'],
+  ['guide',       '官方参考价'],
+  ['clear_price', '清理价 / 奖励 / 清理数量'],
+  ['supplier',    '发货 / 货源'],
+  ['upd_kdocs',   '按钮：金山更新'],
+  ['upd_yy',      '按钮：用友更新'],
+  ['addimg',      '补图']
+];
+function authSave(){ try { localStorage.setItem('ml_auth', JSON.stringify(AUTH)); } catch(e){} }
+function pok(k){
+  if (!AUTH) return false;
+  if (AUTH.role === 'admin') return true;
+  return !!AUTH.perm[k];
+}
+/* 带 X-Token 的云端请求；网络不通时 _st=0，会自动换备用域名试一轮 */
+function authFetch(path, opts, withRetry){
+  opts = opts || {};
+  opts.headers = opts.headers || {};
+  if (AUTH && AUTH.token) opts.headers['X-Token'] = AUTH.token;
+  var hosts = [localStorage.getItem('ml_auth_host') || AUTH_HOSTS[0]];
+  if (withRetry !== false) AUTH_HOSTS.forEach(function(h){ if (hosts.indexOf(h) < 0) hosts.push(h); });
+  function tryOne(i){
+    if (i >= hosts.length){
+      return Promise.resolve({ ok: false, _st: 0, msg: '网络不通' });
+    }
+    return fetch(hosts[i] + path, opts).then(function(r){
+      localStorage.setItem('ml_auth_host', hosts[i]);
+      return r.json().then(function(j){ j._st = r.status; return j; });
+    }).catch(function(){ return tryOne(i + 1); });
+  }
+  return tryOne(0);
+}
+/* ---------- 登录遮罩 + 账号管理面板（用到时才插进 DOM） ---------- */
+var AUTH_CSS = ''
+  + '#authmask{position:fixed;inset:0;background:#f2f4f8;z-index:900;display:flex;align-items:center;justify-content:center}'
+  + '#authmask .acard{background:#fff;border:1px solid #e3e7ef;border-radius:14px;padding:34px 38px;width:330px;box-shadow:0 12px 40px rgba(30,40,60,.12)}'
+  + '#authmask h3{margin:0 0 4px;font-size:19px;color:#1b2431}'
+  + '#authmask .sub{color:#7b8494;font-size:12.5px;margin-bottom:18px}'
+  + '#authmask input{width:100%;box-sizing:border-box;padding:10px 12px;margin:7px 0;border:1px solid #d7dce6;border-radius:9px;font-size:14px}'
+  + '#authmask button.go{width:100%;margin-top:14px;padding:11px;background:#2e6be6;color:#fff;border:0;border-radius:9px;font-size:15px;font-weight:600;cursor:pointer}'
+  + '#authmask .aerr{color:#d92d20;font-size:12.5px;min-height:18px;margin-top:8px}'
+  + '#adminmask{position:fixed;inset:0;background:rgba(20,26,40,.45);z-index:950;display:flex;align-items:center;justify-content:center}'
+  + '#adminmask .amodal{background:#fff;border-radius:14px;width:min(860px,94vw);max-height:88vh;overflow:auto;padding:22px 26px}'
+  + '#adminmask h3{margin:0 0 12px;font-size:17px;color:#1b2431}'
+  + '.auser{border:1px solid #e3e7ef;border-radius:10px;padding:12px 14px;margin:9px 0}'
+  + '.auser .arow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}'
+  + '.auser input[type=text],.auser input[type=password]{padding:7px 9px;border:1px solid #d7dce6;border-radius:7px;font-size:13px}'
+  + '.auser .uname{width:110px;font-weight:600}'
+  + '.auser .unote{width:120px}'
+  + '.auser .upw{width:110px}'
+  + '.permchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}'
+  + '.permchips .pk{font-size:11.5px;padding:3px 9px;border-radius:99px;border:1px solid #d7dce6;color:#7b8494;cursor:pointer;user-select:none}'
+  + '.permchips .pk.on{background:#2e6be6;border-color:#2e6be6;color:#fff}'
+  + '.achip{font-size:12px;padding:5px 12px;border-radius:99px;border:1px solid #d7dce6;background:#fff;cursor:pointer;color:#1b2431}';
+function ensureStyles(){
+  if (document.getElementById('authcss')) return;
+  var st = document.createElement('style'); st.id = 'authcss'; st.textContent = AUTH_CSS;
+  document.head.appendChild(st);
+}
+function ensureAuth(){
+  ensureStyles();
+  return new Promise(function(resolve){
+    function finish(){ resolve(); }
+    function showLogin(){
+      var old = document.getElementById('authmask'); if (old) old.remove();
+      var m = document.createElement('div'); m.id = 'authmask';
+      m.innerHTML = '<div class="acard"><h3>型号查询 · 登录</h3>'
+        + '<div class="sub">没有账号请联系管理员开通</div>'
+        + '<input id="au" placeholder="账号" autocomplete="username">'
+        + '<input id="ap" type="password" placeholder="密码" autocomplete="current-password">'
+        + '<button class="go" id="ago">登 录</button>'
+        + '<div class="aerr" id="aerr"></div></div>';
+      document.body.appendChild(m);
+      function submit(){
+        var u = m.querySelector('#au').value.trim(), p = m.querySelector('#ap').value;
+        if (!u || !p){ m.querySelector('#aerr').textContent = '账号和密码都要填'; return; }
+        m.querySelector('#ago').disabled = true;
+        m.querySelector('#aerr').textContent = '';
+        var tried = 0;
+        function doLogin(){
+          return authFetch('/login', { method: 'POST', body: JSON.stringify({ u: u, p: p }) }, false)
+            .then(function(j){
+              if (j && j._st === 0 && !j.ok && tried < AUTH_HOSTS.length - 1){
+                tried++;
+                var alt = AUTH_HOSTS.filter(function(h){
+                  return h !== (localStorage.getItem('ml_auth_host') || '');
+                });
+                if (alt.length){ localStorage.setItem('ml_auth_host', alt[0]); return doLogin(); }
+              }
+              return j;
+            });
+        }
+        doLogin().then(function(j){
+            if (j && j.ok){
+              AUTH = { u: j.u, token: j.token, role: j.role, perm: j.perm || {} };
+              authSave();
+              m.remove(); afterAuth(); finish();
+            } else {
+              m.querySelector('#ago').disabled = false;
+              m.querySelector('#aerr').textContent = (j && j.msg) || '登录失败，请重试';
+            }
+          });
+      }
+      m.querySelector('#ago').addEventListener('click', submit);
+      m.querySelector('#ap').addEventListener('keydown', function(e){ if (e.key === 'Enter') submit(); });
+    }
+    if (!AUTH){ showLogin(); return; }
+    authFetch('/perm').then(function(j){
+      if (j && j.ok){
+        AUTH.role = j.role; AUTH.perm = j.perm || {}; authSave();
+        afterAuth(); finish();
+      } else if (j && j._st === 0){
+        afterAuth(); finish();       // 云端连不上：先用缓存的权限顶着
+      } else {                       // 401 / 停用
+        AUTH = null; authSave(); showLogin();
+      }
+    });
+  });
+}
+function afterAuth(){
+  var bar = document.getElementById('updbar');
+  if (!bar) return;
+  if (document.getElementById('whoami')) return;
+  var chip = document.createElement('button');
+  chip.className = 'chip'; chip.id = 'whoami';
+  chip.textContent = '👤 ' + AUTH.u + (AUTH.role === 'admin' ? '（管理）' : '') + ' · 退出';
+  chip.addEventListener('click', function(){
+    AUTH = null; authSave(); localStorage.removeItem('ml_auth_host'); location.reload();
+  });
+  bar.appendChild(chip);
+  if (AUTH.role === 'admin'){
+    var ab = document.createElement('button');
+    ab.className = 'chip'; ab.id = 'admbtn'; ab.textContent = '👥 账号管理';
+    ab.addEventListener('click', openAdmin);
+    bar.appendChild(ab);
+  }
+  applyPermBar();
+}
+function applyPermBar(){
+  var b = document.getElementById('updbtn'), s = document.getElementById('stkbtn');
+  if (b) b.hidden = !pok('upd_kdocs');
+  if (s) s.hidden = !pok('upd_yy');
+}
+/* ---------- 管理号：账号管理 ---------- */
+function openAdmin(){
+  var old = document.getElementById('adminmask'); if (old) old.remove();
+  var m = document.createElement('div'); m.id = 'adminmask';
+  m.innerHTML = '<div class="amodal"><h3>账号管理 <button class="achip" id="aclose" style="float:right">关闭</button></h3>'
+    + '<div id="alist">加载中…</div>'
+    + '<div style="margin-top:12px;display:flex;gap:10px">'
+    + '<button class="achip" id="aadd">＋ 新增子账号</button>'
+    + '<button class="achip" id="asave" style="background:#2e6be6;color:#fff;border-color:#2e6be6">保存全部</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+  m.querySelector('#aclose').addEventListener('click', function(){ m.remove(); });
+  m.querySelector('#aadd').addEventListener('click', function(){
+    m.querySelector('#alist').appendChild(userRow({ u: '', note: '', disabled: false, hasPw: false, perm: {} }, true));
+  });
+  m.querySelector('#asave').addEventListener('click', function(){
+    var users = [];
+    m.querySelectorAll('.auser').forEach(function(row){
+      var perm = {};
+      row.querySelectorAll('.pk.on').forEach(function(c){ perm[c.dataset.k] = true; });
+      users.push({
+        u: row.querySelector('.uname').value.trim(),
+        note: row.querySelector('.unote').value.trim(),
+        pw: row.querySelector('.upw').value,
+        disabled: row.querySelector('.adis').checked,
+        perm: perm
+      });
+    });
+    m.querySelector('#asave').disabled = true; m.querySelector('#asave').textContent = '保存中…';
+    authFetch('/admin/save', { method: 'POST', body: JSON.stringify({ users: users }) }).then(function(j){
+      m.querySelector('#asave').disabled = false; m.querySelector('#asave').textContent = '保存全部';
+      m.querySelector('#asave').textContent = (j && j.ok) ? '✅ 已保存' : ('❌ ' + ((j && j.msg) || '失败'));
+      setTimeout(function(){ m.querySelector('#asave').textContent = '保存全部'; }, 1800);
+      if (j && j.ok) loadAdminList(m);
+    });
+  });
+  loadAdminList(m);
+}
+function userRow(x, isNew){
+  var d = document.createElement('div'); d.className = 'auser';
+  var chips = '';
+  PERM_DEFS.forEach(function(p){
+    var on = x.perm && x.perm[p[0]];
+    chips += '<span class="pk' + (on ? ' on' : '') + '" data-k="' + p[0] + '" title="' + p[1] + '">' + p[1] + '</span>';
+  });
+  d.innerHTML = '<div class="arow">'
+    + '<input type="text" class="uname" placeholder="账号" value="' + esc(x.u) + '"' + (isNew ? '' : ' readonly') + '>'
+    + '<input type="text" class="unote" placeholder="备注（如：小王）" value="' + esc(x.note) + '">'
+    + '<input type="password" class="upw" placeholder="' + (isNew || !x.hasPw ? '设密码' : '改密码（留空不动）') + '">'
+    + '<label style="font-size:12.5px;color:#7b8494"><input type="checkbox" class="adis"' + (x.disabled ? ' checked' : '') + '> 停用</label>'
+    + (x.hasPw && !isNew ? '' : '<span style="font-size:11.5px;color:#d92d20">新号</span>')
+    + '</div><div class="permchips">' + chips + '</div>';
+  d.querySelectorAll('.pk').forEach(function(c){
+    c.addEventListener('click', function(){ c.classList.toggle('on'); });
+  });
+  return d;
+}
+function loadAdminList(m){
+  authFetch('/admin/list').then(function(j){
+    var box = m.querySelector('#alist');
+    if (!j || !j.ok){
+      box.innerHTML = '<div style="color:#d92d20;font-size:13px">' + ((j && j.msg) || '拉取失败') + '</div>';
+      return;
+    }
+    box.innerHTML = '';
+    (j.users || []).forEach(function(x){ box.appendChild(userRow(x, !x.hasPw)); });
+    if (!(j.users || []).length){
+      box.innerHTML = '<div style="color:#7b8494;font-size:13px">还没有子账号，点下面「＋ 新增子账号」。</div>';
+    }
+  });
+}
+
 /* ================= 卡片 ================= */
 var PH_SVG = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none">'
   + '<rect x="5" y="3" width="14" height="18" rx="2" stroke="currentColor" stroke-width="1.4"/>'
@@ -712,29 +940,32 @@ function renderItem(it){
        · 美的 / 容声（「美的」页）：拿货价·慧买卖 / 给二批 / 取整，下面接京东价 + 参考闲鱼价 */
   var g = [], pg = [];
   var hot = null;
+  var live = stockOf(it.mo);   // 用友实时库存（提前取：清理数量和库存行都要用）
   if (it._md){
-    if (isNum(it.mh)) { g.push(prCell('拿货价 · 慧买卖', it.mh, 'hot')); hot = it.mh; }
-    if (isNum(it.m2)) g.push(prCell('价格 · 给二批', it.m2));
-    if (isNum(it.mr)) g.push(prCell('价格取整', it.mr));
-    if (isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
+    if (pok('meidi_cost') && isNum(it.mh)) { g.push(prCell('拿货价 · 慧买卖', it.mh, 'hot')); hot = it.mh; }
+    if (pok('meidi_cost') && isNum(it.m2)) g.push(prCell('价格 · 给二批', it.m2));
+    if (pok('meidi_cost') && isNum(it.mr)) g.push(prCell('价格取整', it.mr));
+    if (pok('guide') && isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
     // 官网价：美的商城快照（mop = 商城划线原价，比现售价高才显示）
-    if (isNum(it.mp)){
+    if (pok('guide') && isNum(it.mp)){
       var mo = isNum(it.mop) && it.mop > it.mp ? '<i class="orig">' + esc(money(it.mop)) + '</i>' : '';
       g.push('<div class="pr rp"><span>官网价</span><b>' + esc(money(it.mp)) + mo + '</b></div>');
     }
     // 官方参考价（用来定价）：京东价 / 国补后（零售指导价、官网价在上一行里已有）
-    if (isNum(it.jd)) pg.push(prCell('京东价 / 国补后', it.jd));
+    if (pok('guide') && isNum(it.jd)) pg.push(prCell('京东价 / 国补后', it.jd));
   } else {
-    if (isNum(it.lpz)) { g.push(prCell('滞销清理价', it.lpz, 'hot')); hot = it.lpz; }
-    if (isNum(it.spz)) { g.push(prCell('样机清理价', it.spz, hot == null ? 'hot' : '')); if (hot == null) hot = it.spz; }
-    if (isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
-    if (isNum(it.lb)) g.push(prCell('滞销出库奖励', it.lb, 'bonus'));
-    if (isNum(it.sb)) g.push(prCell('样机出库奖励', it.sb, 'bonus'));
-    var qn = isNum(it.lq) ? it.lq : (isNum(it.sq) ? it.sq : null);
-    if (qn != null) g.push('<div class="pr qty"><span>清理数量</span><b>' + qn + '</b></div>');
-    if (isNum(it.pt)) pg.push(prCell('价格含税', it.pt, 'tax'));
-    if (isNum(it.npz)) pg.push(prCell('滞销价格', it.npz, 'hot2'));
-    if (isNum(it.nyz)) pg.push(prCell('样机价格', it.nyz, 'hot2'));
+    if (pok('clear_price') && isNum(it.lpz)) { g.push(prCell('滞销清理价', it.lpz, 'hot')); hot = it.lpz; }
+    if (pok('clear_price') && isNum(it.spz)) { g.push(prCell('样机清理价', it.spz, hot == null ? 'hot' : '')); if (hot == null) hot = it.spz; }
+    if (pok('guide') && isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
+    if (pok('clear_price') && isNum(it.lb)) g.push(prCell('滞销出库奖励', it.lb, 'bonus'));
+    if (pok('clear_price') && isNum(it.sb)) g.push(prCell('样机出库奖励', it.sb, 'bonus'));
+    /* 清理数量（2026-10 三次改版）：= 用友实时库存各仓数量加总；没拉过实时时退回金山表列 */
+    var qn = (live && isNum(live.a)) ? Math.round(live.a)
+           : (isNum(it.lq) ? it.lq : (isNum(it.sq) ? it.sq : null));
+    if (pok('clear_price') && qn != null) g.push('<div class="pr qty"><span>清理数量</span><b>' + qn + '</b></div>');
+    if (pok('guide') && isNum(it.pt)) pg.push(prCell('价格含税', it.pt, 'tax'));
+    if (pok('clear_price') && isNum(it.npz)) pg.push(prCell('滞销价格', it.npz, 'hot2'));
+    if (pok('clear_price') && isNum(it.nyz)) pg.push(prCell('样机价格', it.nyz, 'hot2'));
   }
 
   /* ---------- 发往范围（原「全国可发」列） ---------- */
@@ -749,7 +980,6 @@ function renderItem(it){
      2026-10 二次改版：可用/现存总数不要了 —— 只显示「什么仓有几个」，
      一个仓一个 pill：仓名（类型）数量；4 个以上的收进「等 N 个仓」，全量在 title 里。 */
   var liveHTML = '';
-  var live = stockOf(it.mo);
   if (live && ((live.whs && live.whs.length) || (live.wt && Object.keys(live.wt).length))){
     var LIVE_CLS = { '正品仓': 'ok', '样机仓': 'sky', '次品仓': 'bad',
                      '机壳仓': 'mute', '特价仓': 'warn', '待送仓': 'warn' };
@@ -799,10 +1029,19 @@ function renderItem(it){
   if (it.sfrom) shipHTML += '<span class="pill src">货源 ' + esc(it.sfrom) + '</span> ';
 
   /* ---------- 补贴 ----------
-     2026-10 二次改版：补贴最高价 / 补贴可赚 / 用户补贴 不要了（公式算出来的噪音），
-     只留 69码。 */
+     2026-10 三次改版：补贴数据换源 —— 「深圳以旧换新集团商品中心」在线表按型号搜出
+     69码 + 售价，两个都展示；这张表里搜不到的型号退回显示价格表里原有的 69码。 */
   var subHTML = '';
-  if (it.s69) subHTML += '<span class="pill s69">69码 ' + esc(it.s69) + '</span> ';
+  var sub2 = it.sub2;
+  if (sub2 && sub2.c){
+    var subTitle = '深圳以旧换新集团商品中心';
+    subHTML += '<span class="pill s69" title="' + esc(subTitle) + '">69码 ' + esc(sub2.c) + '</span> ';
+    if (isNum(sub2.p)) subHTML += '<span class="pill sub" title="' + esc(subTitle) + '">售价 ' + money(sub2.p) + '</span> ';
+  } else if (it.s69){
+    subHTML += '<span class="pill s69">69码 ' + esc(it.s69) + '</span> ';
+  } else {
+    subHTML = '<span class="pill mute">没有补贴</span>';
+  }
 
   /* ---------- 闲鱼 ----------
      利润同理：它 = 闲鱼价 - 平台费 - 成本，没填闲鱼价时算出来是负数，别显示。 */
@@ -811,19 +1050,39 @@ function renderItem(it){
   if (isNum(it.xyp)) xyHTML += '<span class="pill">闲鱼价 ' + money(it.xyp) + '</span> ';
   if (isNum(it.profit) && isNum(it.xyp)) xyHTML += '<span class="pill ' + (it.profit > 0 ? 'ok' : 'no') + '">利润 ' + money(it.profit) + '</span> ';
 
+  /* ---------- 汇总（2026-10 三次改版）：正品仓几台 / 样机仓几台 / 次品仓几台 ----------
+     四次改版：跟库存行一样拆开 —— 一个仓类型一个 pill，别全挤在一个里。 */
+  var sumHTML = '';
+  if (live && live.wt && Object.keys(live.wt).length){
+    var SORD = ['正品仓', '样机仓', '次品仓'];
+    var LIVE_CLS2 = { '正品仓': 'ok', '样机仓': 'sky', '次品仓': 'bad',
+                      '机壳仓': 'mute', '特价仓': 'warn', '待送仓': 'warn' };
+    var skeys = Object.keys(live.wt).sort(function(x, y){
+      var ix = SORD.indexOf(x), iy = SORD.indexOf(y);
+      return (ix < 0 ? 9 : ix) - (iy < 0 ? 9 : iy);
+    });
+    var sumFull = '用友实时数据 · 拉取于 ' + ((STOCKDATA && STOCKDATA.ts) || '')
+                + '\n可用 ' + Math.round(live.a || 0) + ' / 现存 ' + Math.round(live.q || 0);
+    for (var si = 0; si < skeys.length; si++){
+      var sk = skeys[si], scls = LIVE_CLS2[sk] || '';
+      sumHTML += '<span class="pill sum' + (scls ? ' ' + scls : '') + '" title="' + esc(sumFull) + '">'
+               + esc(sk) + ' ' + Math.round(live.wt[sk]) + ' 台</span> ';
+    }
+  }
+
   var stTxt = it.st || it.t2 || '';
 
   return '<article class="card' + (marked ? ' marked' : '') + '" data-key="' + esc(it.c) + '">'
     + '<div class="chead" style="position:relative">'
     + (img ? '<img class="pimg" loading="lazy" src="' + img + '" alt="">'
-           : '<div class="pimg ph">' + PH_SVG + '<button class="addimg" data-addimg="' + esc(it.c) + '">＋ 补图</button></div>')
+           : '<div class="pimg ph">' + PH_SVG + (pok('addimg') ? '<button class="addimg" data-addimg="' + esc(it.c) + '">＋ 补图</button>' : '') + '</div>')
     + (mine ? '<button class="kimgdel" data-delimg="' + esc(it.c) + '" title="删掉我补的这张图">×</button>' : '')
     + '<div class="chead-main"><div class="moline">'
     + '<span class="mo">' + esc(it.mo) + '</span>'
     + '<span class="pub"' + (marked ? '' : ' hidden') + '>已发布</span>'
     + '<span class="acts">'
-    + '<button class="markbtn" data-mark="' + esc(it.c) + '">' + (marked ? '取消发布' : '标记已发布') + '</button>'
-    + '<button class="copy" data-copy="' + it._uid + '">复制</button>'
+    + (pok('calc') ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + (marked ? '取消发布' : '标记已发布') + '</button>' : '')
+    + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
     + '</span></div>'
     + '<div class="tags">'
     + (it.b ? '<span class="tag b">' + esc(it.b) + '</span>' : '')
@@ -837,15 +1096,16 @@ function renderItem(it){
     + '</div>'
     + (nm ? '<div class="nm">' + esc(nm) + '</div>' : '')
     + '</div></div>'
-    + (g.length ? '<div class="prices">' + g.join('') + '</div>' : '')
-    + calcHTML(it)
+    + (pok('calc') ? calcHTML(it) : '')
     + (pg.length ? '<div class="prices newp">' + pg.join('') + '</div>' : '')
-    + (liveHTML ? '<div class="row"><label>库存</label><span class="vs">' + liveHTML + '</span></div>' : '')
-    + (shipHTML ? '<div class="row"><label>发货</label><span class="vs">' + shipHTML + '</span></div>' : '')
+    + (g.length ? '<div class="prices">' + g.join('') + '</div>' : '')
+    + (pok('live') && sumHTML ? '<div class="row"><label>汇总</label><span class="vs">' + sumHTML + '</span></div>' : '')
+    + (pok('live') && liveHTML ? '<div class="row"><label>库存</label><span class="vs">' + liveHTML + '</span></div>' : '')
+    + (pok('supplier') && shipHTML ? '<div class="row"><label>发货</label><span class="vs">' + shipHTML + '</span></div>' : '')
     // 美的系只在「美的」页里有报价，没有发货区域那一列 —— 不写「发往」免得误导
     + (it._md ? '' : '<div class="row"><label>发往</label><span class="vs">' + natHTML + '</span></div>')
-    + (subHTML ? '<div class="row"><label>补贴</label><span class="vs">' + subHTML + '</span></div>' : '')
-    + (xyHTML ? '<div class="row"><label>闲鱼</label><span class="vs">' + xyHTML + '</span></div>' : '')
+    + (pok('subsidy') && subHTML ? '<div class="row"><label>补贴</label><span class="vs">' + subHTML + '</span></div>' : '')
+    + (pok('xianyu') && xyHTML ? '<div class="row"><label>闲鱼</label><span class="vs">' + xyHTML + '</span></div>' : '')
     + (it.code ? '<div class="row"><label>物料编码</label><span class="v mono">' + esc(it.code) + '</span></div>' : '')
     + '</article>';
 }
@@ -861,7 +1121,8 @@ function copyText(it){
     ['样机清理价', money(it.spz)], ['样机出库奖励', money(it.sb)], ['样机清理数量', it.sq],
     ['发货区域', shipTextOf(it)], ['货来源', it.sfrom],
     ['价格含税', money(it.pt)], ['滞销价格', money(it.npz)], ['样机价格', money(it.nyz)],
-    ['补贴69码', it.s69],
+    ['补贴69码', (it.sub2 && it.sub2.c) ? it.sub2.c : it.s69],
+    ['补贴售价', it.sub2 && isNum(it.sub2.p) ? money(it.sub2.p) : null],
     ['闲鱼商品ID', it.xyid], ['闲鱼价格', money(it.xyp)],
     ['利润', it._md ? null : money(it.profit)],
     // 美的 / 容声那张表的报价口径
@@ -1329,6 +1590,7 @@ function start(d){
   initUI();
 }
 
+ensureAuth().then(function(){
 if (DATA){
   start(DATA);                      // 离线单文件版：数据本来就烤在页面里
 } else {
@@ -1350,6 +1612,7 @@ if (DATA){
       + '<p>点菜单「数据 → 重新加载」，或者重启软件试试。</p></div>';
   });
 }
+});
 })();
 </script>
 </body>
