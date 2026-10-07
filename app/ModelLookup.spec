@@ -18,6 +18,8 @@ datas = [
     (os.path.join(A, "template.html"), "assets"),
     (os.path.join(A, "payload.json"), "assets"),
     (os.path.join(A, "images_cache.json"), "assets"),
+    (os.path.join(A, "midea_prices.json"), "assets"),
+    (os.path.join(A, "ronshen_prices.json"), "assets"),
     (os.path.join(A, "icon.ico"), "assets"),
 ]
 

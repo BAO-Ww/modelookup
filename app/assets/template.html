@@ -66,43 +66,41 @@ main{padding:22px 0 60px}
 }
 .clr:hover{background:#e3e8f2}
 
-.chips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0;align-items:center}
-.chips+.chips{margin-top:8px}
-.chips .lbl{font-size:12px;color:var(--ink3);flex:none;margin-right:2px}
+/* ---------- 筛选条 ----------
+   原来是「品牌 / 品类 / 清理方式 / 价格区间」四行 chip，每行还各挂一个蓝色的
+   「全部 977」，又长又重复（用户反馈「太乱了」）。现在：
+     · 品牌、品类各收成一行，超出 8 个的收进「更多」；
+     · 「全部」不再重复挂总数；
+     · 价格区间并进「清理方式」那一行；chip 也整体压小了一号。 */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:11px 0 0;align-items:center}
+.chips+.chips{margin-top:7px}
+.chips .lbl{font-size:11.5px;color:var(--ink3);flex:none;margin-right:3px;letter-spacing:.2px}
 .chip{
   border:1px solid var(--line);background:#fff;color:var(--ink2);
-  padding:5px 13px;border-radius:999px;font-size:13px;cursor:pointer;
-  transition:.13s;font-family:inherit;
+  padding:4px 11px;border-radius:999px;font-size:12.5px;cursor:pointer;
+  transition:.13s;font-family:inherit;line-height:1.55;
 }
 .chip:hover{border-color:#c9d6ef;color:var(--brand-d)}
 .chip.on{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
 .chip.g.on{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600}
 .chip.w.on{background:var(--warn);border-color:var(--warn);color:#fff;font-weight:600}
-.chip i{font-style:normal;opacity:.6;font-size:11px;margin-left:4px}
+.chip i{font-style:normal;opacity:.6;font-size:10.5px;margin-left:3px}
+/* 「更多 ▾」这种次要按钮 */
+.chip.mini{padding:4px 9px;font-size:12px;color:var(--ink3);border-style:dashed}
+.chip.mini:hover{color:var(--brand-d);border-style:solid}
+.vsep{width:1px;height:16px;background:var(--line);flex:none;margin:0 3px}
+.pricebar-in{
+  width:84px;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:12.5px;
+  font-variant-numeric:tabular-nums;outline:0;font-family:inherit;background:#fff;
+}
+.pricebar-in:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(46,107,230,.12)}
+.pc{border:0;background:transparent;color:var(--brand);font-size:12.5px;cursor:pointer;
+  font-family:inherit;padding:2px 4px}
+.pc:hover{color:var(--brand-d);text-decoration:underline;text-underline-offset:3px}
 
 .hint{font-size:12.5px;color:var(--ink3);margin:12px 2px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;line-height:1.9}
 .hint b{color:var(--ink2)}
 .hint .dot{width:4px;height:4px;border-radius:50%;background:#cfd7e4;flex:none}
-
-/* ---------- 价格区间筛选 ---------- */
-.pricebar{
-  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-  margin:12px 0 0;background:#fff;border:1px solid var(--line);border-radius:12px;
-  padding:8px 12px;box-shadow:0 1px 2px rgba(16,24,40,.03);
-}
-.pricebar .pl{font-size:12.5px;color:var(--ink3);flex:none}
-.pricebar input{
-  width:96px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:13.5px;
-  font-variant-numeric:tabular-nums;outline:0;font-family:inherit;background:#fff;
-}
-.pricebar input:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(46,107,230,.12)}
-.pricebar .sep{color:var(--ink3);font-size:13px}
-.pricebar .pc{
-  border:0;background:transparent;color:var(--brand);font-size:12.5px;cursor:pointer;
-  font-family:inherit;padding:2px 4px;
-}
-.pricebar .pc:hover{color:var(--brand-d);text-decoration:underline;text-underline-offset:3px}
-.pricebar .note{font-size:11.5px;color:var(--ink3);margin-left:auto}
 
 /* ---------- 一键更新条（仅通过本地服务打开时显示） ---------- */
 .updbar{
@@ -182,14 +180,15 @@ a.markbtn.web:hover{border-color:var(--brand);background:#dde9ff}
 .tag.d{background:#f5f6f9;color:#8b95a6;border-color:#e9edf4}
 .nm{font-size:13px;color:var(--ink2);margin:7px 0 0;line-height:1.5}
 
-/* 全国可发 三态 */
-.nat{
-  display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;
-  padding:2px 9px;border-radius:6px;border:1px solid transparent;
-}
-.nat.y{background:var(--ok-l);color:#0f7d45;border-color:#c9e8d6}
-.nat.n{background:#f5f6f9;color:#8b95a6;border-color:#e9edf4}
-.nat.q{background:var(--warn-l);color:#a16207;border-color:#f0dcbb}
+/* 发往范围（原「全国可发」列）——
+   · loc   = 深圳/惠州/广州/东莞，**所有型号都能发**，所以它永远在
+   · nat-y = 报备后可发全国 / 可发全国（要看地址）
+   · nat-q = 要问过才知道（找品类报备确认 / 一单一询是否能发外地）
+   · nat-s = 仍是本地口径，但表里写了进货年限之类的门槛备注 */
+.pill.loc{background:var(--ok-l);color:#0f7d45;border-color:#c9e8d6}
+.pill.nat-y{background:var(--brand-l);color:var(--brand-d);border-color:#d9e4ff}
+.pill.nat-q{background:var(--warn-l);color:#a16207;border-color:#f0dcbb}
+.pill.nat-s{background:#f5f6f9;color:#7c8698;border-color:#e9edf4}
 
 /* 价格格 */
 .prices{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px;margin-top:13px}
@@ -198,8 +197,10 @@ a.markbtn.web:hover{border-color:var(--brand);background:#dde9ff}
 .pr b{font-size:15.5px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:.2px}
 .pr.hot{background:var(--brand-l);border-color:#d9e4ff}
 .pr.hot b{color:var(--brand-d);font-size:17px}
+/* 零售指导价只是「参考原价」，压低一档即可 —— ⚠ 不要加删除线，用户明确要求正常显示 */
 .pr.rp{background:#fbfbfc}
-.pr.rp b{color:var(--ink2);font-size:14px;font-weight:500;text-decoration:line-through;text-decoration-color:#c8d0dd}
+.pr.rp b{color:var(--ink2);font-size:15px;font-weight:600}
+.pr b i.orig{font-style:normal;font-size:11.5px;font-weight:400;color:var(--ink3);margin-left:3px;text-decoration:line-through}
 .pr.bonus b{color:#b45309;font-size:15px}
 .pr.qty b{font-size:15px}
 
@@ -212,19 +213,29 @@ a.markbtn.web:hover{border-color:var(--brand);background:#dde9ff}
 }
 .pill.ok{background:var(--ok-l);color:var(--ok);border-color:#c9e8d6}
 .pill.no{background:#f5f6f9;color:var(--ink3)}
+.pill.mute{background:#f5f6f9;color:var(--ink3)}
 .lnk{
   border:0;background:transparent;color:var(--brand);font-size:12.5px;cursor:pointer;
   padding:2px 4px;font-family:inherit;text-decoration:underline;text-underline-offset:3px;
   text-decoration-color:#bcd0f7;
 }
 .lnk:hover{color:var(--brand-d)}
-.stockbox{margin-top:10px;border:1px dashed var(--line);border-radius:10px;padding:10px 12px;background:#fcfdff}
-.stockbox h4{margin:0 0 8px;font-size:12px;color:var(--ink3);font-weight:600;letter-spacing:.3px}
-.wtab{width:100%;border-collapse:collapse;font-size:12.5px}
-.wtab td{padding:4px 6px;border-bottom:1px solid var(--line2);color:var(--ink2);font-variant-numeric:tabular-nums}
-.wtab tr:last-child td{border-bottom:0}
-.wtab td.q{text-align:right;font-weight:600;color:var(--ink)}
-.wtab .t{font-size:11px;color:var(--ink3)}
+/* 仓库明细（现存量10.6）—— 回答「这几台在哪个仓」。
+   颜色按仓库类型分：正品仓绿 / 样机仓蓝 / 次品仓红 / 特价·待送橙 / 机壳·虚拟灰。
+   仓多了只列前 4 个，鼠标停上去出完整列表（title 里有全部）。 */
+.pill.wh{background:#f4f7fc;color:var(--ink2);border-color:#e2e9f4;font-weight:500;font-size:12px;padding:2px 9px}
+.pill.wh em{font-style:normal;font-size:10.5px;color:var(--ink3);margin-left:4px}
+.pill.wh b{margin-left:5px;font-weight:700;color:var(--ink)}
+.pill.wh.ok{background:var(--ok-l);border-color:#c9e8d6}
+.pill.wh.ok b{color:#0f7d45}
+.pill.wh.sky{background:var(--brand-l);border-color:#d9e4ff}
+.pill.wh.sky b{color:var(--brand-d)}
+.pill.wh.bad{background:#fef2f2;border-color:#fbd5d5}
+.pill.wh.bad b{color:#b42318}
+.pill.wh.warn{background:var(--warn-l);border-color:#f0dcbb}
+.pill.wh.warn b{color:#a16207}
+.pill.wh.mute{background:#f5f6f9;border-color:#e9edf4;color:var(--ink3)}
+.pill.whmore{background:#fff;border-style:dashed;color:var(--ink3);font-weight:500;font-size:12px}
 
 /* ---------- 闲鱼定价计算器 ---------- */
 .calc{
@@ -272,6 +283,28 @@ footer a:hover{text-decoration:underline}
   .row>label{width:58px}
   .acts{margin-left:0;width:100%}
 }
+/* ---- 启动骨架（exe 版先出这个，数据到了再换成界面） ---- */
+.boot{text-align:center;padding:72px 20px;color:var(--ink3);font-size:13px}
+.boot .spin{width:26px;height:26px;margin:0 auto 14px;border:2.5px solid #e6eaf2;border-top-color:var(--brand);border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.empty .dim{color:var(--ink3);font-size:12.5px;margin-top:8px}
+.empty.idle{padding:64px 20px}
+/* ---- 全新机报价那一排（和清理价区分开） ---- */
+.prices.newp{margin-top:9px}
+.prices.newp .pr{background:#f7faff;border-color:#e3ecfb}
+.pr.hot2 b{color:#1d4ed8}
+.pr.tax b{font-size:15.5px}
+.tag.np{background:#eef6ff;color:#1d4ed8;border-color:#d8e7fd;font-weight:600}
+/* ---- 新字段的标签 ---- */
+.row .vs{display:flex;flex-wrap:wrap;gap:6px}
+.pill.ship{background:#f0fbf4;color:#1c7a45;border-color:#cdeedb;font-weight:600}
+/* 「外区加100运费」的两种口径 */
+.pill.ship-y{background:var(--brand-l);color:var(--brand-d);border-color:#d9e4ff}
+.pill.ship-q{background:var(--warn-l);color:#a16207;border-color:#f0dcbb}
+.pill.src{background:#f7f8fb;color:var(--ink2)}
+.pill.s69{background:#fff8ec;color:#a16207;border-color:#f6e3bd}
+.pill.sub{background:#fff3f3;color:#c2410c;border-color:#fbd9cf}
+.pill.mono{font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -299,30 +332,27 @@ footer a:hover{text-decoration:underline}
         <circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.8"/>
         <path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
       </svg>
-      <input id="q" placeholder="输入型号或品类，例如 BCD-501WGHTD14W9U1 / 冰箱 / KFR-35GW / 洗衣机 …" autocomplete="off" spellcheck="false">
+      <input id="q" placeholder="输入型号或品类：BCD-501WGHTD14W9U1 / 冰箱 / KFR-35GW / 洗衣机 / MR-497WSPEA …" autocomplete="off" spellcheck="false">
       <button class="clr" id="clr" hidden title="清空">×</button>
     </div>
 
     <div class="chips" id="chips"></div>
     <div class="chips" id="catchips"></div>
     <div class="chips" id="tools">
-      <span class="lbl">清理方式</span>
-      <button class="chip" data-kind="">全部<i id="kc-all">0</i></button>
+      <span class="lbl">方式</span>
+      <button class="chip" data-kind="">全部</button>
       <button class="chip" data-kind="l">滞销清理<i id="kc-l">0</i></button>
       <button class="chip" data-kind="s">样机清理<i id="kc-s">0</i></button>
-      <span style="width:10px"></span>
+      <span class="vsep"></span>
       <button class="chip g" data-flag="stock">只看有货</button>
-      <button class="chip w" data-flag="send">只看可发全国</button>
+      <button class="chip w" data-flag="send">只看能发外区</button>
       <button class="chip g" data-flag="hide">只看未发布</button>
-    </div>
-
-    <div class="pricebar" id="pricebar">
-      <span class="pl">清理价区间</span>
-      <input id="pmin" type="number" min="0" step="1" inputmode="decimal" placeholder="最低价">
-      <span class="sep">~</span>
-      <input id="pmax" type="number" min="0" step="1" inputmode="decimal" placeholder="最高价">
+      <span class="vsep"></span>
+      <span class="lbl" title="按该型号最低清理价（美的系按拿货价）筛选">清理价</span>
+      <input class="pricebar-in" id="pmin" type="number" min="0" step="1" inputmode="decimal" placeholder="最低">
+      <span class="lbl">~</span>
+      <input class="pricebar-in" id="pmax" type="number" min="0" step="1" inputmode="decimal" placeholder="最高">
       <button class="pc" id="pclear" hidden>清除</button>
-      <span class="note">按该型号最低清理价筛选</span>
     </div>
 
     <div class="hint" id="hint"></div>
@@ -334,28 +364,43 @@ footer a:hover{text-decoration:underline}
     </div>
     <div class="updbar" id="updbar" hidden>
       <button class="chip" id="updbtn">↻ 从金山文档更新数据</button>
-      <button class="chip" id="updlocal" title="把从金山文档下载下来的 xlsx 直接传进来重建">📂 用本地 Excel 更新</button>
+      <button class="chip" id="stkbtn" title="从用友 YonSuite 拉实时现存量（登录一次，之后一键更新）">⟳ 更新实时库存（用友）</button>
       <span class="upnote" id="updmsg"></span>
     </div>
-    <input type="file" id="xlsxfile" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none">
     <input type="file" id="imgfile" accept="image/*" style="display:none">
     <input type="file" id="jsonfile" accept=".json,application/json" style="display:none">
 
+    <div class="boot" id="boot" hidden><div class="spin"></div><p>正在读取数据…</p></div>
     <div class="list" id="list"></div>
     <div class="more" id="more" hidden></div>
     <footer id="foot"></footer>
   </div>
 </main>
 
-<script id="payload" type="application/json">/*__DATA__*/</script>
 <script>
 (function(){
 "use strict";
-var DATA = JSON.parse(document.getElementById('payload').textContent);
-var META = DATA.meta || {};
-var ALL  = DATA.rows || [];      // 型号数组（已按品牌/品类/型号排序）
-var IMGS = DATA.imgs || {};      // {core: 缩略图 dataURL}
+/* 数据怎么来，有两种：
+   ① 离线单文件版：数据直接烤死在 <script id="payload"> 里（DATA 有值），双击即用；
+   ② exe 版：页面自己只有几十 KB —— 先秒开窗口显示骨架，再去 /api/data 取数据。
+      图片也不塞进页面，改成按需向 /img/<型号> 要（真正懒加载，用得着才解码）。
+   DATA / CFG 都是构建时注入的。 */
+var DATA = /*__DATA__*/null;
+/* CFG 不用注入，按「数据有没有内联」自己判断：
+   内联 = 离线单文件版（图片也是 dataURL）；
+   没内联 = exe 版，数据和图片都走本地 HTTP（页面才几十 KB，窗口秒开）。 */
+var CFG  = DATA
+  ? { fetch: false, imgBase: '',      dataUrl: '' }
+  : { fetch: true,  imgBase: '/img/', dataUrl: '/api/data' };
+var META = {}, ALL = [], IMGS = {}, IMGHAS = null;
 var FEE  = 0.016;                // 闲鱼平台费率 1.6%
+/* 实时库存（exe 版从用友 YonSuite 拉的现存量，点「更新实时库存」刷新）：
+   STOCK = { 型号norm: { q:现存量, a:可用量, wt:{仓库类型:可用量} } }，键与 norm() 同一套归一 */
+var STOCKDATA = null;
+function stockOf(mo){
+  var s = STOCKDATA && STOCKDATA.stock;
+  return s ? (s[norm(mo)] || null) : null;
+}
 
 /* ================= 本地存储 ================= */
 var MARK_KEY = 'xy2-published';
@@ -385,7 +430,13 @@ function saveMyImgs(){ save(IMG_KEY, MYIMGS); }
 var hideMarked = false;
 try { hideMarked = localStorage.getItem(HIDE_KEY) === '1'; } catch(e){}
 
-function imgOf(core){ return MYIMGS[core] || IMGS[core]; }
+function imgOf(core){
+  if (MYIMGS[core]) return MYIMGS[core];            // 自己补的图优先
+  if (IMGS[core]) return IMGS[core];                // 内联的 dataURL（离线版）
+  // exe 版：图片不内联，交给浏览器按需取，看得见才解码
+  if (CFG.imgBase && IMGHAS && IMGHAS[core]) return CFG.imgBase + encodeURIComponent(core);
+  return null;
+}
 function missCount(){
   var seen = {}, n = 0;
   for (var i = 0; i < ALL.length; i++){
@@ -494,36 +545,37 @@ function catGroup(v){
   return '其他';
 }
 
-/* ================= 建索引 ================= */
-(function(){
+/* ================= 建索引（数据到位后才跑） ================= */
+var UID = {}, BRANDS = [], CATS = [];
+function buildIndex(){
   var i, r;
+  UID = {};
   for (i = 0; i < ALL.length; i++){
     r = ALL[i];
     r._n  = norm(r.mo);
     r._c2 = coreOf2(r.mo);
     r._cg = catGroup(r.cat);
-    r._h  = norm([r.cat, r.b, r.n, r.code, r.st].join(' '));
+    r._h  = norm([r.cat, r.b, r.n, r.code, r.st, r.note].join(' '));
+    // 美的 / 容声那张表是另一套报价（拿货价·慧买卖 / 给二批 / 价格取整），
+    // 卡片和计算器要跟着换口径 —— 用这三个字段当标记
+    r._md = isNum(r.mh) || isNum(r.m2) || isNum(r.mr);
     r._uid = i;
+    UID[i] = r;
   }
-})();
-var UID = {};
-ALL.forEach(function(it){ UID[it._uid] = it; });
+  var mb = {}, mc = {};
+  ALL.forEach(function(it){
+    if (it.b) mb[it.b] = (mb[it.b] || 0) + 1;
+    if (it._cg) mc[it._cg] = (mc[it._cg] || 0) + 1;
+  });
+  BRANDS = Object.keys(mb).map(function(k){ return { k: k, n: mb[k] }; })
+    .sort(function(a,b){ return b.n - a.n; });
+  CATS = Object.keys(mc).map(function(k){ return { k: k, n: mc[k] }; })
+    .sort(function(a,b){ return b.n - a.n; });
+}
 
 function brandOf(it){ return it.b || ''; }
 function nameOf(it){ return it.n || ''; }
 
-var BRANDS = (function(){
-  var map = {};
-  ALL.forEach(function(it){ if (it.b) map[it.b] = (map[it.b] || 0) + 1; });
-  return Object.keys(map).map(function(k){ return { k: k, n: map[k] }; })
-    .sort(function(a,b){ return b.n - a.n; });
-})();
-var CATS = (function(){
-  var map = {};
-  ALL.forEach(function(it){ if (it._cg) map[it._cg] = (map[it._cg] || 0) + 1; });
-  return Object.keys(map).map(function(k){ return { k: k, n: map[k] }; })
-    .sort(function(a,b){ return b.n - a.n; });
-})();
 var curBrand = '', curCat = '', curKind = '', flagStock = false, flagSend = false;
 
 /* ================= 格式化 ================= */
@@ -543,32 +595,50 @@ function prCell(label, v, cls){
   return '<div class="pr' + (cls ? ' ' + cls : '') + '"><span>' + label + '</span><b>' + esc(money(v)) + '</b></div>';
 }
 
-/* 该型号最低清理价（用于价格区间筛选与计算器默认成本） */
+/* 该型号最低清理价（用于价格区间筛选与计算器默认成本）
+   美的 / 容声没有「清理价」，用「拿货价 · 慧买卖」当基准，别让它们被价格区间筛掉 */
 function lowPrice(it){
   var a = isNum(it.lpz) ? it.lpz : null, b = isNum(it.spz) ? it.spz : null;
   if (a != null && b != null) return Math.min(a, b);
-  return a != null ? a : b;
+  var v = (a != null ? a : b);
+  if (v != null) return v;
+  return isNum(it.mh) ? it.mh : null;
 }
 
 /* ================= 闲鱼定价计算器 ================= */
 function costOptions(it){
   var o = [];
+  // 美的 / 容声那张表是另一套报价：没有清理价，只有拿货价 / 给二批 / 取整
+  if (it._md){
+    if (isNum(it.mh)) o.push({ v: it.mh, l: '拿货价·慧买卖' });
+    if (isNum(it.m2)) o.push({ v: it.m2, l: '给二批价' });
+    if (isNum(it.mr)) o.push({ v: it.mr, l: '价格取整' });
+    return o;
+  }
+  // 成本口径：表里同一个型号可能有好几个价，按「清理价 → 全新机价」排，
+  // 清理价排前面当默认（卖家多半是按清理价拿的货）
   if (isNum(it.lpz)) o.push({ v: it.lpz, l: '滞销清理价' });
   if (isNum(it.spz)) o.push({ v: it.spz, l: '样机清理价' });
+  if (isNum(it.npz)) o.push({ v: it.npz, l: '滞销价格' });
+  if (isNum(it.nyz)) o.push({ v: it.nyz, l: '样机价格' });
+  if (isNum(it.pt)) o.push({ v: it.pt, l: '价格含税' });
   return o;
 }
 function calcHTML(it){
+  // ⚠ 这一行**每个型号都要有**（用户要求）：一个成本价都没有时也照渲染，
+  //    只是成本那栏写「无成本价」，输定价进去「挣」显示 —（总比整行不见了强）
   var opts = costOptions(it);
-  if (!opts.length) return '';
   var saved = PRICES[it.c];
-  var pick = opts[0];
+  var pick = opts.length ? opts[0] : { v: '', l: '无成本价' };
   var sel;
   if (opts.length > 1){
     sel = '<select class="costsel">' + opts.map(function(o){
       return '<option value="' + o.v + '" data-l="' + esc(o.l) + '"' + (o.v === pick.v ? ' selected' : '') + '>' + esc(o.l) + ' ' + esc(money(o.v)) + '</option>';
     }).join('') + '</select>';
-  } else {
+  } else if (opts.length === 1){
     sel = '<select class="costsel" style="pointer-events:none;border-color:transparent;background:transparent;padding-left:0;font-weight:600;color:#1b2431"><option value="' + pick.v + '" data-l="' + esc(pick.l) + '">' + esc(pick.l) + ' ' + esc(money(pick.v)) + '</option></select>';
+  } else {
+    sel = '<select class="costsel" style="pointer-events:none;border-color:transparent;background:transparent;padding-left:0;color:#98a2b3"><option value="" data-l="无成本价">表里没有成本价</option></select>';
   }
   return '<div class="calc" data-key="' + esc(it.c) + '">'
     + '<span class="cl">闲鱼定价</span>'
@@ -594,66 +664,154 @@ function calcUpdate(box){
   outEl.className = 'p-out ' + (profit >= 0 ? 'pos' : 'neg');
 }
 
-/* ================= 库存明细 ================= */
-function stockHTML(it){
-  var iv = it.inv;
-  if (!iv || !iv.wh || !iv.wh.length) return '';
-  var rows = iv.wh.map(function(w){
-    return '<tr><td>' + esc(w.w) + (w.t ? ' <span class="t">' + esc(w.t) + '</span>' : '') + '</td>'
-      + '<td class="q">' + (isNum(w.av) ? w.av.toLocaleString('zh-CN') : esc(w.av)) + '</td></tr>';
-  }).join('');
-  var head = '';
-  if (isNum(iv.av)) head += '<span class="pill ' + (iv.av > 0 ? 'ok' : 'no') + '">可用量 ' + iv.av + '</span> ';
-  if (isNum(iv.on)) head += '<span class="pill">现存量 ' + iv.on + '</span> ';
-  if (isNum(iv.gp) && iv.gp) head += '<span class="pill">正品 ' + iv.gp + '</span> ';
-  if (isNum(iv.sp) && iv.sp) head += '<span class="pill">样机 ' + iv.sp + '</span> ';
-  return '<div class="stockbox"><h4>库存分布（现存量表 · 共 ' + iv.wh.length + ' 个仓）</h4>'
-    + '<div class="row" style="margin:0 0 8px"><label>合计</label>' + head + '</div>'
-    + '<table class="wtab">' + rows + '</table></div>';
-}
-
 /* ================= 卡片 ================= */
 var PH_SVG = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none">'
   + '<rect x="5" y="3" width="14" height="18" rx="2" stroke="currentColor" stroke-width="1.4"/>'
   + '<path d="M5 9h14" stroke="currentColor" stroke-width="1.4"/>'
   + '<circle cx="8.2" cy="6" r="0.9" fill="currentColor"/></svg>';
-var NAT_TXT = { 1: '可发', 0: '不可发', 2: '待确认' };
+/* 「全国可发」列怎么读（用户 2026-10 定稿的口径）：
+   ⚠ 这一列回答的不是「能不能发」，而是「**能不能发到深惠广莞以外**」——
+      所有型号都能发深圳/惠州/广州/东莞，所以卡片上那个绿色的「深惠广莞」永远在。
+   · 空 / 不可以 / 进货小于3年不能发外区 / 进货大于3年可以发外区 → 只发深惠广莞（natk 3）
+   · 可以 / 报备可发全国                                       → 报备后可发全国，看地址（natk 1）
+   · 找品类报备确认 / 一单一询是否能发外地                       → 要问过才知道（natk 2）
+   以后表里冒出没见过的写法 → 保守当「要问过才知道」，原文照显。 */
+var NAT_EXTRA = {
+  '可以': 'y', '报备可发全国': 'y',
+  '找品类报备确认': 'q', '一单一询是否能发外地': 'q',
+  '进货大于3年可以发外区': 's', '进货小于3年不能发外区': 's'
+};
+// 这些值本身就等于「只发深惠广莞」，再显示一个标签就是废话
+var NAT_LOCAL = ['不可以', '不可', '否', 'N', 'n', '0', '0.0', '不', '×', 'x', '不支持'];
+
+/* 「发货区域」列——只有这三种写法需要归一（用户 2026-10 定）：它们说的都是
+   「外区能发，但要加 100 运费」，而包邮的只有深圳/惠州/广州/东莞。
+   其它写法照显原文。 */
+var SHIP_EXTRA = {
+  '可发全国加运费100':        { t: '可发全国 · 加100运费', k: 'y' },
+  '报备可发全国加运费100':     { t: '报备可发全国 · 加100运费', k: 'y' },
+  '询问是否可发全国加运费100':  { t: '想问 · 加100运费可发全国', k: 'q' }
+};
+
+// 发货区域的展示文案（归一的用归一后的，其余照原文）
+function shipTextOf(it){
+  var raw = it.ship == null ? '' : String(it.ship).trim();
+  if (!raw) return null;
+  var m = SHIP_EXTRA[raw];
+  return m ? m.t : raw;
+}
 
 function renderItem(it){
   var nm = nameOf(it);
   var marked = !!MARKED[it.c];
   var img = imgOf(it.c);
   var mine = !!MYIMGS[it.c];
-  var sid = 'st' + it._uid;
 
-  /* 价格格 */
-  var g = [];
+  /* ---------- 报价（两套口径） ----------
+       · 海尔 / 卡萨帝：滞销·样机清理价 + 出库奖励 + 清理数量，下面接一行全新机报价
+       · 美的 / 容声（「美的」页）：拿货价·慧买卖 / 给二批 / 取整，下面接京东价 + 参考闲鱼价 */
+  var g = [], pg = [];
   var hot = null;
-  if (isNum(it.lpz)) { g.push(prCell('滞销清理价', it.lpz, 'hot')); hot = it.lpz; }
-  if (isNum(it.spz)) { g.push(prCell('样机清理价', it.spz, hot == null ? 'hot' : '')); if (hot == null) hot = it.spz; }
-  if (isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
-  if (isNum(it.lb)) g.push(prCell('滞销出库奖励', it.lb, 'bonus'));
-  if (isNum(it.sb)) g.push(prCell('样机出库奖励', it.sb, 'bonus'));
-  var qn = isNum(it.lq) ? it.lq : (isNum(it.sq) ? it.sq : null);
-  if (qn != null) g.push('<div class="pr qty"><span>清理数量</span><b>' + qn + '</b></div>');
-
-  /* 全国可发 */
-  var natHTML = '';
-  if (it.nat){
-    var cls = it.natk === 1 ? 'y' : it.natk === 0 ? 'n' : 'q';
-    natHTML = '<span class="nat ' + cls + '">' + esc(NAT_TXT[it.natk] || '待确认') + '：' + esc(it.nat) + '</span>';
+  if (it._md){
+    if (isNum(it.mh)) { g.push(prCell('拿货价 · 慧买卖', it.mh, 'hot')); hot = it.mh; }
+    if (isNum(it.m2)) g.push(prCell('价格 · 给二批', it.m2));
+    if (isNum(it.mr)) g.push(prCell('价格取整', it.mr));
+    if (isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
+    // 官网价：美的商城快照（mop = 商城划线原价，比现售价高才显示）
+    if (isNum(it.mp)){
+      var mo = isNum(it.mop) && it.mop > it.mp ? '<i class="orig">' + esc(money(it.mop)) + '</i>' : '';
+      g.push('<div class="pr rp"><span>官网价</span><b>' + esc(money(it.mp)) + mo + '</b></div>');
+    }
+    // 官方参考价（用来定价）：京东价 / 国补后（零售指导价、官网价在上一行里已有）
+    if (isNum(it.jd)) pg.push(prCell('京东价 / 国补后', it.jd));
   } else {
-    natHTML = '<span class="nat n">全国可发：未标注</span>';
+    if (isNum(it.lpz)) { g.push(prCell('滞销清理价', it.lpz, 'hot')); hot = it.lpz; }
+    if (isNum(it.spz)) { g.push(prCell('样机清理价', it.spz, hot == null ? 'hot' : '')); if (hot == null) hot = it.spz; }
+    if (isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
+    if (isNum(it.lb)) g.push(prCell('滞销出库奖励', it.lb, 'bonus'));
+    if (isNum(it.sb)) g.push(prCell('样机出库奖励', it.sb, 'bonus'));
+    var qn = isNum(it.lq) ? it.lq : (isNum(it.sq) ? it.sq : null);
+    if (qn != null) g.push('<div class="pr qty"><span>清理数量</span><b>' + qn + '</b></div>');
+    if (isNum(it.pt)) pg.push(prCell('价格含税', it.pt, 'tax'));
+    if (isNum(it.npz)) pg.push(prCell('滞销价格', it.npz, 'hot2'));
+    if (isNum(it.nyz)) pg.push(prCell('样机价格', it.nyz, 'hot2'));
   }
 
-  /* 库存 */
-  var stockBtn = (it.inv && it.inv.wh && it.inv.wh.length)
-    ? '<button class="lnk" data-toggle="' + sid + '">仓库明细</button>' : '';
-  var avHTML = '';
-  if (isNum(it.lav)) avHTML += '<span class="pill ' + (it.lav > 0 ? 'ok' : 'no') + '">可用量 ' + it.lav + '</span> ';
-  if (isNum(it.sav)) avHTML += '<span class="pill ' + (it.sav > 0 ? 'ok' : 'no') + '">现存量 ' + it.sav + '</span> ';
-  var ivav = (it.inv && isNum(it.inv.av)) ? it.inv.av : null;
-  if (ivav != null && ivav !== it.lav && ivav !== it.sav) avHTML += '<span class="pill">在库合计 ' + ivav + '</span> ';
+  /* ---------- 发往范围（原「全国可发」列） ---------- */
+  var natRaw = String(it.nat == null ? '' : it.nat).replace(/^[\s\-—－–]+/, '').trim();
+  // 深惠广莞是所有型号的底线，而且**只有这里包邮**（用户口径）；外区要发就得加运费
+  var natHTML = '<span class="pill loc">深惠广莞 · 包邮</span> ';
+  if (natRaw && NAT_LOCAL.indexOf(natRaw) < 0){
+    natHTML += '<span class="pill nat-' + (NAT_EXTRA[natRaw] || 'q') + '">' + esc(natRaw) + '</span> ';
+  }
+
+  /* ---------- 库存（用友 YonSuite 实时数据，点「更新实时库存」刷新） ----------
+     2026-10 二次改版：可用/现存总数不要了 —— 只显示「什么仓有几个」，
+     一个仓一个 pill：仓名（类型）数量；4 个以上的收进「等 N 个仓」，全量在 title 里。 */
+  var liveHTML = '';
+  var live = stockOf(it.mo);
+  if (live && ((live.whs && live.whs.length) || (live.wt && Object.keys(live.wt).length))){
+    var LIVE_CLS = { '正品仓': 'ok', '样机仓': 'sky', '次品仓': 'bad',
+                     '机壳仓': 'mute', '特价仓': 'warn', '待送仓': 'warn' };
+    var liveHead = '用友实时数据 · 拉取于 ' + ((STOCKDATA && STOCKDATA.ts) || '')
+                 + '\n可用 ' + Math.round(live.a || 0) + ' / 现存 ' + Math.round(live.q || 0);
+    var whs = live.whs || [];
+    if (whs.length){
+      var fullW = liveHead + '\n' + whs.map(function(x){
+        return x.w + (x.t ? '（' + x.t + '）' : '') + '  ' + Math.round(x.n);
+      }).join('\n');
+      var WMAX = 4;
+      for (var wi = 0; wi < whs.length && wi < WMAX; wi++){
+        var wx = whs[wi];
+        liveHTML += '<span class="pill wh' + (LIVE_CLS[wx.t] ? ' ' + LIVE_CLS[wx.t] : '') + '" title="' + esc(fullW) + '">'
+                  + esc(wx.w) + (wx.t ? '<em>' + esc(wx.t) + '</em>' : '') + '<b>' + Math.round(wx.n) + '</b></span> ';
+      }
+      if (whs.length > WMAX){
+        liveHTML += '<span class="pill whmore" title="' + esc(fullW) + '">等 ' + whs.length + ' 个仓</span>';
+      }
+    } else {
+      /* 老缓存（stock_live.json 里还没有仓名明细）→ 退回按仓库类型显示 */
+      var parts = [];
+      for (var lk in live.wt){ parts.push(lk + ' ' + Math.round(live.wt[lk])); }
+      parts.sort(function(x, y){ return parseFloat(y.split(' ')[1]) - parseFloat(x.split(' ')[1]); });
+      var fullT = liveHead + '\n' + parts.join(' / ');
+      for (var lv = 0; lv < parts.length && lv < 4; lv++){
+        var pa = parts[lv].split(' ');
+        liveHTML += '<span class="pill wh' + (LIVE_CLS[pa[0]] ? ' ' + LIVE_CLS[pa[0]] : '') + '" title="' + esc(fullT) + '">'
+                  + esc(pa[0]) + '<b>' + pa[1] + '</b></span> ';
+      }
+      if (parts.length > 4){
+        liveHTML += '<span class="pill whmore" title="' + esc(fullT) + '">等 ' + parts.length + ' 类仓</span>';
+      }
+    }
+  }
+
+  /* ---------- 发货 ----------
+     表里这三种写法说的其实是「外区要加 100 运费」，归一下更好读（用户要求）：
+        可发全国加运费100 / 报备可发全国加运费100 / 询问是否可发全国加运费100
+     其它写法（深圳/惠州/广州/东莞、全国，含运费、广东全省…）照显原文，title 里也留着原话。 */
+  var shipHTML = '';
+  if (it.ship){
+    var sm = SHIP_EXTRA[String(it.ship).trim()];
+    shipHTML += '<span class="pill ship' + (sm ? ' ship-' + sm.k : '') + '" title="表里写：' + esc(it.ship) + '">'
+              + esc(sm ? sm.t : it.ship) + '</span> ';
+  }
+  if (it.sfrom) shipHTML += '<span class="pill src">货源 ' + esc(it.sfrom) + '</span> ';
+
+  /* ---------- 补贴 ----------
+     2026-10 二次改版：补贴最高价 / 补贴可赚 / 用户补贴 不要了（公式算出来的噪音），
+     只留 69码。 */
+  var subHTML = '';
+  if (it.s69) subHTML += '<span class="pill s69">69码 ' + esc(it.s69) + '</span> ';
+
+  /* ---------- 闲鱼 ----------
+     利润同理：它 = 闲鱼价 - 平台费 - 成本，没填闲鱼价时算出来是负数，别显示。 */
+  var xyHTML = '';
+  if (it.xyid) xyHTML += '<span class="pill mono">ID ' + esc(it.xyid) + '</span> ';
+  if (isNum(it.xyp)) xyHTML += '<span class="pill">闲鱼价 ' + money(it.xyp) + '</span> ';
+  if (isNum(it.profit) && isNum(it.xyp)) xyHTML += '<span class="pill ' + (it.profit > 0 ? 'ok' : 'no') + '">利润 ' + money(it.profit) + '</span> ';
+
+  var stTxt = it.st || it.t2 || '';
 
   return '<article class="card' + (marked ? ' marked' : '') + '" data-key="' + esc(it.c) + '">'
     + '<div class="chead" style="position:relative">'
@@ -670,16 +828,24 @@ function renderItem(it){
     + '<div class="tags">'
     + (it.b ? '<span class="tag b">' + esc(it.b) + '</span>' : '')
     + (it.cat ? '<span class="tag">' + esc(it.cat) + '</span>' : '')
-    + (it.st ? '<span class="tag d">' + esc(it.st) + '</span>' : '')
-    + (it.k === 'ls' ? '<span class="tag s">滞销+样机</span>' : it.k === 'l' ? '<span class="tag s">滞销清理</span>' : '<span class="tag s">样机清理</span>')
-    + natHTML
+    + (stTxt ? '<span class="tag d">' + esc(stTxt) + '</span>' : '')
+    + (it._md ? '<span class="tag np">美的系报价</span>'
+       : it.k === 'ls' ? '<span class="tag s">滞销+样机</span>'
+       : it.k === 'l' ? '<span class="tag s">滞销清理</span>'
+       : it.k === 's' ? '<span class="tag s">样机清理</span>'
+       : '<span class="tag np">全新机</span>')
     + '</div>'
     + (nm ? '<div class="nm">' + esc(nm) + '</div>' : '')
     + '</div></div>'
-    + '<div class="prices">' + g.join('') + '</div>'
+    + (g.length ? '<div class="prices">' + g.join('') + '</div>' : '')
     + calcHTML(it)
-    + (avHTML ? '<div class="row"><label>库存</label>' + avHTML + stockBtn + '</div>' : '')
-    + (it.inv && it.inv.wh && it.inv.wh.length ? '<div id="' + sid + '" hidden>' + stockHTML(it) + '</div>' : '')
+    + (pg.length ? '<div class="prices newp">' + pg.join('') + '</div>' : '')
+    + (liveHTML ? '<div class="row"><label>库存</label><span class="vs">' + liveHTML + '</span></div>' : '')
+    + (shipHTML ? '<div class="row"><label>发货</label><span class="vs">' + shipHTML + '</span></div>' : '')
+    // 美的系只在「美的」页里有报价，没有发货区域那一列 —— 不写「发往」免得误导
+    + (it._md ? '' : '<div class="row"><label>发往</label><span class="vs">' + natHTML + '</span></div>')
+    + (subHTML ? '<div class="row"><label>补贴</label><span class="vs">' + subHTML + '</span></div>' : '')
+    + (xyHTML ? '<div class="row"><label>闲鱼</label><span class="vs">' + xyHTML + '</span></div>' : '')
     + (it.code ? '<div class="row"><label>物料编码</label><span class="v mono">' + esc(it.code) + '</span></div>' : '')
     + '</article>';
 }
@@ -693,12 +859,43 @@ function copyText(it){
     ['零售指导价', it.lp > 0 ? money(it.lp) : null],
     ['滞销清理价', money(it.lpz)], ['滞销出库奖励', money(it.lb)], ['滞销清理数量', it.lq],
     ['样机清理价', money(it.spz)], ['样机出库奖励', money(it.sb)], ['样机清理数量', it.sq],
-    ['可用量', it.lav], ['现存量', it.sav],
-    ['全国可发', it.nat], ['物料编码', it.code]
+    ['发货区域', shipTextOf(it)], ['货来源', it.sfrom],
+    ['价格含税', money(it.pt)], ['滞销价格', money(it.npz)], ['样机价格', money(it.nyz)],
+    ['补贴69码', it.s69],
+    ['闲鱼商品ID', it.xyid], ['闲鱼价格', money(it.xyp)],
+    ['利润', it._md ? null : money(it.profit)],
+    // 美的 / 容声那张表的报价口径
+    ['拿货价·慧买卖', money(it.mh)], ['价格·给二批', money(it.m2)],
+    ['价格取整', money(it.mr)],
+    ['官网价', money(it.mp) + (isNum(it.mop) && it.mop > it.mp ? '（原价 ' + money(it.mop) + '）' : '')],
+    ['京东价/国补后', money(it.jd)],
+    ['物料编码', it.code]
   ];
   pairs.forEach(function(p){
     if (p[1] != null && p[1] !== '' && p[1] !== 0) L.push(p[0] + '：' + p[1]);
   });
+  // 实时库存（用友 YonSuite，唯一库存来源）—— 只写「什么仓有几个」
+  var lv = stockOf(it.mo);
+  if (lv && ((lv.whs && lv.whs.length) || (lv.wt && Object.keys(lv.wt).length))){
+    if (lv.whs && lv.whs.length){
+      L.push('库存（' + ((STOCKDATA && STOCKDATA.ts) || '') + '）：' + lv.whs.map(function(x){
+        return x.w + (x.t ? '（' + x.t + '）' : '') + ' ' + Math.round(x.n);
+      }).join('；'));
+    } else {
+      var lvparts = [];
+      for (var lkk in lv.wt){ lvparts.push(lkk + ' ' + Math.round(lv.wt[lkk])); }
+      lvparts.sort(function(x, y){ return parseFloat(y.split(' ')[1]) - parseFloat(x.split(' ')[1]); });
+      L.push('库存（' + ((STOCKDATA && STOCKDATA.ts) || '') + '）：' + lvparts.join(' / '));
+    }
+  }
+  // 发往范围：所有海尔系型号都能发深惠广莞；表里另外写了口径的，连原文一起带上。
+  // 美的 / 容声那张表没有「发货区域」列 → 不写，免得编
+  if (!it._md){
+    var lc = '深圳/惠州/广州/东莞';
+    var nv = String(it.nat == null ? '' : it.nat).replace(/^[\s\-—－–]+/, '').trim();
+    if (nv && NAT_LOCAL.indexOf(nv) < 0) lc += '；' + nv;
+    L.push('可发范围：' + lc);
+  }
   return L.join('\n');
 }
 function toast(btn, ok){
@@ -741,8 +938,20 @@ function pass(it){
   if (curBrand && brandOf(it) !== curBrand) return false;
   if (curCat && it._cg !== curCat) return false;
   if (curKind && it.k.indexOf(curKind) < 0) return false;
-  if (flagStock && !isNum(it.lav) && !isNum(it.sav) && !(it.inv && it.inv.av > 0)) return false;
-  if (flagSend && it.natk !== 1) return false;
+  // 「只看有货」：优先用用友实时库存（2026-10 改版后唯一库存口径）；
+  // 还没拉取过实时数据时，退回公布版清理明细里的「可用量 / 现存量」列，免得筛出空列表
+  if (flagStock){
+    var _lv = stockOf(it.mo);
+    if (_lv){
+      if (!((_lv.a || 0) > 0 || (_lv.q || 0) > 0)) return false;
+    } else {
+      var _gp = isNum(it.lav) ? it.lav : 0;
+      var _sp = isNum(it.sav) ? it.sav : 0;
+      if (!(_gp > 0) && !(_sp > 0)) return false;
+    }
+  }
+  // 「只看能发外区」：排除掉 3 = 只发深惠广莞的（含空值 / 不可以 / 进货年限那两条）
+  if (flagSend && (it.natk === 3 || it.natk == null)) return false;
   if (hideMarked && MARKED[it.c]) return false;
   return pricePass(it);
 }
@@ -819,6 +1028,23 @@ function emptyHTML(q){
     + tips.map(function(t){ return '<code data-fill="' + esc(t) + '">' + esc(t) + '</code>'; }).join(' ')
     + '</p></div>';
 }
+/* 还没搜索时的空状态：不铺卡片，只给入口提示 */
+function idleHTML(){
+  var code = function(t){ return '<code data-fill="' + esc(t) + '">' + esc(t) + '</code>'; };
+  var nc = 0, np = 0;
+  ALL.forEach(function(it){ if (it.k) nc++; else np++; });
+  return '<div class="empty idle">'
+    + '<svg width="46" height="46" viewBox="0 0 24 24" fill="none">'
+    + '<circle cx="11" cy="11" r="7" stroke="#98a2b3" stroke-width="1.5"/>'
+    + '<path d="M16.2 16.2L21 21" stroke="#98a2b3" stroke-width="1.5" stroke-linecap="round"/></svg>'
+    + '<h3>输入型号开始查</h3>'
+    + '<p>敲型号片段 ' + code('BCD-501WGHTD14W9U1') + code('KFR-35GW') + code('MR-497WSPEA') + '，<br>'
+    + '或直接搜品类 ' + code('冰箱') + code('洗衣机') + code('热水器') + '，也可以点上面的品牌 / 品类标签。</p>'
+    + '<p class="dim">库里有 <b>' + ALL.length + '</b> 个型号'
+    + (np ? ' · 全新机 <b>' + np + '</b> 个' : '')
+    + (nc ? ' · 清理（滞销/样机）<b>' + nc + '</b> 个' : '')
+    + '</p></div>';
+}
 function priceHint(){
   var a = parseFloat(pminEl.value), b = parseFloat(pmaxEl.value);
   if (isFinite(a) && isFinite(b)) return '清理价 ¥' + a + ' ~ ¥' + b;
@@ -835,7 +1061,9 @@ function run(){
   moreEl.hidden = true;
   shown = 0;
   var hasFilter = !!(curBrand || curCat || curKind || flagStock || flagSend || pminV != null || pmaxV != null);
-  var browse = !q && !hasFilter;      // 刚打开软件：直接列全部，别给一个空白窗口
+  // 空搜索框 + 没点任何筛选 = 什么都不列。
+  // （上一版是「打开就铺全部」，用户反馈又慢又没用 —— 这是查找工具，不是浏览工具）
+  if (!q && !hasFilter){ cur = []; hintEl.innerHTML = ''; listEl.innerHTML = idleHTML(); return; }
   var res = q ? (search(q) || []) : allFiltered();
   cur = res;
   if (!res.length){ hintEl.innerHTML = '无匹配结果'; listEl.innerHTML = emptyHTML(q || '当前筛选'); return; }
@@ -848,11 +1076,6 @@ function run(){
     }
     bits = '找到 <b>' + res.length + '</b> 条'
       + (exact ? '（精确型号 <b>' + exact + '</b> 条）' : (catm === res.length ? '（按品类/名称匹配）' : '（模糊匹配）'));
-  } else if (browse){
-    bits = '共 <b>' + ALL.length.toLocaleString('zh-CN') + '</b> 个型号'
-      + ' <span class="dot"></span> 已发布 <b>' + Object.keys(MARKED).length + '</b> 个'
-      + ' <span class="dot"></span> 缺图 <b>' + missCount() + '</b> 个'
-      + ' <span class="dot"></span> 支持型号模糊匹配与品类搜索';
   } else {
     bits = '筛选到 <b>' + res.length + '</b> 条';
   }
@@ -870,6 +1093,7 @@ clrBtn.addEventListener('click', function(){ input.value = ''; input.focus(); ru
 chipsEl.addEventListener('click', function(e){
   var b = e.target.closest('.chip');
   if (!b) return;
+  if (b.dataset.more){ toggleMore(chipsEl, b); return; }   // 「更多 ▾」只是展开，不筛选
   curBrand = b.dataset.brand || '';
   Array.prototype.forEach.call(chipsEl.querySelectorAll('.chip[data-brand]'), function(c){ c.classList.toggle('on', c === b); });
   run();
@@ -877,6 +1101,7 @@ chipsEl.addEventListener('click', function(e){
 catchipsEl.addEventListener('click', function(e){
   var b = e.target.closest('.chip');
   if (!b) return;
+  if (b.dataset.more){ toggleMore(catchipsEl, b); return; }
   curCat = b.dataset.cat || '';
   Array.prototype.forEach.call(catchipsEl.querySelectorAll('.chip[data-cat]'), function(c){ c.classList.toggle('on', c === b); });
   run();
@@ -899,12 +1124,6 @@ toolsEl.addEventListener('click', function(e){
 });
 
 listEl.addEventListener('click', function(e){
-  var t = e.target.closest('[data-toggle]');
-  if (t){
-    var box = document.getElementById(t.dataset.toggle);
-    if (box){ box.hidden = !box.hidden; t.textContent = box.hidden ? '仓库明细' : '收起明细'; }
-    return;
-  }
   var mb = e.target.closest('[data-mark]');
   if (mb){
     var k = mb.dataset.mark;
@@ -965,14 +1184,14 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   if (location.protocol !== 'http:') return;
   var bar   = document.getElementById('updbar');
   var btn   = document.getElementById('updbtn');
-  var blocal= document.getElementById('updlocal');
+  var stk   = document.getElementById('stkbtn');
   var msg   = document.getElementById('updmsg');
-  var fin   = document.getElementById('xlsxfile');
   bar.hidden = false;
 
   function busy(on, label){
-    btn.disabled = on; blocal.disabled = on;
+    btn.disabled = on; stk.disabled = on;
     btn.textContent = on ? (label || '正在更新…') : '↻ 从金山文档更新数据';
+    stk.textContent = on ? (label || '正在更新…') : '⟳ 更新实时库存（用友）';
   }
   function reset(){ busy(false); }
 
@@ -1006,28 +1225,14 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
     }).catch(function(e){ msg.textContent = '请求失败：' + e; reset(); });
   });
 
-  blocal.addEventListener('click', function(){
-    if (blocal.disabled) return;
-    fin.value = '';
-    fin.click();
-  });
-  fin.addEventListener('change', function(){
-    var f = fin.files && fin.files[0];
-    if (!f) return;
-    busy(true, '正在上传…');
-    msg.innerHTML = '<span class="spin"></span>正在读取 ' + esc(f.name) + '…';
-    var fr = new FileReader();
-    fr.onload = function(){
-      var b64 = String(fr.result).split(',')[1] || '';
-      fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: b64 })
-        .then(function(r){ return r.json(); }).then(function(r){
-          if (!r.ok){ msg.textContent = '更新失败：' + (r.msg || ''); reset(); return; }
-          msg.innerHTML = '<span class="spin"></span>正在解析并重建页面…';
-          poll();
-        }).catch(function(e){ msg.textContent = '上传失败：' + e; reset(); });
-    };
-    fr.onerror = function(){ msg.textContent = '读文件失败'; reset(); };
-    fr.readAsDataURL(f);
+  stk.addEventListener('click', function(){
+    if (stk.disabled) return;
+    busy(true, '正在更新库存…');
+    msg.innerHTML = '<span class="spin"></span>正在连接用友 YonSuite…（如需登录会自动弹窗，登录一次即可）';
+    fetch('/api/stock', { method: 'POST', cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
+      if (!r.ok){ msg.textContent = '更新失败：' + (r.msg || ''); reset(); return; }
+      poll();
+    }).catch(function(e){ msg.textContent = '请求失败：' + e; reset(); });
   });
 
   fetch('/api/state', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
@@ -1040,41 +1245,111 @@ window.addEventListener('scroll', function(){
   if (window.innerHeight + window.scrollY > document.body.offsetHeight - 320) renderBatch();
 }, { passive: true });
 
-/* ================= 初始化 ================= */
-document.getElementById('meta').innerHTML =
-  '<span class="badge">' + esc(META.month || '') + ' 公布版</span><br>'
-  + '型号 <b>' + ALL.length.toLocaleString('zh-CN') + '</b> 个 · 数据 <b>' + esc(META.built || '') + '</b>';
+/* ================= 初始化（数据到位后才跑） ================= */
 
-(function(){
-  var cs = '<span class="lbl">品牌</span><button class="chip on" data-brand="">全部<i>' + ALL.length + '</i></button>';
-  BRANDS.forEach(function(b){ cs += '<button class="chip" data-brand="' + esc(b.k) + '">' + esc(b.k) + '<i>' + b.n + '</i></button>'; });
-  chipsEl.innerHTML = cs;
-})();
-(function(){
-  var cs = '<span class="lbl">品类</span><button class="chip on" data-cat="">全部<i>' + ALL.length + '</i></button>';
-  CATS.forEach(function(c){ cs += '<button class="chip" data-cat="' + esc(c.k) + '">' + esc(c.k) + '<i>' + c.n + '</i></button>'; });
-  catchipsEl.innerHTML = cs;
-})();
-(function(){
-  var nl = 0, ns = 0;
-  ALL.forEach(function(it){ if (it.k.indexOf('l') >= 0) nl++; if (it.k.indexOf('s') >= 0) ns++; });
-  document.getElementById('kc-all').textContent = ALL.length;
-  document.getElementById('kc-l').textContent = nl;
-  document.getElementById('kc-s').textContent = ns;
-  toolsEl.querySelector('.chip[data-kind=""]').classList.add('on');
-  var hb = toolsEl.querySelector('.chip[data-flag="hide"]');
-  if (hideMarked) hb.classList.add('on');
-})();
+/* 一行 chip（品牌 / 品类）。项目多了就只留前 cap 个，其余点「更多」展开 ——
+   美的并进来后品类会更多，不收起来整条筛选栏就糊成一片了。 */
+function chipRow(label, attr, items, cap){
+  var html = '<span class="lbl">' + label + '</span>'
+           + '<button class="chip on" data-' + attr + '="">全部</button>';
+  items.forEach(function(x, i){
+    var over = i >= cap;
+    html += '<button class="chip' + (over ? ' extra' : '') + '" data-' + attr + '="' + esc(x.k) + '"'
+          + (over ? ' hidden' : '') + '>' + esc(x.k) + '<i>' + x.n + '</i></button>';
+  });
+  if (items.length > cap){
+    html += '<button class="chip mini" data-more="' + attr + '">更多 ' + (items.length - cap) + ' ▾</button>';
+  }
+  return html;
+}
+function toggleMore(box, btn){
+  var extra = box.querySelectorAll('.chip.extra');
+  if (!extra.length) return;
+  var open = extra[0].hidden;
+  Array.prototype.forEach.call(extra, function(c){ c.hidden = !open; });
+  btn.textContent = open ? '收起 ▴' : ('更多 ' + extra.length + ' ▾');
+}
 
-document.getElementById('foot').innerHTML =
-  '数据源：金山文档「' + esc(META.src || '公布版-滞销样机清理明细') + '」'
-  + (META.online && META.online.share ? ' · <a href="' + esc(META.online.share) + '" target="_blank" rel="noopener">打开在线表</a>' : '')
-  + ' · 型号图源：海尔 / 卡萨帝官网 · 生成 ' + esc(META.built || '')
-  + '<br>价格 / 库存取自在线表，仅供查询参考，实际以 ERP 实时数据为准。'
-  + ' 「标记已发布」与「我的定价」只保存在本机浏览器中。';
+function initUI(){
+  document.getElementById('meta').innerHTML =
+    '<span class="badge">' + esc(META.month || '') + ' 公布版</span><br>'
+    + '型号 <b>' + ALL.length.toLocaleString('zh-CN') + '</b> 个 · 数据 <b>' + esc(META.built || '') + '</b>';
 
-input.focus();
-run();
+  chipsEl.innerHTML    = chipRow('品牌', 'brand', BRANDS, 8);
+  catchipsEl.innerHTML = chipRow('品类', 'cat',   CATS,   9);
+  (function(){
+    var nl = 0, ns = 0;
+    ALL.forEach(function(it){ if (it.k.indexOf('l') >= 0) nl++; if (it.k.indexOf('s') >= 0) ns++; });
+    document.getElementById('kc-l').textContent = nl;
+    document.getElementById('kc-s').textContent = ns;
+    toolsEl.querySelector('.chip[data-kind=""]').classList.add('on');
+    var hb = toolsEl.querySelector('.chip[data-flag="hide"]');
+    if (hideMarked) hb.classList.add('on');
+  })();
+
+  var srcs = (META.sources || []);
+  var stockNote = (STOCKDATA && STOCKDATA.ts)
+    ? '<br>实时库存：来自用友 YonSuite（拉取于 ' + esc(STOCKDATA.ts) + '，点「⟳ 更新实时库存」刷新）'
+    : '<br>实时库存：还没拉取过 —— 点「⟳ 更新实时库存（用友）」从 ERP 拉一次（登录一次即可）';
+  document.getElementById('foot').innerHTML =
+    '数据源：' + (srcs.length
+        ? srcs.map(function(s){
+            return '金山文档「' + esc(s.name) + '」'
+              + (s.url ? ' <a href="' + esc(s.url) + '" target="_blank" rel="noopener">打开</a>' : '');
+          }).join(' · ')
+        : '金山文档「' + esc(META.src || '公布版-滞销样机清理明细') + '」')
+    + '<br>型号图源：海尔 / 卡萨帝官网 · 生成 ' + esc(META.built || '')
+    + '<br>价格取自在线表（型号价格表 · 美的）；库存跟在什么仓库，以用友 YonSuite 实时数据为准（点「⟳ 更新实时库存」刷新）。'
+    + stockNote
+    + ' 「标记已发布」与「我的定价」只保存在本机。';
+
+  var boot = document.getElementById('boot');
+  if (boot) boot.hidden = true;
+  input.focus();
+  run();
+}
+
+/* 数据到位 → 建索引 → 起界面 */
+function start(d){
+  META = (d && d.meta) || {};
+  ALL  = (d && d.rows) || [];
+  IMGS = (d && d.imgs) || {};
+  IMGHAS = null;
+  var keys = (d && d.imgkeys) || null;
+  if (keys){
+    IMGHAS = {};
+    for (var i = 0; i < keys.length; i++) IMGHAS[keys[i]] = 1;
+  }
+  try { buildIndex(); }
+  catch(e){
+    document.getElementById('list').innerHTML =
+      '<div class="empty"><h3>数据解析出错</h3><p>' + esc(String((e && e.message) || e)) + '</p></div>';
+    return;
+  }
+  initUI();
+}
+
+if (DATA){
+  start(DATA);                      // 离线单文件版：数据本来就烤在页面里
+} else {
+  /* exe 版：页面秒开，数据随后到（实时库存一起取，接口在本地，秒回） */
+  var pData = fetch(CFG.dataUrl || '/api/data', { cache: 'no-store' })
+    .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+  var pStock = fetch('/api/stock', { cache: 'no-store' })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .catch(function(){ return null; });
+  pData.then(function(d){
+    return pStock.then(function(s){
+      if (s && s.stock && Object.keys(s.stock).length) STOCKDATA = s;
+      start(d);
+    });
+  }).catch(function(e){
+    var el = document.getElementById('list');
+    if (el) el.innerHTML = '<div class="empty"><h3>数据没加载上来</h3><p>'
+      + esc(String((e && e.message) || e)) + '</p>'
+      + '<p>点菜单「数据 → 重新加载」，或者重启软件试试。</p></div>';
+  });
+}
 })();
 </script>
 </body>

@@ -25,9 +25,11 @@ def build(out=None, payload=None, tpl=None):
 
     raw = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     raw = raw.replace("</", "<\\/")          # 防止数据里出现 </script> 提前闭合
-    if "/*__DATA__*/" not in tpl_src:
-        raise SystemExit("模板里找不到 /*__DATA__*/ 占位")
-    html = tpl_src.replace("/*__DATA__*/", raw, 1)
+    # ⚠ 占位符要连后面的 null 一起替换：不替换时它必须仍是合法 JS
+    #   （模板里写的是 `var DATA = /*__DATA__*/null;`，exe 版就拿它当空值 → 走 HTTP 取数）
+    if "/*__DATA__*/null" not in tpl_src:
+        raise SystemExit("模板里找不到 /*__DATA__*/null 占位")
+    html = tpl_src.replace("/*__DATA__*/null", raw, 1)
 
     out = out or os.path.join(HERE, "型号查询-公布版.html")
     with io.open(out, "w", encoding="utf-8") as f:
