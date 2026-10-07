@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-型号查询 · 隆阳电器（公布版）  v2.5
+型号查询  v2.6
 ====================================
 独立窗口的桌面软件（自带 WebView2 内核，无地址栏 / 无浏览器外壳）：
 
@@ -43,7 +43,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.5"
+APP_VERSION = "2.6"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1121,6 +1121,16 @@ YY_STOCK_FILE = "stock_live.json"
 STOCK = {"ts": None, "rows": 0, "stock": {}}
 STOCK_LOCK = threading.Lock()
 
+# 当前登录者的权限（页面登录后 POST /api/perm 上报）—— 原生菜单点按的时候校验用
+PERM_STATE = {"u": None, "role": None, "perm": {}}
+
+
+def has_perm(k):
+    """菜单/按钮权限：管理号全开；子账号按云端下发的权限表。"""
+    if PERM_STATE.get("role") == "admin":
+        return True
+    return bool(PERM_STATE.get("perm", {}).get(k))
+
 
 def stock_load():
     """启动时把上次的实时库存读回内存（没有就当没有）。"""
@@ -1389,8 +1399,9 @@ def yy_finish(recs, log):
     set_state("done", "实时库存已更新：%d 行 · 命中表中 %d 个型号（%s）" % (len(recs), hit, ts))
 
 
-def do_stock_update(log):
-    """拉用友实时库存：优先用存下的会话直拉（免登录）；失效才弹窗等人登录一次。"""
+def do_stock_update(log, auto=False):
+    """拉用友实时库存：优先用存下的会话直拉（免登录）；失效才弹窗等人登录一次。
+    auto=True（定时自动更新）时绝不弹窗：会话失效就这轮跳过，下小时再试。"""
     if not _update_lock.acquire(blocking=False):
         set_state("error", "已有更新在进行中")
         return
@@ -1412,6 +1423,10 @@ def do_stock_update(log):
             log("本地会话已失效，改走窗口登录…")
 
         # ---- 慢路径：WebView 登录流程（登录成功后抓 cookie 存盘，下次走快路径）
+        if auto:
+            log("自动更新：用友会话已失效，这轮跳过（不弹登录窗，下小时再试）")
+            set_state("done", "自动更新跳过（下次再试）")
+            return
         if YY_WIN is None or YY_CLOSED.is_set():
             set_state("error", "用友窗口不可用，重启软件再试")
             return
@@ -1492,7 +1507,7 @@ def do_stock_update(log):
         _update_lock.release()
 
 
-def do_update(log, xlsx_bytes=None, xlsx_path=None):
+def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
     if not _update_lock.acquire(blocking=False):
         return False, "已有更新在进行中"
     try:
@@ -1516,9 +1531,16 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None):
             import shutil
             shutil.copyfile(xlsx_path, wp(CLEAN_XLSX if kind == "l" else PRICE_XLSX))
         else:
-            # ---- ① 公布版
+            # ---- ① 公布版（auto=定时自动更新时绝不弹窗，拿不到直链就这轮跳过）
             set_state("running", "正在连接金山文档（公布版）…")
-            du = obtain_download_url(log, FILE_ID, ONLINE_SHARE)
+            du = obtain_download_url(log, FILE_ID, ONLINE_SHARE,
+                                     allow_prompt=not auto)
+            if not du:
+                if auto:
+                    log("自动更新：拿不到公布版直链（可能要登录），这轮跳过")
+                    set_state("done", "自动更新跳过（下次再试）")
+                    return False, "跳过"
+                raise RuntimeError("拿不到下载直链")
             set_state("running", "正在下载公布版在线表…")
             raw = fetch_xlsx_by_url(du, log)
             with open(wp(CLEAN_XLSX), "wb") as f:
@@ -1573,7 +1595,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None):
 # ------------------------------------------------------------------ HTTP（本地服务：给窗口里的页面用）
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ModelLookup/2.5"
+    server_version = "ModelLookup/2.6"
 
     def log_message(self, *a):
         pass
@@ -1677,6 +1699,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urllib.parse.urlparse(self.path)
+        if u.path == "/api/perm":
+            # 页面登录后把权限表报上来（原生菜单点按时校验）
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+                PERM_STATE["u"] = d.get("u")
+                PERM_STATE["role"] = d.get("role")
+                PERM_STATE["perm"] = d.get("perm") or {}
+                LOG.append("权限已同步：%s（%s）" % (
+                    d.get("u") or "?", "管理号" if d.get("role") == "admin" else "子账号"))
+                # 按角色重画原生菜单：子账号只留 账号管理/退出登录
+                threading.Thread(target=rebuild_menu_for,
+                                 args=(d.get("role"),), daemon=True).start()
+            except Exception as e:
+                LOG.append("权限同步失败：%s" % e)
+            self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            return
         if u.path == "/api/stock":
             if read_state()["status"] in ("running", "login"):
                 self._send(200, json.dumps({"ok": False, "msg": "正在更新中，请稍候"},
@@ -1853,13 +1892,63 @@ def _webview2_pv():
     return None
 
 
-def build_menu():
+def rebuild_menu_for(role):
+    """登录后按角色重画原生菜单（2026-10 八次改版）：
+    子账号只留 账号管理/退出登录，管理员恢复全量。winforms 的 set_window_menu
+    只会往 Controls 里加 MenuStrip，重画前要把旧的摘掉。"""
+    try:
+        bv = getattr(MAIN_WIN, "native", None)
+        if bv is None:
+            return
+        menus = build_menu(sub=(role != "admin"))
+
+        def _clear():
+            try:
+                import System.Windows.Forms as WF
+                for c in list(bv.Controls):
+                    if isinstance(c, WF.MenuStrip):
+                        bv.Controls.Remove(c)
+            except Exception:
+                pass
+
+        try:
+            from System import Func, Type
+            if bv.InvokeRequired:
+                bv.Invoke(Func[Type](_clear))   # winforms 后端同款写法
+            else:
+                _clear()
+        except Exception:
+            try:
+                _clear()
+            except Exception:
+                pass
+        bv.set_window_menu(menus)
+        LOG.append("菜单已按角色重画：%s" % ("管理号全量" if role == "admin" else "子账号精简"))
+    except Exception as e:
+        LOG.append("菜单重画失败：%s" % e)
+
+
+def build_menu(sub=False):
+    """sub=True 返回子账号的精简菜单（只有 账号管理/退出登录，用户要求）。"""
     from webview.menu import Menu, MenuAction, MenuSeparator
 
+    def guarded(name, need):
+        """菜单点按先过权限：不满足就弹提示（菜单是原生建的，创建后没法动态藏，
+        所以用「点了没权限就拦」的方式，效果一样——子账号点不动）。"""
+        if not has_perm(need):
+            webview.windows[0].evaluate_js(
+                "alert('「%s」只有管理员能用，请联系管理员。')" % name)
+            return False
+        return True
+
     def upd():
+        if not guarded("从金山文档更新", "upd_kdocs"):
+            return
         threading.Thread(target=do_update, args=(LOG.append,), daemon=True).start()
 
     def upd_stock():
+        if not guarded("从用友更新实时库存", "upd_yy"):
+            return
         if YY_WIN is None or YY_CLOSED.is_set():
             webview.windows[0].evaluate_js(
                 "alert('用友窗口不可用（可能被关掉了），重启软件再试。')")
@@ -1869,6 +1958,8 @@ def build_menu():
         threading.Thread(target=do_stock_update, args=(LOG.append,), daemon=True).start()
 
     def reload_page():
+        if not guarded("重新加载页面", "upd_kdocs"):
+            return
         try:
             webview.windows[0].evaluate_js("location.reload()")
         except Exception:
@@ -1876,12 +1967,14 @@ def build_menu():
 
     def about():
         webview.windows[0].evaluate_js(
-            "alert('型号查询 v%s\\n\\n隆阳电器 · 滞销/样机清理明细（公布版）\\n"
+            "alert('型号查询 v%s\\n\\n滞销/样机清理明细\\n"
             "数据来源：金山文档在线表（公布版 + LYDF 价格表）\\n内置 %s')"
             % (APP_VERSION, _built_desc())
         )
 
     def source():
+        if not guarded("打开在线表（公布版）", "upd_kdocs"):
+            return
         try:
             import webbrowser
             webbrowser.open(ONLINE_SHARE)
@@ -1889,21 +1982,55 @@ def build_menu():
             pass
 
     def source_price():
+        if not guarded("打开在线表（价格表）", "upd_kdocs"):
+            return
         try:
             import webbrowser
             webbrowser.open(PRICE_SHARE)
         except Exception:
             pass
 
+    def js_click(elid):
+        webview.windows[0].evaluate_js(
+            "(function(){var b=document.getElementById('%s'); if(b) b.click();})()" % elid)
+
+    def adm():
+        # 管理员 → openAdmin 全量面板；子账号 → openSelf 改密小面板（模板里按角色分流）
+        js_click("admbtn")
+
+    def logout():
+        js_click("whoami")
+
+    def exp_img():
+        if not guarded("导出我补的图", "addimg"):
+            return
+        js_click("expimg")
+
+    def imp_img():
+        if not guarded("导入补图", "addimg"):
+            return
+        js_click("impimg")
+
+    # 2026-10 六次改版：侧栏底部四个按钮 + 补图两个按钮上移到菜单栏，排在帮助前面
+    if sub:
+        # 子账号（2026-10 八次改版）：菜单栏只显示这两项
+        return [
+            MenuAction("账号管理", adm),
+            MenuAction("退出登录", logout),
+        ]
     return [
         Menu("数据(&D)", [
-            MenuAction("从金山文档更新（两个表）", upd),
-            MenuAction("从用友更新实时库存", upd_stock),
             MenuAction("重新加载页面", reload_page),
             MenuSeparator(),
             MenuAction("打开在线表（公布版）", source),
             MenuAction("打开在线表（价格表）", source_price),
         ]),
+        MenuAction("从金山文档更新数据", upd),
+        MenuAction("更新实时库存（用友）", upd_stock),
+        MenuAction("账号管理", adm),
+        MenuAction("退出登录", logout),
+        MenuAction("导出我补的图", exp_img),
+        MenuAction("导入补图", imp_img),
         Menu("帮助(&H)", [
             MenuAction("关于", about),
         ]),
@@ -1917,6 +2044,23 @@ def _built_desc():
             len(p["rows"]), len(p.get("imgs") or {}), (p.get("meta") or {}).get("built"))
     except Exception:
         return "数据未就绪"
+
+
+def auto_updater():
+    """定时自动更新（2026-10 五次改版）：每小时静默拉一遍金山（价格）+ 用友（库存）。
+    全程不弹窗：直链拿不到 / 用友会话失效就这轮跳过，下小时再试。"""
+    time.sleep(180)                      # 启动头几分钟让位给首屏加载
+    while True:
+        try:
+            LOG.append("⏰ 定时自动更新开始（每 1 小时）")
+            do_update(LOG.append, auto=True)
+        except Exception as e:
+            LOG.append("自动更新（金山）异常：%s" % e)
+        try:
+            do_stock_update(LOG.append, auto=True)
+        except Exception as e:
+            LOG.append("自动更新（用友）异常：%s" % e)
+        time.sleep(3600)
 
 
 def warn_no_webview2():
@@ -1942,7 +2086,7 @@ def run_app(httpd, port, startup_xlsx=None):
 
     t_cw = time.time()
     MAIN_WIN = webview.create_window(
-        "%s · 隆阳电器（公布版）" % APP_NAME,
+        APP_NAME,
         url=url,
         width=w, height=h, x=x, y=y,
         min_size=(900, 600),
@@ -1960,6 +2104,8 @@ def run_app(httpd, port, startup_xlsx=None):
         width=lw, height=lh, x=lx, y=ly, min_size=(700, 520), hidden=True,
     )
     _tick("登录窗口对象建好（%.0f ms）" % ((time.time() - t_cw) * 1000))
+    # 定时自动更新（金山价格 + 用友库存，每小时一轮，静默）
+    threading.Thread(target=auto_updater, daemon=True).start()
 
     def on_login_closed():
         LOGIN_CLOSED.set()

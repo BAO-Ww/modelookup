@@ -25,18 +25,51 @@
  */
 
 const PERM_KEYS = [
-  "live",        // 库存行（实时库存 + 汇总）
+  "live",        // 库存明细行（各仓）
+  "sum",         // 汇总行（正品/样机/次品仓几台）
+  "nat",         // 发往（可发区域）
+  "code",        // 物料编码行
   "subsidy",     // 补贴栏（69码/售价）
   "xianyu",      // 闲鱼行（ID / 闲鱼价 / 利润）
   "calc",        // 闲鱼定价计算器 + 标记已发布 + 复制
-  "meidi_cost",  // 美的系成本（拿货价/给二批/取整）
-  "guide",       // 官方参考价（零售指导价/官网价/京东价）
-  "clear_price", // 滞销/样机清理价 + 出库奖励 + 清理数量
+  "p_mh",        // 拿货价·慧买卖（美的系，也是计算器成本下拉项）
+  "p_m2",        // 给二批价（美的系）
+  "p_mr",        // 价格取整（美的系）
   "supplier",    // 发货 / 货源（隆阳电器）
+  // 价格格逐格权限（2026-10 五次改版：管理号一格一格决定给不给看）
+  "p_pt",        // 价格含税（也是计算器成本下拉项）
+  "p_np",        // 滞销价格（也是计算器成本下拉项）
+  "p_ny",        // 样机价格（也是计算器成本下拉项）
+  "p_lpz",       // 滞销清理价（也是计算器成本下拉项）
+  "p_spz",       // 样机清理价（也是计算器成本下拉项）
+  "p_lp",        // 零售指导价
+  "p_mp",        // 官网价
+  "p_jd",        // 京东价 / 国补后
+  "p_lb",        // 滞销出库奖励
+  "p_sb",        // 样机出库奖励
+  "p_qty",       // 清理数量
   "upd_kdocs",   // 「从金山文档更新数据」按钮
   "upd_yy",      // 「更新实时库存（用友）」按钮
   "addimg",      // 补图 / 导出比价图
 ];
+
+// 旧权限键 → 新键映射（v2.5 之前的 perm 只存 guide/clear_price 两个粗键）
+const PERM_MIGRATE = {
+  guide:       ["p_pt", "p_lp", "p_mp", "p_jd"],
+  clear_price: ["p_np", "p_ny", "p_lpz", "p_spz", "p_lb", "p_sb", "p_qty"],
+  meidi_cost:  ["p_mh", "p_m2", "p_mr"],
+};
+function migratePerm(perm) {
+  const p = Object.assign({}, perm || {});
+  for (const [oldK, newKeys] of Object.entries(PERM_MIGRATE)) {
+    if (oldK in p) {
+      const on = !!p[oldK];
+      delete p[oldK];
+      for (const k of newKeys) if (!(k in p)) p[k] = on;
+    }
+  }
+  return p;
+}
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -128,7 +161,7 @@ async function route(request, env, path) {
     if (!(await verifyPw(user, p))) return jerr("密码不对", 403);
     const token = await makeToken(env, u);
     return J({ ok: true, token, u, role: user.role || "sub",
-               perm: user.role === "admin" ? {} : (user.perm || {}) });
+               perm: user.role === "admin" ? {} : migratePerm(user.perm) });
   }
 
   const token = request.headers.get("X-Token") || "";
@@ -141,7 +174,7 @@ async function route(request, env, path) {
     const user = users[who];
     if (!user || user.disabled) return jerr("账号不存在或已停用", 403);
     return J({ ok: true, u: who, role: user.role || "sub",
-               perm: user.role === "admin" ? {} : (user.perm || {}) });
+               perm: user.role === "admin" ? {} : migratePerm(user.perm) });
   }
 
   if (path === "/changepw" && request.method === "POST") {
@@ -197,6 +230,49 @@ async function route(request, env, path) {
       .map(([u, x]) => ({ u, note: x.note || "", disabled: !!x.disabled,
                           hasPw: !!x.ph, perm: x.perm || {} }));
     return J({ ok: true, keys: PERM_KEYS, users: out });
+  }
+
+  // ---------- 发布记录（云端，跟账号走，换电脑登录也在） ----------
+  // KV: pub_<u> = { 型号: 标记时间戳ms }
+  async function getPub(u) {
+    const r = await env.KV.get("pub_" + u);
+    return r ? JSON.parse(r) : {};
+  }
+
+  // 自己的发布记录
+  if (path === "/pub" && request.method === "GET") {
+    return J({ ok: true, marks: await getPub(who) });
+  }
+  // 标记/取消一条：{c: 型号, on: true/false}
+  if (path === "/pub" && request.method === "POST") {
+    const b = await request.json().catch(() => ({}));
+    const c = String(b.c || "").trim();
+    if (!c) return jerr("型号不能为空");
+    const marks = await getPub(who);
+    if (b.on === false) delete marks[c]; else marks[c] = Date.now();
+    await env.KV.put("pub_" + who, JSON.stringify(marks));
+    return J({ ok: true });
+  }
+  // 整包合并（登录后把本机旧记录并上云端）：{marks: {c: t}}
+  if (path === "/pubsync" && request.method === "POST") {
+    const b = await request.json().catch(() => ({}));
+    const marks = await getPub(who);
+    const inc = b.marks || {};
+    for (const [c, t] of Object.entries(inc)) {
+      const tt = +t || Date.now();
+      if (!(c in marks) || marks[c] < tt) marks[c] = tt;
+    }
+    await env.KV.put("pub_" + who, JSON.stringify(marks));
+    return J({ ok: true, marks });
+  }
+  // 管理号看所有人（含自己）各发布了什么
+  if (path === "/puball" && request.method === "GET") {
+    const users = await getUsers(env);
+    const me = users[who];
+    if (!me || me.role !== "admin") return jerr("只有管理号能看", 403);
+    const out = {};
+    for (const u of Object.keys(users)) out[u] = await getPub(u);
+    return J({ ok: true, all: out });
   }
 
   return jerr("接口不存在", 404);
