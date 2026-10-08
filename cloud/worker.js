@@ -371,6 +371,13 @@ async function route(request, env, path) {
     const obj = JSON.parse(raw);
     return J({ ok: true, ts: obj.ts, rows: obj.rows, stock: obj.stock, by: obj.by });
   }
+  // 轻量探测：只回时间戳/行数/谁更新的（子账号后台轮询用，不用每次拉 ~0.4MB 全量）
+  if (path === "/stockmeta" && request.method === "GET") {
+    const raw = await env.KV.get("stocklive");
+    if (!raw) return J({ ok: true, ts: "", rows: 0 });
+    const obj = JSON.parse(raw);
+    return J({ ok: true, ts: obj.ts || "", rows: obj.rows || 0, by: obj.by || "" });
+  }
 
   // ---------- 用友账密（云端存，跟管理号走）----------
   // 2026-10-08 用户口径：不管在哪台电脑登录管理号，都要能自动担起用友更新 →
