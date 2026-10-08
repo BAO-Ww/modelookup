@@ -1,0 +1,41 @@
+name: yonyou-cloud-stock
+
+# 云端自行更新用友库存（管理号电脑不用开机）：
+# Playwright 真浏览器登录 CAS（纯 HTTP 被指纹 JS + 强制改密 flow 拦，实测定性）→
+# 拉 report/list 全量 → 聚合 → worker /stockcloud 上传（子账号自动跟进）。
+# 手动触发跑通后可加 schedule。
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: "备注（可选）"
+        required: false
+  # schedule:
+  #   - cron: "0 */2 * * *"   # UTC 每 2 小时 = 北京时间每 2 小时（跑通后取消注释）
+
+permissions:
+  contents: read
+
+jobs:
+  pull-stock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright + Chromium
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+
+      - name: Pull Yonyou stock and upload
+        env:
+          YY_USER: ${{ secrets.YY_USER }}
+          YY_PASS: ${{ secrets.YY_PASS }}
+          CLOUD_TOKEN: ${{ secrets.CLOUD_TOKEN }}
+        run: python .github/scripts/yy_cloud_pull.py

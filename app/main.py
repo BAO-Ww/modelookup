@@ -1237,8 +1237,28 @@ def stock_push_cloud(log):
         log("库存已上传云端（%.1f MB），子账号自动共享" % (j.get("mb") or 0))
 
 
-def stock_pull_cloud(log):
-    """子账号：不从用友拉（没有登录态），直接取管理号共享的云端库存。"""
+def stock_cloud_peek():
+    """轻量探云端库存时间戳（给自动轮询用，不拉大数据）。
+    返回云端 ts 字符串 / None（网络或数据问题）。"""
+    j, err = cloud_req("/stockmeta", "GET", timeout=30)
+    if j and j.get("ok"):
+        return str(j.get("ts") or "")
+    return None
+
+
+def stock_pull_cloud(log, force=True):
+    """子账号：不从用友拉（没有登录态），直接取管理号共享的云端库存。
+    force=False（自动轮询用）：云端 ts 跟本地一样就什么都不做（省流量、不打扰）；
+    变了才拉全量、落盘、并 bump rev 让页面无感刷新。"""
+    if not force:
+        cloud_ts = stock_cloud_peek()
+        if not cloud_ts:
+            return                        # 探测失败：静默，下轮再说
+        with STOCK_LOCK:
+            local_ts = STOCK.get("ts") or ""
+        if cloud_ts == local_ts:
+            return                        # 云端没新东西
+        log("云端库存有更新（%s → %s），自动同步…" % (local_ts or "无", cloud_ts))
     log("正在从云端同步库存（管理号共享的用友实时数据）…")
     set_state("running", "正在从云端同步库存…")
     j, err = cloud_req("/stockcloud", "GET", timeout=180)
@@ -1254,7 +1274,12 @@ def stock_pull_cloud(log):
     stock_save()
     ts = j.get("ts") or ""
     log("云端库存同步完成：%s 行（%s）" % (j.get("rows") or 0, ts))
-    set_state("done", "库存已同步（云端共享 · %s）" % ts, stock_at=ts)
+    if force:
+        set_state("done", "库存已同步（云端共享 · %s）" % ts, stock_at=ts)
+    else:
+        # 自动轮询：bump rev 触发页面无感重载（reloadAll 会重新取 /api/stock）
+        set_state("done", "库存已自动同步（云端共享 · %s）" % ts,
+                  stock_at=ts, rev=STATE.get("rev", 0) + 1)
 
 
 def _ver_gt(a, b):
@@ -2386,10 +2411,20 @@ def _built_desc():
 
 
 def auto_updater():
-    """定时自动更新（2026-10 五次改版）：每小时静默拉一遍金山（价格）+ 用友（库存）。
-    全程不弹窗：直链拿不到 / 用友会话失效就这轮跳过，下小时再试。"""
+    """定时自动更新（2026-10-08 按角色分流）：
+    · 管理号机器：每小时一轮（金山价格 + 用友库存 + 自动上传云端）——软件活着就在跑，
+      窗口收进托盘/最小化都不影响（后台线程）。开机自启（autostart）让它随系统常驻。
+    · 子账号机器：不碰用友。每 60 秒轻探一次云端库存时间戳（/stockmeta 只回几十字节），
+      发现管理号更新了 → 自动拉全量 → bump rev 页面无感刷新，用户什么都不用点。"""
     time.sleep(180)                      # 启动头几分钟让位给首屏加载
-    while True:
+    if PERM_STATE.get("role") not in (None, "admin"):
+        while True:                      # ---- 子账号：云端跟随
+            try:
+                stock_pull_cloud(LOG.append, force=False)
+            except Exception as e:
+                LOG.append("自动同步（云端库存）异常：%s" % e)
+            time.sleep(60)
+    while True:                          # ---- 管理号：用友 + 金山 全量更新
         try:
             LOG.append("⏰ 定时自动更新开始（每 1 小时）")
             do_update(LOG.append, auto=True)
@@ -2400,6 +2435,36 @@ def auto_updater():
         except Exception as e:
             LOG.append("自动更新（用友）异常：%s" % e)
         time.sleep(3600)
+
+
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def autostart_enable(log=None):
+    """开机自启（HKCU Run 键，只对当前用户，无需管理员）。
+    已存在同名项就不重复写。失败只记日志，不影响启动。"""
+    try:
+        import winreg
+        if is_frozen():
+            exe = os.path.abspath(sys.argv[0])          # 打包后 = ModelLookup.exe 本体
+        else:
+            exe = sys.executable                        # dev 调试用 python.exe
+        val = '"%s"' % exe
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+            try:
+                old, _ = winreg.QueryValueEx(k, APP_NAME)
+                if old == val:
+                    return True          # 已配置好
+            except FileNotFoundError:
+                pass
+            winreg.SetValueEx(k, APP_NAME, 0, winreg.REG_SZ, val)
+        if log:
+            log("已设置开机自启：%s" % val)
+        return True
+    except Exception as e:
+        if log:
+            log("开机自启设置失败（不影响使用）：%s" % e)
+        return False
 
 
 def warn_no_webview2():
@@ -2543,12 +2608,45 @@ def run_app(httpd, port, startup_xlsx=None):
                 time.sleep(0.8)
                 os._exit(0)          # 后台线程（自动更新等）一并干净走人
 
+            def _autostart_toggle(sender=None, e=None):
+                """托盘菜单「开机自启」勾选开关。"""
+                try:
+                    import winreg
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_QUERY_VALUE) as k:
+                        winreg.QueryValueEx(k, APP_NAME)
+                    has = True
+                except FileNotFoundError:
+                    has = False
+                except Exception:
+                    has = False
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+                        if has:
+                            winreg.DeleteValue(k, APP_NAME)
+                        else:
+                            exe = os.path.abspath(sys.argv[0]) if is_frozen() else sys.executable
+                            winreg.SetValueEx(k, APP_NAME, 0, winreg.REG_SZ, '"%s"' % exe)
+                    mi3.Checked = not has
+                except Exception:
+                    pass
+
             menu = WF.ContextMenuStrip()
             mi1 = WF.ToolStripMenuItem("打开 型号查询")
             mi1.add_Click(WF.EventHandler(_show))
+            mi3 = WF.ToolStripMenuItem("开机自启")
+            mi3.CheckOnClick = True
+            try:
+                import winreg as _wr
+                with _wr.OpenKey(_wr.HKEY_CURRENT_USER, RUN_KEY, 0, _wr.KEY_QUERY_VALUE) as k:
+                    _wr.QueryValueEx(k, APP_NAME)
+                mi3.Checked = True
+            except Exception:
+                mi3.Checked = False
+            mi3.add_Click(WF.EventHandler(_autostart_toggle))
             mi2 = WF.ToolStripMenuItem("退出")
             mi2.add_Click(WF.EventHandler(_real_quit))
             menu.Items.Add(mi1)
+            menu.Items.Add(mi3)
             menu.Items.Add(mi2)
             ni.ContextMenuStrip = menu
             ni.add_DoubleClick(WF.EventHandler(_show))
@@ -2596,6 +2694,9 @@ def run_app(httpd, port, startup_xlsx=None):
         LOG.append(lambda m: print("[%s] %s" % (APP_NAME, m)))
         LOG.append(lambda m: None)
         setup_tray()
+        # 开机自启（2026-10-08）：管理号机器要常驻后台每小时推库存，子账号要自动跟随云端。
+        # 全默认开启；托盘菜单里有「取消开机自启」可以关。
+        threading.Thread(target=autostart_enable, args=(LOG.append,), daemon=True).start()
         if startup_xlsx:
             time.sleep(1.0)
             do_update(LOG.append, xlsx_path=startup_xlsx)
