@@ -23,6 +23,33 @@ def build(out=None, payload=None, tpl=None):
     with io.open(tpl_path, encoding="utf-8") as f:
         tpl_src = f.read()
 
+    # ---- 官网产品详情页直链（2026-10-08）----
+    # catalog.json = 海尔/卡萨帝官网库（fetch_images_kdocs 同源），键是官网型号（可能带 (颜色) 尾巴）。
+    # 这里按「去尾巴归一」建索引，再对当前 rows 的型号生成 {卡片key: 详情页URL}，只带命中的。
+    # 没命中的型号前端退回品牌官网搜索页；美的/容声前端给商城搜索页。
+    try:
+        sys.path.insert(0, HERE)
+        from build import core_of, norm_model   # noqa: E402
+        cat_path = os.path.join(HERE, "catalog.json")
+        if os.path.isfile(cat_path):
+            with io.open(cat_path, encoding="utf-8") as f:
+                cat = json.load(f)
+            idx = {}
+            for k, v in cat.items():
+                nk = norm_model(core_of(k))
+                if nk and nk not in idx and v.get("u"):
+                    idx[nk] = v["u"]
+            web = {}
+            for r in data.get("rows", []):
+                nk = norm_model(core_of(r.get("mo") or ""))
+                if nk in idx:
+                    web[r.get("c") or r.get("mo")] = idx[nk]
+            data["web"] = web
+            print("   官网详情页直链 %d/%d" % (len(web), len(data.get("rows", []))))
+    except Exception as e:
+        data.setdefault("web", {})
+        print("   ⚠ web 映射生成失败（不影响构建）：%s" % e)
+
     raw = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     raw = raw.replace("</", "<\\/")          # 防止数据里出现 </script> 提前闭合
     # ⚠ 占位符要连后面的 null 一起替换：不替换时它必须仍是合法 JS

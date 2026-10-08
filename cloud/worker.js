@@ -51,6 +51,7 @@ const PERM_KEYS = [
   "upd_kdocs",   // 「从金山文档更新数据」按钮
   "upd_yy",      // 「更新实时库存（用友）」按钮
   "addimg",      // 补图 / 导出比价图
+  "pubview",     // 「已发布」筛选按钮（看已发布的型号）
 ];
 
 // 旧权限键 → 新键映射（v2.5 之前的 perm 只存 guide/clear_price 两个粗键）
@@ -197,6 +198,9 @@ async function route(request, env, path) {
     if (!me || me.role !== "admin") return jerr("只有管理号能改", 403);
     const b = await request.json().catch(() => ({}));
     const list = Array.isArray(b.users) ? b.users : [];
+    // 防误删保护：云端明明有子账号、请求却一个都没带（多半是面板没加载出来）→ 拒绝保存
+    const subCount = Object.values(users).filter((x) => x.role !== "admin").length;
+    if (subCount > 0 && list.length === 0) return jerr("请求里一个账号都没有，疑似面板没加载好，已拒绝保存");
     for (const it of list) {
       const u = String(it.u || "").trim();
       if (!u || u === who) continue;
@@ -218,6 +222,16 @@ async function route(request, env, path) {
       cur.perm = perm;
       users[u] = cur;
     }
+    // 删除：列表里消失的旧子账号 → 移除并清掉 TA 的发布记录/定价/补图残留
+    const keep = new Set(list.map((it) => String(it.u || "").trim()));
+    for (const u of Object.keys(users)) {
+      if (users[u].role === "admin" || u === who) continue;
+      if (!keep.has(u)) {
+        delete users[u];
+        await env.KV.delete("pub_" + u);
+        await env.KV.delete("pubp_" + u);
+      }
+    }
     await putUsers(env, users);
     return J({ ok: true });
   }
@@ -233,46 +247,107 @@ async function route(request, env, path) {
   }
 
   // ---------- 发布记录（云端，跟账号走，换电脑登录也在） ----------
-  // KV: pub_<u> = { 型号: 标记时间戳ms }
+  // KV: pub_<u> = { 型号: {t: 标记时间戳ms, k: 'l'|'s' 正品/样机} }（旧客户端值是纯数字，兼容读取）
+  //     pubp_<u> = { 型号: 当时的闲鱼定价 }
+  const pubTs = (v) => (typeof v === "object" && v ? (+v.t || 0) : (+v || 0));
   async function getPub(u) {
     const r = await env.KV.get("pub_" + u);
     return r ? JSON.parse(r) : {};
   }
-
-  // 自己的发布记录
-  if (path === "/pub" && request.method === "GET") {
-    return J({ ok: true, marks: await getPub(who) });
+  async function getPubP(u) {
+    const r = await env.KV.get("pubp_" + u);
+    return r ? JSON.parse(r) : {};
   }
-  // 标记/取消一条：{c: 型号, on: true/false}
+
+  // 自己的发布记录（带各自的闲鱼定价）
+  if (path === "/pub" && request.method === "GET") {
+    return J({ ok: true, marks: await getPub(who), prices: await getPubP(who) });
+  }
+  // 标记/取消一条：{c: 型号, on: true/false, k: 'l'|'s', p: 闲鱼定价(可选)}
   if (path === "/pub" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     const c = String(b.c || "").trim();
     if (!c) return jerr("型号不能为空");
     const marks = await getPub(who);
-    if (b.on === false) delete marks[c]; else marks[c] = Date.now();
+    if (b.on === false) {
+      delete marks[c];
+      const pp = await getPubP(who);
+      delete pp[c];
+      await env.KV.put("pubp_" + who, JSON.stringify(pp));
+    } else {
+      marks[c] = { t: Date.now(), k: b.k === "s" ? "s" : "l" };
+      if (b.p != null && isFinite(+b.p)) {
+        const pp = await getPubP(who);
+        pp[c] = +b.p;
+        await env.KV.put("pubp_" + who, JSON.stringify(pp));
+      }
+    }
     await env.KV.put("pub_" + who, JSON.stringify(marks));
     return J({ ok: true });
   }
-  // 整包合并（登录后把本机旧记录并上云端）：{marks: {c: t}}
+  // 整包合并（登录后把本机旧记录并上云端）：{marks: {c: {t,k} | t}, prices: {c: 价}}
   if (path === "/pubsync" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     const marks = await getPub(who);
     const inc = b.marks || {};
-    for (const [c, t] of Object.entries(inc)) {
-      const tt = +t || Date.now();
-      if (!(c in marks) || marks[c] < tt) marks[c] = tt;
+    for (const [c, v] of Object.entries(inc)) {
+      const t = pubTs(v) || Date.now();
+      const k = typeof v === "object" && v ? (v.k === "s" ? "s" : "l") : "l";
+      if (!(c in marks) || pubTs(marks[c]) < t) marks[c] = { t, k };
     }
     await env.KV.put("pub_" + who, JSON.stringify(marks));
+    if (b.prices && typeof b.prices === "object") {
+      const pp = await getPubP(who);
+      for (const [c, p] of Object.entries(b.prices)) {
+        if (c in marks && isFinite(+p)) pp[c] = +p;
+      }
+      await env.KV.put("pubp_" + who, JSON.stringify(pp));
+    }
     return J({ ok: true, marks });
   }
-  // 管理号看所有人（含自己）各发布了什么
+  // 管理号看所有**子账号**各发布了什么（带各自的闲鱼定价；管理号自己不在这份名单里）
   if (path === "/puball" && request.method === "GET") {
     const users = await getUsers(env);
     const me = users[who];
     if (!me || me.role !== "admin") return jerr("只有管理号能看", 403);
-    const out = {};
-    for (const u of Object.keys(users)) out[u] = await getPub(u);
-    return J({ ok: true, all: out });
+    const out = {}, prices = {};
+    for (const u of Object.keys(users)) {
+      if (users[u].role === "admin") continue;
+      out[u] = await getPub(u);
+      prices[u] = await getPubP(u);
+    }
+    return J({ ok: true, all: out, prices });
+  }
+
+  // ---------- 补图上云（所有人共享：谁补的大家都能看到） ----------
+  // KV: myimgs = { 卡片key: dataURL }；单图压到 220px JPEG（~20KB），总量超 18MB 拒收
+  async function getMyImgs(env) {
+    const r = await env.KV.get("myimgs");
+    return r ? JSON.parse(r) : {};
+  }
+  if (path === "/myimgs" && request.method === "GET") {
+    return J({ ok: true, imgs: await getMyImgs(env) });
+  }
+  if (path === "/myimg" && request.method === "POST") {
+    const b = await request.json().catch(() => ({}));
+    const c = String(b.c || "").trim();
+    if (!c || !b.b64) return jerr("参数不全");
+    if (String(b.b64).length > 400000) return jerr("图太大，压一压再传");
+    const imgs = await getMyImgs(env);
+    imgs[c] = String(b.b64);
+    const total = JSON.stringify(imgs).length;
+    if (total > 24000000) return jerr("云端补图库满了（" + Math.round(total/1048576) + "MB），清理后再传");
+    await env.KV.put("myimgs", JSON.stringify(imgs));
+    return J({ ok: true, total });
+  }
+  if (path === "/myimg" && request.method === "DELETE") {
+    const b = await request.json().catch(() => ({}));
+    const c = String(b.c || "").trim();
+    if (!c) return jerr("型号不能为空");
+    const imgs = await getMyImgs(env);
+    delete imgs[c];
+    await env.KV.put("myimgs", JSON.stringify(imgs));
+    return J({ ok: true });
   }
 
   return jerr("接口不存在", 404);
