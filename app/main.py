@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-型号查询  v2.6
+型号查询  v2.7
 ====================================
 独立窗口的桌面软件（自带 WebView2 内核，无地址栏 / 无浏览器外壳）：
 
@@ -43,7 +43,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.6"
+APP_VERSION = "2.7"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -55,7 +55,7 @@ except Exception:
     pass
 # payload 结构版本：与 parse_kdocs.py 产出 meta.pv 对齐。
 # 改了 rows 的字段结构（加字段/改含义）就 +1，老缓存自动失效换用包内数据。
-PAYLOAD_VER = 25
+PAYLOAD_VER = 26
 
 ONLINE_SHARE = "https://www.kdocs.cn/l/ch7gwGTP9De4"
 FILE_SHARE = "ch7gwGTP9De4"
@@ -641,6 +641,8 @@ def set_payload(p):
         _PAY = p
         _DATA_JSON = None
         _IMG_BYTES.clear()
+        with SLOCK:
+            STATE["rev"] += 1          # 数据换新 → 前端轮询到就无感重载
 
 
 def api_data_bytes():
@@ -650,7 +652,8 @@ def api_data_bytes():
         p = get_payload()
         keys = [k for k, v in (p.get("imgs") or {}).items() if isinstance(v, str)]
         body = json.dumps({"meta": p.get("meta") or {}, "rows": p.get("rows") or [],
-                           "imgkeys": keys}, ensure_ascii=False, separators=(",", ":"))
+                           "imgkeys": keys,
+                           "web": p.get("web") or {}}, ensure_ascii=False, separators=(",", ":"))
         _DATA_JSON = body.encode("utf-8")
     return _DATA_JSON
 
@@ -702,12 +705,14 @@ def bootstrap():
 
 # ------------------------------------------------------------------ 状态
 
-STATE = {"status": "idle", "msg": "", "built": "", "rev": 0}
+STATE = {"status": "idle", "msg": "", "built": "", "rev": 0,
+         "price_at": "", "stock_at": ""}
 SLOCK = threading.Lock()
 LOG = []
 
 
-def set_state(status=None, msg=None, rev=None, built=None):
+def set_state(status=None, msg=None, rev=None, built=None,
+              price_at=None, stock_at=None):
     with SLOCK:
         if status is not None:
             STATE["status"] = status
@@ -717,6 +722,10 @@ def set_state(status=None, msg=None, rev=None, built=None):
             STATE["rev"] = rev
         if built is not None:
             STATE["built"] = built
+        if price_at is not None:
+            STATE["price_at"] = price_at
+        if stock_at is not None:
+            STATE["stock_at"] = stock_at
 
 
 def read_state():
@@ -1086,6 +1095,11 @@ def rebuild(log):
     payload = build_payload(allrecs, cache, month)
     payload["meta"]["src"] = ""
     attach_subsidy(payload, log)          # 补贴表（以旧换新）：69码 + 售价
+    # 官网详情页直链（web 映射）从老 payload 继承，按新 rows 的 key 过滤
+    if old and old.get("web"):
+        _web = {r.get("c"): old["web"][r.get("c")] for r in payload["rows"] if r.get("c") in old["web"]}
+        if _web:
+            payload["web"] = _web
     set_payload(payload)
     with io.open(wp("payload.json"), "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)      # 记为「当前数据」，下次启动沿用
@@ -1142,6 +1156,8 @@ def stock_load():
                 d = json.load(f)
             if isinstance(d.get("stock"), dict):
                 STOCK = {"ts": d.get("ts"), "rows": d.get("rows") or 0, "stock": d["stock"]}
+                if d.get("ts"):
+                    STATE["stock_at"] = d["ts"]      # 侧栏一打开就显示上次的库存时间
         except Exception:
             pass
 
@@ -1396,7 +1412,8 @@ def yy_finish(recs, log):
         STOCK = {"ts": ts, "rows": len(recs), "stock": agg}
     stock_save()
     log("实时库存更新完成：%d 行 · %d 个型号 · 命中表中 %d 个型号" % (len(recs), len(agg), hit))
-    set_state("done", "实时库存已更新：%d 行 · 命中表中 %d 个型号（%s）" % (len(recs), hit, ts))
+    set_state("done", "实时库存已更新：%d 行 · 命中表中 %d 个型号（%s）" % (len(recs), hit, ts),
+              stock_at=ts)
 
 
 def do_stock_update(log, auto=False):
@@ -1580,7 +1597,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
 
         set_state("running", "正在重建数据…")
         rebuild(log)
-        set_state("done", "更新完成")
+        set_state("done", "更新完成", price_at=time.strftime("%m-%d %H:%M"))
         return True, "更新完成"
     except Exception as e:
         msg = str(e) or repr(e)
@@ -1595,7 +1612,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
 # ------------------------------------------------------------------ HTTP（本地服务：给窗口里的页面用）
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ModelLookup/2.6"
+    server_version = "ModelLookup/2.7"
 
     def log_message(self, *a):
         pass
@@ -2143,16 +2160,104 @@ def run_app(httpd, port, startup_xlsx=None):
             httpd.shutdown()
         except Exception:
             pass
-
     try:
         MAIN_WIN.events.closed += on_main_closed
     except Exception:
         pass
 
+    _REAL_EXIT = [False]        # 真·退出标志（托盘「退出」才置 True）
+
+    def setup_tray():
+        """托盘：点 × / Ctrl+W = 收进托盘不退出；托盘双击恢复；托盘菜单「退出」真退。
+        winforms 层直接挂 FormClosing / KeyDown（KeyPreview 让 Ctrl+W 先于 WebView2 被拦下）。"""
+        try:
+            import System.Windows.Forms as WF
+            import System.Drawing as DG
+            bv = getattr(MAIN_WIN, "native", None)
+            if bv is None:
+                _tick("托盘：拿不到原生窗口，跳过")
+                return
+            ico_path = rp("icon.ico")
+            ic = DG.Icon(ico_path) if os.path.isfile(ico_path) else DG.SystemIcons.Application
+
+            ni = WF.NotifyIcon()
+            ni.Icon = ic
+            ni.Text = "型号查询（双击打开）"
+            ni.Visible = True
+
+            def _show(sender=None, e=None):
+                try:
+                    bv.Show()
+                    bv.Activate()
+                except Exception:
+                    pass
+
+            def _real_quit(sender=None, e=None):
+                _REAL_EXIT[0] = True
+                try:
+                    ni.Visible = False
+                    ni.Dispose()
+                except Exception:
+                    pass
+                try:
+                    httpd.shutdown()
+                except Exception:
+                    pass
+                os._exit(0)          # 后台线程（自动更新等）一并干净走人
+
+            menu = WF.ContextMenuStrip()
+            mi1 = WF.ToolStripMenuItem("打开 型号查询")
+            mi1.add_Click(WF.EventHandler(_show))
+            mi2 = WF.ToolStripMenuItem("退出")
+            mi2.add_Click(WF.EventHandler(_real_quit))
+            menu.Items.Add(mi1)
+            menu.Items.Add(mi2)
+            ni.ContextMenuStrip = menu
+            ni.add_DoubleClick(WF.EventHandler(_show))
+
+            tipped = [False]
+
+            def _hide_to_tray():
+                try:
+                    bv.Hide()
+                except Exception:
+                    pass
+                if not tipped[0]:
+                    tipped[0] = True
+                    try:
+                        ni.BalloonTipTitle = "型号查询还在运行"
+                        ni.BalloonTipText = "已收进托盘：双击托盘图标打开。点 × 或 Ctrl+W 都只是收起来，退出请用托盘右键「退出」。"
+                        ni.ShowBalloonTip(3000)
+                    except Exception:
+                        pass
+
+            def _on_closing(sender, e):
+                if _REAL_EXIT[0]:
+                    return
+                e.Cancel = True
+                _hide_to_tray()
+
+            def _on_keydown(sender, e):
+                try:
+                    if e.Control and e.KeyCode == WF.Keys.W:
+                        e.Handled = True
+                        e.SuppressKeyPress = True
+                        _hide_to_tray()
+                except Exception:
+                    pass
+
+            bv.add_FormClosing(WF.FormClosingEventHandler(_on_closing))
+            bv.KeyPreview = True
+            bv.add_KeyDown(WF.KeyEventHandler(_on_keydown))
+            _tick("托盘就绪：× / Ctrl+W 收进托盘，托盘双击恢复，右键退出")
+        except Exception as e:
+            _tick("托盘初始化失败（不影响其他功能）: %r" % e)
+
     def after_start():
         _tick("webview.start() 的 GUI 循环已起来")
         LOG.append(lambda m: print("[%s] %s" % (APP_NAME, m)))
         LOG.append(lambda m: None)
+        setup_tray()
         if startup_xlsx:
             time.sleep(1.0)
             do_update(LOG.append, xlsx_path=startup_xlsx)

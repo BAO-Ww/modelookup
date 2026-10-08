@@ -30,6 +30,16 @@ body{
 .side .vsep{display:none}
 .side .pricebar-in{width:70px}
 .side .updbar{margin:12px 0 0}
+/* 子用户发布记录块（侧栏，仅管理号）：占满一行，chip 可换行 */
+#tools .subrec{width:100%;display:block;border-top:1px dashed var(--line2);margin-top:10px;padding-top:8px}
+#tools .subrec .pk{cursor:pointer}
+/* 库存提醒横幅：已发布的型号对应的仓没货了 → 提醒下架 */
+.pubwarn{
+  margin:0 0 10px;padding:9px 14px;border-radius:10px;font-size:13.5px;line-height:1.6;
+  background:#fdf3e3;border:1px solid #f3ddb0;color:#a16207;
+}
+.pubwarn b{color:#7c4a03}
+.pubwarn a{color:#a16207;text-decoration:underline;cursor:pointer}
 .mains{flex:1;min-width:0}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
 
@@ -151,12 +161,13 @@ main{padding:22px 0 60px}
 }
 .addimg:hover{background:#e2ecff}
 .kimgdel{
-  position:absolute;top:-6px;right:74px;z-index:2;
-  width:17px;height:17px;line-height:15px;padding:0;border-radius:50%;
-  font:700 12px/15px inherit;text-align:center;cursor:pointer;
-  color:#fff;background:#ef4b4b;border:0;
+  position:absolute;top:4px;right:78px;z-index:2;
+  width:16px;height:16px;line-height:14px;padding:0;border-radius:50%;
+  font:700 11px/14px inherit;text-align:center;cursor:pointer;
+  color:#8a93a5;background:rgba(255,255,255,.92);border:1px solid var(--line);
+  opacity:.55;                                    /* 平时半透明小角标，不是「图片加载失败」 */
 }
-.kimgdel:hover{background:#d63838}
+.kimgdel:hover{opacity:1;color:#fff;background:#d63838;border-color:#d63838}
 .chead-main{flex:1;min-width:200px}
 .moline{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
 .mo{
@@ -343,6 +354,12 @@ footer a:hover{text-decoration:underline}
         <button class="chip g" data-flag="stock">只看有货</button>
         <button class="chip w" data-flag="send">只看能发外区</button>
         <button class="chip g" data-flag="hide">只看未发布</button>
+        <button class="chip g" data-flag="pub">已发布</button>
+        <!-- 子用户发布（管理号=看每个子账号；子账号=看自己的）。点名字主区直接列出 TA 发布的卡片 -->
+        <div class="subrec" id="subrec" hidden>
+          <span class="lbl" id="subreclbl">子用户发布</span>
+          <div class="permchips" id="subrecusers" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
         <span class="vsep"></span>
         <span class="lbl" title="按该型号最低清理价（美的系按拿货价）筛选">清理价</span>
         <div class="pricerow">
@@ -368,6 +385,7 @@ footer a:hover{text-decoration:underline}
     </aside>
 
     <div class="mains">
+      <div class="pubwarn" id="pubwarn" hidden></div>
       <div class="hint" id="hint"></div>
       <div class="boot" id="boot" hidden><div class="spin"></div><p>正在读取数据…</p></div>
       <div class="list" id="list"></div>
@@ -393,7 +411,11 @@ var CFG  = DATA
   ? { fetch: false, imgBase: '',      dataUrl: '' }
   : { fetch: true,  imgBase: '/img/', dataUrl: '/api/data' };
 var META = {}, ALL = [], IMGS = {}, IMGHAS = null;
+var WEB = null;                  /* 型号 → 官网产品详情页直链（catalog 命中的才有；没有就退回官网搜索页） */
 var FEE  = 0.016;                // 闲鱼平台费率 1.6%
+/* exe 版后台更新状态：price_at/stock_at = 最近一次金山/用友更新时间（侧栏显示）；
+   rev = 后端数据版本号，变了就静默重拉数据，界面无感跟上 */
+var UPSTATE = { price_at: "", stock_at: "", rev: null, fetching: false };
 /* 实时库存（exe 版从用友 YonSuite 拉的现存量，点「更新实时库存」刷新）：
    STOCK = { 型号norm: { q:现存量, a:可用量, wt:{仓库类型:可用量} } }，键与 norm() 同一套归一 */
 var STOCKDATA = null;
@@ -410,6 +432,15 @@ var IMG_KEY = 'xy2-imgs';
 function load(k, d){ try { var v = JSON.parse(localStorage.getItem(k)); return v && typeof v === 'object' ? v : d; } catch(e){ return d; } }
 function save(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
 var MARKED = load(MARK_KEY, {});
+/* 旧记录兼容：以前的值是时间戳数字，现在是 {t: 标记时间, k: 'l'|'s'（正品/样机）}——读入时统一包一层 */
+(function(){
+  var ch = false;
+  Object.keys(MARKED).forEach(function(c){
+    var v = MARKED[c];
+    if (typeof v !== 'object' || v === null){ MARKED[c] = { t: +v || Date.now() }; ch = true; }
+  });
+  if (ch) saveMarks();
+})();
 var PRICES = load(PRICE_KEY, {});
 var MYIMGS = load(IMG_KEY, {});
 /* 换数据源（本地价格表 → 金山文档在线表）之前的旧记录也认：新版 key 还空着就搬过来 */
@@ -430,14 +461,17 @@ function saveMarks(){ save(MARK_KEY, MARKED); }
 function pubPush(c, on){
   if (!AUTH || !AUTH.token) return;
   /* ⚠ 必须显式带 Content-Type: application/json —— WebView2 里 string body 缺它时
-     预检 OPTIONS 发得出去、实际 POST 却不跟，记录就静默丢了（实测踩坑） */
+     预检 OPTIONS 发得出去、实际 POST 却不跟，记录就静默丢了（实测踩坑）。
+     k = 发布的是正品('l')还是样机('s')；p = 当时的闲鱼定价（没填就是 null） */
   authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ c: c, on: on }) }, true);
+                      body: JSON.stringify({ c: c, on: on,
+                                             k: (on && MARKED[c] && MARKED[c].k) || null,
+                                             p: (on && isNum(PRICES[c])) ? PRICES[c] : null }) }, true);
 }
 function syncMarks(){
   if (!AUTH || !AUTH.token) return;
   authFetch('/pubsync', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ marks: MARKED }) }, true)
+                          body: JSON.stringify({ marks: MARKED, prices: PRICES }) }, true)
     .then(function(j){
       if (j && j.ok && j.marks){
         var changed = JSON.stringify(MARKED) !== JSON.stringify(j.marks);
@@ -448,6 +482,28 @@ function syncMarks(){
 }
 function savePrices(){ save(PRICE_KEY, PRICES); }
 function saveMyImgs(){ save(IMG_KEY, MYIMGS); }
+/* ---------- 补图上云（谁补的大家都能看）----------
+   KV: myimgs = {卡片key: dataURL}。补一张推一张；登录后云端比本地多的拉下来合并。
+   推送失败静默（下次 syncImgs 时本地多的会再推上去）。 */
+function imgCloudPush(c){
+  if (!AUTH || !AUTH.token || !MYIMGS[c]) return;
+  authFetch('/myimg', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ c: c, b64: MYIMGS[c] }) }, true);
+}
+function syncImgs(){
+  if (!AUTH || !AUTH.token) return;
+  authFetch('/myimgs').then(function(j){
+    if (!j || !j.ok || !j.imgs) return;
+    var changed = false;
+    Object.keys(j.imgs).forEach(function(c){
+      if (!MYIMGS[c]){ MYIMGS[c] = j.imgs[c]; changed = true; }
+      else if (MYIMGS[c] !== j.imgs[c]){
+        imgCloudPush(c);                       // 本地不一样（可能是后来补的），把本地的推上去
+      }
+    });
+    if (changed){ saveMyImgs(); run(); }
+  }).catch(function(){});
+}
 var hideMarked = false;
 try { hideMarked = localStorage.getItem(HIDE_KEY) === '1'; } catch(e){}
 
@@ -489,6 +545,7 @@ function pickImage(core){
         MYIMGS[core] = cv.toDataURL('image/jpeg', 0.72);
         saveMyImgs();
         run();
+        imgCloudPush(core);              // 上云：所有子账号登录都能看到这张图
       };
       im.onerror = function(){ alert('这张图读不出来，换一张试试'); };
       im.src = fr.result;
@@ -597,7 +654,10 @@ function buildIndex(){
 function brandOf(it){ return it.b || ''; }
 function nameOf(it){ return it.n || ''; }
 
-var curBrand = '', curCat = '', curKind = '', flagStock = false, flagSend = false;
+var curBrand = '', curCat = '', curKind = '', flagStock = false, flagSend = false, flagPub = false;
+/* 子用户发布查看模式（管理号）：点侧栏子用户名 → 主区直接列出 TA 发布的商品卡片；
+   再点一次同名 chip 退出。set = 该用户已发布的型号 key 集合 */
+var SUBVIEW = null;
 
 /* ================= 格式化 ================= */
 function isNum(v){ return typeof v === 'number' && isFinite(v); }
@@ -638,9 +698,14 @@ function costOptions(it){
     return o;
   }
   // 成本口径：表里同一个型号可能有好几个价，按「清理价 → 全新机价」排，
-  // 清理价排前面当默认（卖家多半是按清理价拿的货）
-  if (pok('p_lpz') && isNum(it.lpz)) o.push({ v: it.lpz, l: '滞销清理价' });
-  if (pok('p_spz') && isNum(it.spz)) o.push({ v: it.spz, l: '样机清理价' });
+  // 清理价排前面当默认（卖家多半是按清理价拿的货）。
+  // 出库奖励（2026-10-08）：成本下拉保持原价展示，**最后算利润时把奖励加回去**——
+  // 选滞销清理价 → 利润里 +滞销出库奖励；选样机清理价 → +样机出库奖励。
+  // 奖励只在**有奖励列权限**（p_lb/p_sb）时参与，子账号没开就按清理价本身算。
+  var lbOk = pok('p_lb') && isNum(it.lb) && it.lb > 0;
+  var sbOk = pok('p_sb') && isNum(it.sb) && it.sb > 0;
+  if (pok('p_lpz') && isNum(it.lpz)) o.push({ v: it.lpz, l: '滞销清理价', bn: lbOk ? it.lb : 0 });
+  if (pok('p_spz') && isNum(it.spz)) o.push({ v: it.spz, l: '样机清理价', bn: sbOk ? it.sb : 0 });
   if (pok('p_np')  && isNum(it.npz)) o.push({ v: it.npz, l: '滞销价格' });
   if (pok('p_ny')  && isNum(it.nyz)) o.push({ v: it.nyz, l: '样机价格' });
   if (pok('p_pt')  && isNum(it.pt))  o.push({ v: it.pt,  l: '价格含税' });
@@ -655,10 +720,10 @@ function calcHTML(it){
   var sel;
   if (opts.length > 1){
     sel = '<select class="costsel">' + opts.map(function(o){
-      return '<option value="' + o.v + '" data-l="' + esc(o.l) + '"' + (o.v === pick.v ? ' selected' : '') + '>' + esc(o.l) + ' ' + esc(money(o.v)) + '</option>';
+      return '<option value="' + o.v + '" data-l="' + esc(o.l) + '" data-bn="' + (o.bn || 0) + '"' + (o.v === pick.v ? ' selected' : '') + '>' + esc(o.l) + ' ' + esc(money(o.v)) + '</option>';
     }).join('') + '</select>';
   } else if (opts.length === 1){
-    sel = '<select class="costsel" style="pointer-events:none;border-color:transparent;background:transparent;padding-left:0;font-weight:600;color:#1b2431"><option value="' + pick.v + '" data-l="' + esc(pick.l) + '">' + esc(pick.l) + ' ' + esc(money(pick.v)) + '</option></select>';
+    sel = '<select class="costsel" style="pointer-events:none;border-color:transparent;background:transparent;padding-left:0;font-weight:600;color:#1b2431"><option value="' + pick.v + '" data-l="' + esc(pick.l) + '" data-bn="' + (pick.bn || 0) + '">' + esc(pick.l) + ' ' + esc(money(pick.v)) + '</option></select>';
   } else {
     sel = '<select class="costsel" style="pointer-events:none;border-color:transparent;background:transparent;padding-left:0;color:#98a2b3"><option value="" data-l="无成本价">表里没有成本价</option></select>';
   }
@@ -680,9 +745,12 @@ function calcUpdate(box){
   if (!isFinite(price) || price <= 0 || !isFinite(cost)){
     feeEl.textContent = '—'; outEl.textContent = '—'; outEl.className = 'p-out'; return;
   }
-  var fee = round2(price * FEE), profit = round2(price - price * FEE - cost);
+  // 出库奖励加回利润：选中「滞销清理价」带滞销奖励、「样机清理价」带样机奖励（选项上 data-bn，无权限时为 0）
+  var bn = 0;
+  try { bn = parseFloat(sel.options[sel.selectedIndex].getAttribute('data-bn')) || 0; } catch(e){}
+  var fee = round2(price * FEE), profit = round2(price - price * FEE - cost + bn);
   feeEl.textContent = money(fee);
-  outEl.textContent = (profit >= 0 ? '+' : '−') + money(Math.abs(profit));
+  outEl.textContent = (profit >= 0 ? '+' : '−') + money(Math.abs(profit)) + (bn > 0 ? '（含奖' + money(bn) + '）' : '');
   outEl.className = 'p-out ' + (profit >= 0 ? 'pos' : 'neg');
 }
 
@@ -695,33 +763,35 @@ try { AUTH = JSON.parse(localStorage.getItem('ml_auth') || 'null'); } catch(e){ 
 var AUTH_HOSTS = ['https://auth.baozang.kdns.fr',
                   'https://modelookup-auth.bao3053.workers.dev'];
 /* 权限逐项化（2026-10 五次改版）：价格格 / 计算器成本下拉 / 按钮 全部拆开，
-   管理号在「账号管理」里逐个勾。第三列是分组（管理面板里分组显示）。 */
+   管理号在「账号管理」里逐个勾。第三列是分组（管理面板分组显示，只影响 UI 不影响权限 key）。
+   分组按「这权限控制哪里」归类：界面上显示什么 / 卡片价格列 / 定价参考 / 计算器与奖励 / 操作按钮 */
 var PERM_DEFS = [
-  ['live',        '库存明细行（各仓）',        '基础'],
-  ['sum',         '汇总行（正品/样机/次品仓）', '基础'],
-  ['subsidy',     '补贴栏',                  '基础'],
-  ['xianyu',      '闲鱼行（ID/价/利润）',      '基础'],
-  ['calc',        '闲鱼定价 / 已发布 / 复制',  '基础'],
-  ['supplier',    '发货 / 货源',              '基础'],
-  ['nat',         '发往（可发区域）',          '基础'],
-  ['code',        '物料编码行',              '基础'],
-  ['p_mh',        '拿货价·慧买卖',            '价格格'],
-  ['p_m2',        '给二批价',                 '价格格'],
-  ['p_mr',        '价格取整',                 '价格格'],
-  ['p_pt',        '价格含税',                '价格格'],
-  ['p_np',        '滞销价格',                '价格格'],
-  ['p_ny',        '样机价格',                '价格格'],
-  ['p_lpz',       '滞销清理价',              '价格格'],
-  ['p_spz',       '样机清理价',              '价格格'],
-  ['p_lp',        '零售指导价',              '价格格'],
-  ['p_mp',        '官网价',                  '价格格'],
-  ['p_jd',        '京东价 / 国补后',          '价格格'],
-  ['p_lb',        '滞销出库奖励',            '价格格'],
-  ['p_sb',        '样机出库奖励',            '价格格'],
-  ['p_qty',       '清理数量',                '价格格'],
-  ['upd_kdocs',   '按钮：金山更新',           '按钮'],
-  ['upd_yy',      '按钮：用友更新',           '按钮'],
-  ['addimg',      '补图 / 导出比价图',        '按钮'],
+  ['live',        '库存明细行（各仓）',        '界面显示'],
+  ['sum',         '汇总行（正品/样机/次品仓）', '界面显示'],
+  ['subsidy',     '补贴栏',                  '界面显示'],
+  ['xianyu',      '闲鱼行（ID/价/利润）',      '界面显示'],
+  ['calc',        '闲鱼定价 / 已发布 / 复制',  '界面显示'],
+  ['pubview',     '「已发布」筛选按钮',        '界面显示'],
+  ['supplier',    '发货 / 货源',              '界面显示'],
+  ['nat',         '发往（可发区域）',          '界面显示'],
+  ['code',        '物料编码行',              '界面显示'],
+  ['p_qty',       '清理数量',                '界面显示'],
+  ['p_mh',        '拿货价·慧买卖',            '价格列'],
+  ['p_m2',        '给二批价',                 '价格列'],
+  ['p_mr',        '价格取整',                 '价格列'],
+  ['p_pt',        '价格含税',                '价格列'],
+  ['p_np',        '滞销价格',                '价格列'],
+  ['p_ny',        '样机价格',                '价格列'],
+  ['p_lp',        '零售指导价',              '定价参考'],
+  ['p_mp',        '官网价',                  '定价参考'],
+  ['p_jd',        '京东价 / 国补后',          '定价参考'],
+  ['p_lpz',       '滞销清理价',              '计算·奖励'],
+  ['p_spz',       '样机清理价',              '计算·奖励'],
+  ['p_lb',        '滞销出库奖励',            '计算·奖励'],
+  ['p_sb',        '样机出库奖励',            '计算·奖励'],
+  ['upd_kdocs',   '金山更新',                '操作按钮'],
+  ['upd_yy',      '用友更新',                '操作按钮'],
+  ['addimg',      '补图 / 导出比价图',        '操作按钮'],
 ];
 function authSave(){ try { localStorage.setItem('ml_auth', JSON.stringify(AUTH)); } catch(e){} }
 function pok(k){
@@ -773,10 +843,13 @@ var AUTH_CSS = ''
   + '.auser .unote{width:120px}'
   + '.auser .upw{width:110px}'
   + '.permchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;align-items:center}'
-  + '.permchips .pgroup{font-size:11px;color:#98a2b3;font-weight:600;margin:2px 2px 2px 0;letter-spacing:1px}'
-  + '.permchips .pgroup:not(:first-child){border-left:1px solid #e3e7ef;padding-left:9px;margin-left:3px}'
-  + '.permchips .pk{font-size:11.5px;padding:3px 9px;border-radius:99px;border:1px solid #d7dce6;color:#7b8494;cursor:pointer;user-select:none}'
-  + '.permchips .pk.on{background:#2e6be6;border-color:#2e6be6;color:#fff}'
+  /* 权限分组块：两列网格，每组一个小盒子（组名 + 组内 chips），一眼分清控制哪里 */
+  + '.permgroups{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;margin-top:10px}'
+  + '.pgbox{border:1px solid #e3e7ef;border-radius:10px;padding:8px 10px 9px;background:#fafbfd;min-width:0}'
+  + '.pgbox h5{margin:0 0 7px;font-size:11px;color:#98a2b3;font-weight:700;letter-spacing:1px}'
+  + '.pgbox .pks{display:flex;gap:6px;flex-wrap:wrap}'
+  + '.permgroups .pk{font-size:11.5px;padding:3px 9px;border-radius:99px;border:1px solid #d7dce6;color:#7b8494;cursor:pointer;user-select:none;background:#fff}'
+  + '.permgroups .pk.on{background:#2e6be6;border-color:#2e6be6;color:#fff}'
   + '.achip{font-size:12px;padding:5px 12px;border-radius:99px;border:1px solid #d7dce6;background:#fff;cursor:pointer;color:#1b2431}';
 function ensureStyles(){
   if (document.getElementById('authcss')) return;
@@ -858,6 +931,10 @@ function afterAuth(){
       { u: AUTH.u, role: AUTH.role, perm: AUTH.perm || {} }) });
   } catch(e){}
   syncMarks();   // 发布记录并到云端（本地旧记录也会被合并上去）
+  // 侧栏「子用户发布 / 我的发布」块：所有角色都有（管理号看子账号、子账号看自己）
+  var sr = document.getElementById('subrec');
+  if (sr){ sr.hidden = false; loadSubRec(); }
+  syncImgs();    // 补图并到云端（别人补的拉下来，自己补的推上去）
   var bar = document.getElementById('updbar');
   if (!bar) return;
   if (document.getElementById('whoami')) return;
@@ -879,12 +956,20 @@ function applyPermBar(){
   var b = document.getElementById('updbtn'), s = document.getElementById('stkbtn');
   if (b) b.hidden = !pok('upd_kdocs');
   if (s) s.hidden = !pok('upd_yy');
+  // 「已发布」筛选按钮：管理号恒有；子账号由管理号勾「pubview」权限决定
+  var isAdmin = AUTH && AUTH.role === 'admin';
+  var pb = document.querySelector('.chip[data-flag="pub"]');
+  if (pb) pb.hidden = !(isAdmin || pok('pubview'));
 }
 /* ---------- 管理号：账号管理 ---------- */
 function openAdmin(){
   var old = document.getElementById('adminmask'); if (old) old.remove();
   var m = document.createElement('div'); m.id = 'adminmask';
   m.innerHTML = '<div class="amodal"><h3>账号管理 <button class="achip" id="aclose" style="float:right">关闭</button></h3>'
+    + '<div id="aselrow" style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'
+    + '<span style="font-size:12.5px;color:#7b8494;flex:none">选择子用户</span>'
+    + '<select id="asel" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #d7dce6;border-radius:9px;font-size:13.5px;background:#fff;outline:0"></select>'
+    + '</div>'
     + '<div id="alist">加载中…</div>'
     + '<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">'
     + '<button class="achip" id="aadd">＋ 新增子账号</button>'
@@ -893,9 +978,28 @@ function openAdmin(){
     + '</div></div>';
   document.body.appendChild(m);
   m.querySelector('#aclose').addEventListener('click', function(){ m.remove(); });
-  m.querySelector('#apubs').addEventListener('click', function(){ openPubAll(m); });
+  m.querySelector('#apubs').addEventListener('click', function(){
+    /* 发布记录视图里下拉没意义：藏起来，回账号列表再亮出来 */
+    document.getElementById('aselrow').hidden = true;
+    openPubAll(m);
+  });
+  /* 下拉切换：只显示选中账号的设置块（其余块还在 DOM 里，保存全部时照常收集） */
+  function showSel(){
+    var v = m.querySelector('#asel').value;
+    m.querySelectorAll('#alist .auser').forEach(function(row){
+      row.style.display = ((row.dataset.u || '__new__') === v) ? '' : 'none';
+    });
+  }
+  m.querySelector('#asel').addEventListener('change', showSel);
+  m._showSel = showSel;
   m.querySelector('#aadd').addEventListener('click', function(){
     m.querySelector('#alist').appendChild(userRow({ u: '', note: '', disabled: false, hasPw: false, perm: {} }, true));
+    var sel = m.querySelector('#asel');
+    var o = document.createElement('option');
+    o.value = '__new__'; o.textContent = '（新账号，还没起名）';
+    sel.appendChild(o);
+    sel.value = '__new__';
+    showSel();
   });
   m.querySelector('#asave').addEventListener('click', function(){
     var users = [];
@@ -922,22 +1026,50 @@ function openAdmin(){
 }
 function userRow(x, isNew){
   var d = document.createElement('div'); d.className = 'auser';
-  var chips = '', lastG = '';
+  d.dataset.u = x.u || '__new__';   // 下拉切换按这个对号（新账号还没名字用占位）
+  /* 权限按组分块渲染：每个组一个小盒子（组名 + 全选 + 组内 chips），权限 key 不变 */
+  var groups = [];
   PERM_DEFS.forEach(function(p){
-    if (p[2] && p[2] !== lastG){
-      lastG = p[2];
-      chips += '<span class="pgroup">' + esc(lastG) + '</span>';
-    }
-    var on = x.perm && x.perm[p[0]];
-    chips += '<span class="pk' + (on ? ' on' : '') + '" data-k="' + p[0] + '" title="' + p[1] + '">' + p[1] + '</span>';
+    if (!groups.length || groups[groups.length - 1].g !== p[2]) groups.push({ g: p[2], items: [] });
+    groups[groups.length - 1].items.push(p);
   });
+  var chips = '<div class="permgroups">';
+  groups.forEach(function(gr){
+    chips += '<div class="pgbox"><h5>' + esc(gr.g) + '</h5><div class="pks">';
+    gr.items.forEach(function(p){
+      var on = x.perm && x.perm[p[0]];
+      chips += '<span class="pk' + (on ? ' on' : '') + '" data-k="' + p[0] + '">' + p[1] + '</span>';
+    });
+    chips += '</div></div>';
+  });
+  chips += '</div>';
   d.innerHTML = '<div class="arow">'
     + '<input type="text" class="uname" placeholder="账号" value="' + esc(x.u) + '"' + (isNew ? '' : ' readonly') + '>'
     + '<input type="text" class="unote" placeholder="备注（如：小王）" value="' + esc(x.note) + '">'
     + '<input type="password" class="upw" placeholder="' + (isNew || !x.hasPw ? '设密码' : '改密码（留空不动）') + '">'
     + '<label style="font-size:12.5px;color:#7b8494"><input type="checkbox" class="adis"' + (x.disabled ? ' checked' : '') + '> 停用</label>'
     + (x.hasPw && !isNew ? '' : '<span style="font-size:11.5px;color:#d92d20">新号</span>')
-    + '</div><div class="permchips">' + chips + '</div>';
+    + (x.u && x.u !== AUTH.u ? '<button class="achip adel" title="把这个账号整个删掉（保存后生效）" style="color:#d92d20;border-color:#f1c2c2">删除</button>' : '')
+    + '</div>' + chips;
+  var adel = d.querySelector('.adel');
+  if (adel) adel.addEventListener('click', function(){
+    if (confirm('确定删除账号「' + x.u + '」？删除后 TA 无法登录，发布记录也一并清掉。\n（点下面的「保存全部」才真正生效）')){
+      /* 从下拉里也摘掉，切到剩下第一个；真删数据在「保存全部」提交后 */
+      var m = d.closest('#adminmask');
+      d.remove();
+      if (m && m._showSel){
+        var sel = m.querySelector('#asel');
+        Array.prototype.forEach.call(sel.options, function(o){
+          if (o.value === x.u) sel.removeChild(o);
+        });
+        if (!sel.value) {
+          var first = sel.querySelector('option');
+          if (first) sel.value = first.value;
+        }
+        m._showSel();
+      }
+    }
+  });
   d.querySelectorAll('.pk').forEach(function(c){
     c.addEventListener('click', function(){ c.classList.toggle('on'); });
   });
@@ -946,18 +1078,39 @@ function userRow(x, isNew){
 function loadAdminList(m){
   authFetch('/admin/list').then(function(j){
     var box = m.querySelector('#alist');
+    document.getElementById('aselrow').hidden = false;   // 从发布记录视图回来时恢复下拉
     if (!j || !j.ok){
       box.innerHTML = '<div style="color:#d92d20;font-size:13px">' + ((j && j.msg) || '拉取失败') + '</div>';
       return;
     }
+    /* 下拉：备注（账号名），保存重刷后保持原选中 */
+    var sel = m.querySelector('#asel');
+    var prev = sel.value;
+    sel.innerHTML = '';
+    (j.users || []).forEach(function(x){
+      var o = document.createElement('option');
+      o.value = x.u;
+      o.textContent = (x.disabled ? '⏸ ' : '') + (x.note ? x.note + '（' + x.u + '）' : x.u);
+      sel.appendChild(o);
+    });
+    if (!(j.users || []).length){
+      sel.innerHTML = '<option value="">（还没有子账号）</option>';
+    }
+    var has = Array.prototype.some.call(sel.options, function(o){ return o.value === prev; });
+    if (prev && has) sel.value = prev;
     box.innerHTML = '';
     (j.users || []).forEach(function(x){ box.appendChild(userRow(x, !x.hasPw)); });
     if (!(j.users || []).length){
       box.innerHTML = '<div style="color:#7b8494;font-size:13px">还没有子账号，点下面「＋ 新增子账号」。</div>';
     }
+    if (m._showSel) m._showSel();
   });
 }
-/* 管理号看所有账号的发布记录（云端 /puball） */
+/* 管理号看所有账号的发布记录（云端 /puball）：型号 chips 带时间，带闲鱼定价的显示价 */
+function fmtTs(v){
+  var d = new Date(v);
+  return (d.getMonth() + 1) + '-' + d.getDate() + ' ' + ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
+}
 function openPubAll(m){
   var box = m.querySelector('#alist');
   box.innerHTML = '<div style="color:#7b8494;font-size:13px">发布记录加载中…</div>';
@@ -968,17 +1121,21 @@ function openPubAll(m){
       box.innerHTML = '<div style="color:#d92d20;font-size:13px">' + ((j && j.msg) || '拉取失败') + '</div>';
       return;
     }
+    var prices = j.prices || {};
     var html = '';
     Object.keys(j.all || {}).sort().forEach(function(u){
       var marks = j.all[u] || {}, ks = Object.keys(marks);
-      ks.sort(function(a, b){ return marks[b] - marks[a]; });
+      ks.sort(function(a, b){ return (tsOf(marks[b])) - (tsOf(marks[a])); });
       html += '<div class="auser"><div class="arow"><span class="uname">' + esc(u) + '</span>'
             + '<span style="font-size:12.5px;color:#7b8494">已发布 ' + ks.length + ' 个型号</span></div>';
       if (ks.length){
         html += '<div class="permchips">' + ks.map(function(k){
-          var d = new Date(marks[k]);
-          var t = d.getMonth() + 1 + '-' + d.getDate() + ' ' + ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
-          return '<span class="pk on" title="标记于 ' + t + '">' + esc(k) + '</span>';
+          var v = marks[k], p = prices[u] && prices[u][k];
+          var t = fmtTs(tsOf(v));
+          var kk = (typeof v === 'object' && v && v.k) ? (v.k === 's' ? '样机' : '正品') : '';
+          return '<span class="pk on" title="标记于 ' + t + '">' + esc(k)
+               + (kk ? ' <i style="font-style:normal;color:#98a2b3">' + kk + '</i>' : '')
+               + (isNum(p) ? ' <b>¥' + esc(money(p)) + '</b>' : '') + '</span>';
         }).join('') + '</div>';
       }
       html += '</div>';
@@ -986,6 +1143,78 @@ function openPubAll(m){
     box.innerHTML = html || '<div style="color:#7b8494;font-size:13px">还没有发布记录。</div>';
   });
 }
+/* 兼容云端两种值格式：旧 = 时间戳数字，新 = {t: 时间戳, p: 定价} */
+function tsOf(v){ return typeof v === 'object' && v ? (v.t || 0) : (v || 0); }
+/* ---------- 侧栏「子用户发布」（管理号）----------
+   点子用户名 → 时间倒序列出 TA 发布的型号 + 闲鱼定价；点型号直接填进搜索框定位。 */
+/* ---------- 侧栏「子用户发布」（管理号）/「我的发布」（子账号）----------
+   管理号：列出每个子账号（不含自己），点名字主区直接列出 TA 发布的卡片；
+   子账号：只有自己一条，看自己发布过什么。 */
+function loadSubRec(){
+  var box = document.getElementById('subrecusers');
+  if (!box) return;
+  var lbl = document.getElementById('subreclbl');
+  if (lbl) lbl.textContent = (AUTH && AUTH.role === 'admin') ? '子用户发布' : '我的发布';
+  box.innerHTML = '<span style="font-size:12px;color:#98a2b3">加载中…</span>';
+  if (AUTH && AUTH.role === 'admin'){
+    authFetch('/puball').then(function(j){
+      if (!j || !j.ok){ box.innerHTML = '<span style="font-size:12px;color:#98a2b3">' + esc((j && j.msg) || '拉取失败') + '</span>'; return; }
+      window._SUBPUB = j;
+      box.innerHTML = '';
+      var us = Object.keys(j.all || {}).sort().filter(function(x){ return x !== AUTH.u; });   // 自己的不放这里
+      us.forEach(function(u){
+        var n = Object.keys(j.all[u] || {}).length;
+        var b = document.createElement('button');
+        b.className = 'pk'; b.textContent = u + ' ' + n;
+        b.addEventListener('click', function(){ showSubRec(u, b); });
+        box.appendChild(b);
+      });
+      if (!us.length) box.innerHTML = '<span style="font-size:12px;color:#98a2b3">子账号还没有发布记录</span>';
+    }).catch(function(){
+      box.innerHTML = '<span style="font-size:12px;color:#98a2b3">网络不通（开了代理请给 kdns.fr 设直连）</span>';
+    });
+  } else {
+    authFetch('/pub').then(function(j){
+      if (!j || !j.ok){ box.innerHTML = '<span style="font-size:12px;color:#98a2b3">' + esc((j && j.msg) || '拉取失败') + '</span>'; return; }
+      window._SUBPUB = { all: (j.marks && Object.keys(j.marks).length) ? { 0: j.marks } : {}, prices: { 0: j.prices || {} } };
+      box.innerHTML = '';
+      var n = Object.keys(j.marks || {}).length;
+      var b = document.createElement('button');
+      b.className = 'pk'; b.textContent = AUTH.u + ' ' + n;
+      b.addEventListener('click', function(){ showSubRec('0', b); });
+      box.appendChild(b);
+    }).catch(function(){
+      box.innerHTML = '<span style="font-size:12px;color:#98a2b3">网络不通（开了代理请给 kdns.fr 设直连）</span>';
+    });
+  }
+}
+function showSubRec(u, btn){
+  var j = window._SUBPUB; if (!j) return;
+  var box = document.getElementById('subrecusers');
+  /* 再点同一个子用户 = 退出查看，主列表恢复 */
+  if (SUBVIEW && SUBVIEW.u === u){
+    SUBVIEW = null;
+    Array.prototype.forEach.call(box.children, function(c){ c.classList.remove('on'); });
+    run();
+    return;
+  }
+  Array.prototype.forEach.call(box.children, function(c){ c.classList.toggle('on', c === btn); });
+  var marks = (j.all || {})[u] || {}, pr = (j.prices || {})[u] || {};
+  SUBVIEW = { u: u, disp: (u === '0' ? AUTH.u : u), set: {}, info: {} };
+  Object.keys(marks).forEach(function(k){
+    SUBVIEW.set[k] = 1;
+    SUBVIEW.info[k] = { t: tsOf(marks[k]), k: (typeof marks[k] === 'object' && marks[k]) ? marks[k].k : null, p: pr[k] };
+  });
+  run();   // 主区直接列出 TA 发布的商品卡片（时间/定价显示在卡片上，侧栏不再堆明细）
+}
+document.getElementById('hint').addEventListener('click', function(e){
+  if (e.target && e.target.id === 'subexit'){
+    SUBVIEW = null;
+    var box = document.getElementById('subrecusers');
+    if (box) Array.prototype.forEach.call(box.children, function(c){ c.classList.remove('on'); });
+    run();
+  }
+});
 /* 子账号：改自己密码的小面板（worker /changepw） */
 function openSelf(){
   var old = document.getElementById('adminmask'); if (old) old.remove();
@@ -1196,13 +1425,18 @@ function renderItem(it){
 
   var stTxt = it.st || it.t2 || '';
 
-  /* 官网按钮：打开对应品牌官网搜索页搜这个型号（当前表里没存产品页直链）。
-     卡萨帝/海尔/统帅三家有确定可用的搜索页；美的/容声等官网搜索格式不定，不给按钮。 */
+  /* 官网按钮：**产品详情页直链优先**（catalog 官网库命中的型号，后台按型号给好 URL）；
+     没直链的退回品牌官网搜索页。美的/容声走各自官方商城搜索页。
+     美的商城是 hash 路由；容声在海信商城。 */
   function webOf(x){
+    var u = WEB && WEB[x.c];
+    if (u) return u;
     var m = encodeURIComponent(x.mo || x.c || '');
     if (!m) return '';
     if (x.b === '卡萨帝') return 'https://www.casarte.com/search/?searchword=' + m;
     if (x.b === '海尔' || x.b === '统帅') return 'https://www.haier.com/cn/search/?q=' + m;
+    if (x.b === '美的') return 'https://www.midea.cn/#/search?keyword=' + m;
+    if (x.b === '容声') return 'https://mall.hisense.com/search?q=' + m;
     return '';
   }
   var webUrl = webOf(it);
@@ -1214,13 +1448,19 @@ function renderItem(it){
     + (mine ? '<button class="kimgdel" data-delimg="' + esc(it.c) + '" title="删掉我补的这张图">×</button>' : '')
     + '<div class="chead-main"><div class="moline">'
     + '<span class="mo">' + esc(it.mo) + '</span>'
-    + '<span class="pub"' + (marked ? '' : ' hidden') + '>已发布</span>'
+    + '<span class="pub"' + (marked ? '' : ' hidden') + '>已发布' + (marked && MARKED[it.c] ? ' · ' + kindLabel(MARKED[it.c]) : '') + '</span>'
     + '<span class="acts">'
-    + (webUrl ? '<a class="markbtn web" href="' + esc(webUrl) + '" target="_blank" rel="noopener" title="到品牌官网搜这个型号">官网</a>' : '')
     + (pok('calc') ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + (marked ? '取消发布' : '标记已发布') + '</button>' : '')
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
+    + (webUrl ? '<a class="markbtn web" href="' + esc(webUrl) + '" target="_blank" rel="noopener" title="打开品牌官网（对应型号）">官网</a>' : '')
     + '</span></div>'
     + '<div class="tags">'
+    + (SUBVIEW && SUBVIEW.info && SUBVIEW.info[it.c]
+       ? '<div class="publine" style="width:100%;font-size:12px;color:var(--ink3);margin:0 0 4px">发布于 '
+         + esc(fmtTs(SUBVIEW.info[it.c].t))
+         + (SUBVIEW.info[it.c].k ? ' · ' + (SUBVIEW.info[it.c].k === 's' ? '样机' : '正品') : '')
+         + (isNum(SUBVIEW.info[it.c].p) ? ' · 闲鱼定价 <b style="color:var(--ink2)">¥' + esc(money(SUBVIEW.info[it.c].p)) + '</b>' : '')
+         + '</div>' : '')
     + (it.b ? '<span class="tag b">' + esc(it.b) + '</span>' : '')
     + (it.cat ? '<span class="tag">' + esc(it.cat) + '</span>' : '')
     + (stTxt ? '<span class="tag d">' + esc(stTxt) + '</span>' : '')
@@ -1352,6 +1592,8 @@ function pass(it){
   // 「只看能发外区」：排除掉 3 = 只发深惠广莞的（含空值 / 不可以 / 进货年限那两条）
   if (flagSend && (it.natk === 3 || it.natk == null)) return false;
   if (hideMarked && MARKED[it.c]) return false;
+  if (flagPub && !MARKED[it.c]) return false;   // 只看已发布（跟 hide 互斥）
+  if (SUBVIEW && !SUBVIEW.set[it.c]) return false;   // 只看某子用户发布的
   return pricePass(it);
 }
 
@@ -1459,7 +1701,7 @@ function run(){
   listEl.innerHTML = '';
   moreEl.hidden = true;
   shown = 0;
-  var hasFilter = !!(curBrand || curCat || curKind || flagStock || flagSend || pminV != null || pmaxV != null);
+  var hasFilter = !!(curBrand || curCat || curKind || flagStock || flagSend || flagPub || pminV != null || pmaxV != null || SUBVIEW);
   // 空搜索框 + 没点任何筛选 = 什么都不列。
   // （上一版是「打开就铺全部」，用户反馈又慢又没用 —— 这是查找工具，不是浏览工具）
   if (!q && !hasFilter){ cur = []; hintEl.innerHTML = ''; listEl.innerHTML = idleHTML(); return; }
@@ -1478,7 +1720,9 @@ function run(){
   } else {
     bits = '筛选到 <b>' + res.length + '</b> 条';
   }
-  hintEl.innerHTML = bits
+  hintEl.innerHTML = (SUBVIEW ? '<b>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（' + Object.keys(SUBVIEW.set).length + ' 个型号）</b>'
+                    + '<a href="javascript:void 0" id="subexit" style="margin-left:8px;font-size:12.5px">✕ 退出</a> <span class="dot"></span> ' : '')
+    + bits
     + (ph ? ' <span class="dot"></span> ' + esc(ph) : '')
     + (res.length >= QCAP ? ' <span class="dot"></span> 仅显示前 ' + QCAP + ' 条，请多输入几个字符' : '');
   renderBatch();
@@ -1516,26 +1760,64 @@ toolsEl.addEventListener('click', function(e){
   } else if (b.dataset.flag === 'send'){
     flagSend = !flagSend; b.classList.toggle('on', flagSend);
   } else if (b.dataset.flag === 'hide'){
-    hideMarked = !hideMarked; b.classList.toggle('on', hideMarked);
+    hideMarked = !hideMarked;
+    if (hideMarked){ flagPub = false; var _pb = toolsEl.querySelector('.chip[data-flag="pub"]'); if (_pb) _pb.classList.remove('on'); }
+    b.classList.toggle('on', hideMarked);
     try { localStorage.setItem(HIDE_KEY, hideMarked ? '1' : '0'); } catch(e){}
+  } else if (b.dataset.flag === 'pub'){
+    flagPub = !flagPub;
+    if (flagPub){
+      hideMarked = false;
+      var _hb = toolsEl.querySelector('.chip[data-flag="hide"]'); if (_hb) _hb.classList.remove('on');
+      try { localStorage.setItem(HIDE_KEY, '0'); } catch(e){}
+    }
+    b.classList.toggle('on', flagPub);
   }
   run();
 });
+
+/* 点「标记已发布」→ 先问是正品还是样机（这个信息用于库存提醒：哪种没货了要下架） */
+function openPickKind(k){
+  var old = document.getElementById('kindmask'); if (old) old.remove();
+  var m = document.createElement('div'); m.id = 'kindmask';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.35);z-index:60;display:flex;align-items:center;justify-content:center';
+  m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px">'
+    + '<div style="font-weight:700;margin-bottom:12px">「' + esc(k) + '」发布出去的是哪种？</div>'
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap">'
+    + '<button class="achip" data-kk="l" style="background:#eaf1ff;border-color:#c6d8ff">正品（全新未拆）</button>'
+    + '<button class="achip" data-kk="s" style="background:#fdf3e3;border-color:#f3ddb0">样机</button>'
+    + '<button class="achip" data-kk="x">取消</button>'
+    + '</div></div>';
+  document.body.appendChild(m);
+  m.addEventListener('click', function(e){
+    var b = e.target.closest ? e.target.closest('[data-kk]') : null;
+    if (!b) { if (e.target === m) m.remove(); return; }
+    if (b.getAttribute('data-kk') === 'x'){ m.remove(); return; }
+    MARKED[k] = { t: Date.now(), k: b.getAttribute('data-kk') };
+    saveMarks();
+    pubPush(k, true);
+    m.remove();
+    run();
+  });
+}
+function kindLabel(v){ return v && v.k === 's' ? '样机' : '正品'; }
 
 listEl.addEventListener('click', function(e){
   var mb = e.target.closest('[data-mark]');
   if (mb){
     var k = mb.dataset.mark;
-    if (MARKED[k]) delete MARKED[k]; else MARKED[k] = Date.now();
-    saveMarks();
-    pubPush(k, !!MARKED[k]);
-    var card = mb.closest('.card');
-    if (card){
-      var on = !!MARKED[k];
-      card.classList.toggle('marked', on);
-      var pub = card.querySelector('.pub');
-      if (pub) pub.hidden = !on;
-      mb.textContent = on ? '取消发布' : '标记已发布';
+    if (MARKED[k]){
+      delete MARKED[k]; saveMarks();
+      pubPush(k, false);
+      var card = mb.closest('.card');
+      if (card){
+        card.classList.toggle('marked', false);
+        var pub = card.querySelector('.pub');
+        if (pub){ pub.hidden = true; pub.textContent = '已发布'; }
+        mb.textContent = '标记已发布';
+      }
+    } else {
+      openPickKind(k);                     // 先问发布的是正品还是样机（库存提醒要用）
     }
     return;
   }
@@ -1544,7 +1826,12 @@ listEl.addEventListener('click', function(e){
   var di = e.target.closest('[data-delimg]');
   if (di){
     var dk = di.dataset.delimg;
-    if (MYIMGS[dk] && confirm('删掉你给 ' + dk + ' 补的这张图？')){ delete MYIMGS[dk]; saveMyImgs(); run(); }
+    if (MYIMGS[dk] && confirm('删掉你给 ' + dk + ' 补的这张图？（所有人都会看不到）')){
+      delete MYIMGS[dk]; saveMyImgs();
+      if (AUTH && AUTH.token) authFetch('/myimg', { method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ c: dk }) }, true);
+      run();
+    }
     return;
   }
   var c = e.target.closest('[data-copy]');
@@ -1638,7 +1925,55 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   fetch('/api/state', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
     if (s.status === 'running' || s.status === 'login'){ busy(true); poll(); }
   }).catch(function(){});
+
+  /* ---- 后台状态轮询（30 秒）----
+     ① 侧栏「价格 xx · 库存 xx」跟着最近一次更新时间走；
+     ② rev 变了（后台每小时自动更新成功）→ 静默重拉数据重渲染，界面无感跟上，不用重开软件。
+     保护：更新进行中不重拉；有输入框在打字就下轮再说。 */
+  var metaEl = document.getElementById('meta');
+  function applyState(s){
+    UPSTATE.price_at = s.price_at || '';
+    UPSTATE.stock_at = s.stock_at || '';
+    if (metaEl) metaEl.innerHTML = metaHTML();
+  }
+  function reloadAll(){
+    if (UPSTATE.fetching) return;
+    UPSTATE.fetching = true;
+    var pD = fetch(CFG.dataUrl || '/api/data', { cache: 'no-store' })
+      .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    var pS = fetch('/api/stock', { cache: 'no-store' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .catch(function(){ return null; });
+    Promise.all([pD, pS]).then(function(a){
+      var d = a[0], s = a[1];
+      if (s && s.stock && Object.keys(s.stock).length) STOCKDATA = s;
+      start(d);
+    }).catch(function(){}).then(function(){ UPSTATE.fetching = false; });
+  }
+  setInterval(function(){
+    if (UPSTATE.fetching) return;
+    fetch('/api/state', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
+      applyState(s);
+      if (s.status === 'running' || s.status === 'login') return;
+      if (UPSTATE.rev === null){ UPSTATE.rev = s.rev; return; }   // 首轮只记基线
+      if (s.rev !== UPSTATE.rev){
+        var f = document.activeElement;
+        if (f && f.tagName === 'INPUT') return;                    // 正在打字，下轮再说
+        UPSTATE.rev = s.rev;
+        reloadAll();
+      }
+    }).catch(function(){});
+  }, 30000);
 })();
+
+/* ESC 关掉当前弹着的小窗（账号管理 / 我的账号 / 发布记录 / 正品·样机选择）；没有弹窗时不动 */
+document.addEventListener('keydown', function(e){
+  if (e.key !== 'Escape') return;
+  var mk = document.getElementById('kindmask');
+  if (mk){ mk.remove(); return; }
+  var adm = document.getElementById('adminmask');
+  if (adm){ adm.remove(); }
+});
 
 window.addEventListener('scroll', function(){
   if (moreEl.hidden) return;
@@ -1670,12 +2005,43 @@ function toggleMore(box, btn){
   btn.textContent = open ? '收起 ▴' : ('更多 ' + extra.length + ' ▾');
 }
 
+/* 侧栏底部一行：exe 版显示最近一次价格/库存更新时间（后台静默更新后自动跟着变）；
+   单文件公布版没有本地服务，显示数据构建时间。 */
+function metaHTML(){
+  var n = ALL.length.toLocaleString('zh-CN');
+  if (location.protocol === 'http:' && (UPSTATE.price_at || UPSTATE.stock_at)){
+    var t = '型号 <b>' + n + '</b> 个';
+    if (UPSTATE.price_at) t += ' · 价格 <b>' + esc(UPSTATE.price_at) + '</b>';
+    if (UPSTATE.stock_at) t += ' · 库存 <b>' + esc(UPSTATE.stock_at) + '</b>';
+    return t;
+  }
+  return '型号 <b>' + n + '</b> 个 · 数据 <b>' + esc(META.built || '') + '</b>';
+}
 function initUI(){
-  document.getElementById('meta').innerHTML =
-    '型号 <b>' + ALL.length.toLocaleString('zh-CN') + '</b> 个 · 数据 <b>' + esc(META.built || '') + '</b>';
+  /* 无感重载会重跑 initUI：chips 重画前记住当前选中，重画后恢复（后台刷数据不能把筛选归零） */
+  function snapOn(el, attr){
+    var out = [];
+    Array.prototype.forEach.call(el.querySelectorAll('.chip.on'), function(c){
+      out.push(c.getAttribute(attr));
+    });
+    return out;
+  }
+  var keepB = snapOn(chipsEl, 'data-brand'), keepC = snapOn(catchipsEl, 'data-cat');
+  var keepT = [];
+  Array.prototype.forEach.call(toolsEl.querySelectorAll('.chip.on'), function(c){
+    keepT.push([c.getAttribute('data-kind'), c.getAttribute('data-flag')]);
+  });
+
+  document.getElementById('meta').innerHTML = metaHTML();
 
   chipsEl.innerHTML    = chipRow('品牌', 'brand', BRANDS, 999);   // 用户要求品牌全部展示不收起
   catchipsEl.innerHTML = chipRow('品类', 'cat',   CATS,   9);
+  Array.prototype.forEach.call(chipsEl.querySelectorAll('.chip'), function(c){
+    if (keepB.indexOf(c.getAttribute('data-brand')) >= 0) c.classList.add('on');
+  });
+  Array.prototype.forEach.call(catchipsEl.querySelectorAll('.chip'), function(c){
+    if (keepC.indexOf(c.getAttribute('data-cat')) >= 0) c.classList.add('on');
+  });
   (function(){
     var nl = 0, ns = 0;
     ALL.forEach(function(it){ if (it.k.indexOf('l') >= 0) nl++; if (it.k.indexOf('s') >= 0) ns++; });
@@ -1684,6 +2050,17 @@ function initUI(){
     toolsEl.querySelector('.chip[data-kind=""]').classList.add('on');
     var hb = toolsEl.querySelector('.chip[data-flag="hide"]');
     if (hideMarked) hb.classList.add('on');
+    var pb = toolsEl.querySelector('.chip[data-flag="pub"]');
+    if (pb && flagPub) pb.classList.add('on');
+    /* 恢复「方式」区选中（无感重载场景）：先清默认再按快照加回 */
+    if (keepT.length){
+      Array.prototype.forEach.call(toolsEl.querySelectorAll('.chip'), function(c){ c.classList.remove('on'); });
+      Array.prototype.forEach.call(toolsEl.querySelectorAll('.chip'), function(c){
+        for (var i = 0; i < keepT.length; i++){
+          if (c.getAttribute('data-kind') === keepT[i][0] && c.getAttribute('data-flag') === keepT[i][1]) c.classList.add('on');
+        }
+      });
+    }
   })();
 
   /* footer 数据源说明块已按要求去掉（2026-10 六次改版）；型号数/数据时间在侧栏底部 */
@@ -1695,11 +2072,41 @@ function initUI(){
   run();
 }
 
+/* 库存提醒：每次拿到实时库存就核对一遍所有已发布型号——
+   正品发布看「非样机/非次品」仓的可用量，样机发布看样机仓；为 0 就提醒下架 */
+function pubStockWarn(){
+  var box = document.getElementById('pubwarn');
+  if (!box) return;
+  if (!STOCKDATA || !STOCKDATA.stock || !Object.keys(STOCKDATA.stock).length){ box.hidden = true; return; }
+  var lost = [];
+  Object.keys(MARKED).forEach(function(c){
+    var m = MARKED[c]; if (!m) return;
+    var kind = m.k || 'l';
+    var st = stockOf(c);
+    if (!st){ lost.push(c + '（库存里查不到）'); return; }
+    var good = 0, samp = 0;
+    Object.keys(st.wt || {}).forEach(function(t){
+      var n = st.wt[t] || 0;
+      if (t.indexOf('样机') >= 0) samp += n;
+      else if (t.indexOf('次品') >= 0){ /* 次品仓不算可售 */ }
+      else good += n;
+    });
+    var left = (kind === 's') ? samp : good;
+    if (left <= 0) lost.push(c + '（' + (kind === 's' ? '样机' : '正品') + '）');
+  });
+  if (!lost.length){ box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  box.innerHTML = '⚠ 这些已发布的型号已经没库存了，记得下架：<b>' + lost.map(esc).join('、') + '</b>'
+    + '<a id="pubwarnx">知道了</a>';
+  var x = box.querySelector('#pubwarnx');
+  if (x) x.onclick = function(){ box.hidden = true; };
+}
 /* 数据到位 → 建索引 → 起界面 */
 function start(d){
   META = (d && d.meta) || {};
   ALL  = (d && d.rows) || [];
   IMGS = (d && d.imgs) || {};
+  WEB  = (d && d.web) || null;
   IMGHAS = null;
   var keys = (d && d.imgkeys) || null;
   if (keys){
@@ -1713,8 +2120,25 @@ function start(d){
     return;
   }
   initUI();
+  pubStockWarn();                      // 库存到了就核对一遍已发布的（哪种没货提醒下架）
 }
 
+/* 调试/自动化验证挂钩（只读函数引用，无副作用）：CDP 验证脚本从 window.__ML 取主脚本内部状态 */
+window.__ML = {
+  get ALL(){ return ALL; },
+  get WEB(){ return WEB; },
+  get MARKED(){ return MARKED; },
+  get SUBVIEW(){ return SUBVIEW; },
+  get UPSTATE(){ return UPSTATE; },
+  get hideMarked(){ return hideMarked; },
+  get flagSend(){ return flagSend; },
+  get flagStock(){ return flagStock; },
+  get flagPub(){ return flagPub; },
+  get curKind(){ return curKind; },
+  pass: pass,
+  costOptions: costOptions,
+  run: run
+};
 ensureAuth().then(function(){
 if (DATA){
   start(DATA);                      // 离线单文件版：数据本来就烤在页面里
