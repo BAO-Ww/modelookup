@@ -400,6 +400,23 @@ async function route(request, env, path) {
     return J({ ok: true });
   }
 
+  // ---------- 用友登录失败告警（2026-10-08）----------
+  // 自动登录失败（密码不对/冒验证码）→ 任意登录者 POST 上报；管理号软件每分钟轮询
+  // GET，有新告警就在页面顶部亮横幅。KV: yyalert = { ts, msg, by }
+  if (path === "/yyalert" && request.method === "POST") {
+    const b = await request.json().catch(() => ({}));
+    const msg = String(b.msg || "").trim().slice(0, 200);
+    if (!msg) return jerr("告警内容为空");
+    const obj = { ts: Date.now(), msg, by: who };
+    await env.KV.put("yyalert", JSON.stringify(obj));
+    return J({ ok: true });
+  }
+  if (path === "/yyalert" && request.method === "GET") {
+    const raw = await env.KV.get("yyalert");
+    const d = raw ? JSON.parse(raw) : null;
+    return J({ ok: true, ts: (d && d.ts) || 0, msg: (d && d.msg) || "", by: (d && d.by) || "" });
+  }
+
   // ---------- 软件自更新中转（2026-10-08）：软件内一键升级，客户端不碰 GitHub ----------
   // 私有仓库 → worker 拿 GH_TOKEN 代查/代下。KV 不用；GH_TOKEN 是 secret_text binding。
   const GH_API = "https://api.github.com/repos/BAO-Ww/modelookup/releases/latest";

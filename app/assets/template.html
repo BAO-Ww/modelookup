@@ -40,6 +40,14 @@ body{
 }
 .pubwarn b{color:#7c4a03}
 .pubwarn a{color:#a16207;text-decoration:underline;cursor:pointer}
+/* 用友登录告警横幅（管理号）：别的机器用友密码不对 → 这里红色亮牌 */
+.yyalert{
+  margin:0 0 10px;padding:9px 14px;border-radius:10px;font-size:13.5px;line-height:1.6;
+  background:#fdecec;border:1px solid #f5c2c2;color:#b42318;
+  display:flex;gap:10px;align-items:center;
+}
+.yyalert b{color:#912018}
+.yyalert .close{margin-left:auto;border:0;background:none;color:#b42318;font-size:16px;cursor:pointer;padding:0 4px;line-height:1}
 .mains{flex:1;min-width:0}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
 
@@ -395,6 +403,7 @@ footer a:hover{text-decoration:underline}
 
     <div class="mains">
       <div class="pubwarn" id="pubwarn" hidden></div>
+      <div class="yyalert" id="yyalert" hidden></div>
       <div class="hint" id="hint"></div>
       <div class="boot" id="boot" hidden><div class="spin"></div><p>正在读取数据…</p></div>
       <div class="list" id="list"></div>
@@ -424,7 +433,16 @@ var WEB = null;                  /* 型号 → 官网产品详情页直链（cat
 var FEE  = 0.016;                // 闲鱼平台费率 1.6%
 /* exe 版后台更新状态：price_at/stock_at = 最近一次金山/用友更新时间（侧栏显示）；
    rev = 后端数据版本号，变了就静默重拉数据，界面无感跟上 */
-var UPSTATE = { price_at: "", stock_at: "", rev: null, fetching: false };
+var UPSTATE = { price_at: "", stock_at: "", rev: null, fetching: false, alert_ts: null };
+/* 用友告警横幅：/api/state 里 alert_ts 变了就亮牌（管理号才显示） */
+function showYyAlert(msg){
+  var el = document.getElementById('yyalert');
+  if (!el || !msg) return;
+  el.innerHTML = '<b>🔔 用友告警</b><span>' + esc(msg) + '</span>'
+    + '<button class="close" title="知道了">×</button>';
+  el.hidden = false;
+  el.querySelector('.close').addEventListener('click', function(){ el.hidden = true; });
+}
 /* 实时库存（exe 版从用友 YonSuite 拉的现存量，点「更新实时库存」刷新）：
    STOCK = { 型号norm: { q:现存量, a:可用量, wt:{仓库类型:可用量} } }，键与 norm() 同一套归一 */
 var STOCKDATA = null;
@@ -2043,6 +2061,11 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
     if (UPSTATE.fetching) return;
     fetch('/api/state', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
       applyState(s);
+      /* 用友告警（管理号）：后端轮询云端拿到了新告警 → 顶部亮红横幅 */
+      if (s.alert_ts && UPSTATE.alert_ts === null){ UPSTATE.alert_ts = s.alert_ts;
+        if (s.alert_msg) showYyAlert(s.alert_msg); }               // 首轮基线+历史告警也显示
+      else if (s.alert_ts && s.alert_ts !== UPSTATE.alert_ts){ UPSTATE.alert_ts = s.alert_ts;
+        showYyAlert(s.alert_msg || '用友登录失败，请检查密码'); }
       if (s.status === 'running' || s.status === 'login') return;
       if (UPSTATE.rev === null){ UPSTATE.rev = s.rev; return; }   // 首轮只记基线
       if (s.rev !== UPSTATE.rev){

@@ -44,7 +44,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.2"
+APP_VERSION = "2.7.3"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -707,13 +707,13 @@ def bootstrap():
 # ------------------------------------------------------------------ 状态
 
 STATE = {"status": "idle", "msg": "", "built": "", "rev": 0,
-         "price_at": "", "stock_at": ""}
+         "price_at": "", "stock_at": "", "alert_ts": 0, "alert_msg": ""}
 SLOCK = threading.Lock()
 LOG = []
 
 
 def set_state(status=None, msg=None, rev=None, built=None,
-              price_at=None, stock_at=None):
+              price_at=None, stock_at=None, alert_ts=None, alert_msg=None):
     with SLOCK:
         if status is not None:
             STATE["status"] = status
@@ -727,6 +727,10 @@ def set_state(status=None, msg=None, rev=None, built=None,
             STATE["price_at"] = price_at
         if stock_at is not None:
             STATE["stock_at"] = stock_at
+        if alert_ts is not None:
+            STATE["alert_ts"] = alert_ts
+        if alert_msg is not None:
+            STATE["alert_msg"] = alert_msg
 
 
 def read_state():
@@ -1226,6 +1230,37 @@ def cloud_req(path, method="GET", obj=None, timeout=90):
         return None, str(e)
 
 
+def yy_alert_push(msg, log=None):
+    """用友自动登录失败 → 上报云端告警（管理号软件轮询 /yyalert 能看到）。
+    2026-10-08 用户口径：密码不对了要通知管理账户。失败只记日志，不影响主流程。"""
+    def _f():
+        j, err = cloud_req("/yyalert", "POST",
+                           {"msg": "用友登录失败：%s" % msg}, timeout=30)
+        if err or not j or not j.get("ok"):
+            (log or LOG.append)("⚠ 告警上报云端失败：%s" % (err or (j or {}).get("msg")))
+        else:
+            (log or LOG.append)("已上报云端告警（管理号会收到）：%s" % msg)
+    try:
+        threading.Thread(target=_f, daemon=True).start()
+    except Exception:
+        pass
+
+
+def yy_alert_poll():
+    """管理号轮询云端告警：有新告警（ts 比已知的大）→ 存进 STATE，
+    页面 30 秒轮询 /api/state 时读 alert_ts/alert_msg 亮横幅。只管 admin。"""
+    if PERM_STATE.get("role") != "admin":
+        return
+    j, err = cloud_req("/yyalert", "GET", timeout=30)
+    if j and j.get("ok"):
+        ts = int(j.get("ts") or 0)
+        if ts and ts > int(STATE.get("alert_ts") or 0):
+            msg = str(j.get("msg") or "")
+            who = str(j.get("by") or "")
+            set_state(alert_ts=ts, alert_msg=msg + ("（来自 %s）" % who if who else ""))
+            LOG.append("🔔 用友告警：%s" % msg)
+
+
 def stock_push_cloud(log):
     """管理号拉完用友 → 整包上传云端，全员共享。失败只记日志，不影响本机。"""
     with STOCK_LOCK:
@@ -1327,8 +1362,10 @@ def _app_install_bg(log):
             return
         log("自更新：下载完成 %s（%.1f MB），启动静默安装…" % (dest, got / 1048576.0))
         set_state("running", "下载完成，正在静默安装…软件将自动关闭，装完重新打开就是新版")
-        # Inno Setup 静默覆盖装：装到同一目录，开始菜单/快捷方式都沿用
-        subprocess.Popen([dest, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+        # Inno Setup 静默覆盖装：装到同一目录，开始菜单/快捷方式都沿用。
+        # /SILENT（不是 VERYSILENT）：保留安装进度窗口，用户能看见「正在安装」；
+        # 装完 [Run] 的 postinstall 条目自动拉起新版软件（2026-10-08 用户要求全程可见）。
+        subprocess.Popen([dest, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
                           "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"], close_fds=True)
         time.sleep(2.5)                      # 让安装进程先起来（页面这时已收到 ok 回应）
         try:
@@ -1664,6 +1701,7 @@ def auto_yy_login(log):
             pass
         log("自动登录提交结果：%s" % (r or "NOFORM"))
         if r not in ("CLICKED", "SUBMIT"):
+            yy_alert_push("自动填表失败（%s），需要人工登录" % (r or "页面没有登录表单"), log)
             return False
         # 最多等 60 秒跳到 c3；还在登录页多半是密码错或冒了验证码 → 放弃走人工
         for _ in range(120):
@@ -1674,6 +1712,7 @@ def auto_yy_login(log):
                 yy_capture_cookies(log)
                 log("用友自动登录成功，会话已存住")
                 return True
+        yy_alert_push("自动登录没跳转成功（密码不对或要验证码），需要人工登录", log)
         return False
     except Exception as e:
         log("用友自动登录异常：%s" % e)
@@ -1980,6 +2019,10 @@ class Handler(BaseHTTPRequestHandler):
                     s["built"] = (get_payload().get("meta") or {}).get("built")
                 except Exception:
                     pass
+            # 告警只给管理号看（子账号 machines 不轮询，字段清空省事）
+            if PERM_STATE.get("role") != "admin":
+                s["alert_ts"] = 0
+                s["alert_msg"] = ""
             self._send(200, json.dumps(s, ensure_ascii=False))
             return
 
@@ -2480,6 +2523,20 @@ def warn_no_webview2():
         pass
 
 
+def yy_alert_loop():
+    """管理号专用后台线程：每 60 秒轮询云端用友告警（子账号机器不查）。
+    告警由别的机器的用友自动登录失败产生 → 这里收到后存 STATE，页面亮横幅。
+    挂在 auto_updater 之前启动（登录前 PERM_STATE.role 还是 None，进了循环
+    每轮现读，登录后下一轮自动生效）。"""
+    time.sleep(90)                       # 启动缓一缓，等登录态就位
+    while True:
+        try:
+            yy_alert_poll()
+        except Exception:
+            pass
+        time.sleep(60)
+
+
 def run_app(httpd, port, startup_xlsx=None):
     global MAIN_WIN, LOGIN_WIN, YY_WIN
     url = "http://%s:%d/" % (HOST, port)
@@ -2520,6 +2577,7 @@ def run_app(httpd, port, startup_xlsx=None):
     _tick("登录窗口对象建好（%.0f ms）" % ((time.time() - t_cw) * 1000))
     # 定时自动更新（金山价格 + 用友库存，每小时一轮，静默）
     threading.Thread(target=auto_updater, daemon=True).start()
+    threading.Thread(target=yy_alert_loop, daemon=True).start()   # 管理号轮询用友告警
 
     def on_login_closed():
         LOGIN_CLOSED.set()
