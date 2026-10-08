@@ -108,8 +108,17 @@ begin
 end;
 
 function InitializeSetup(): Boolean;
+var
+  Res: Integer;
 begin
   Result := True;
+  // 2026-10-09 修复静默更新失败：旧实例没退干净就去覆盖 ModelLookup.exe 会文件占用，
+  // /SILENT + /SUPPRESSMSGBOXES 下报错被吞 → 安装悄悄什么都不装。
+  // 装前先强杀旧实例（软件端自更新流程里也有一层，这里是双保险，手动双击安装也吃这层）。
+  Exec(ExpandConstant('{cmd}'),
+       '/C taskkill /F /IM {#ExeName} >nul 2>&1',
+       '', SW_HIDE, ewWaitUntilTerminated, Res);
+  Sleep(800);   // 等文件句柄释放干净
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
