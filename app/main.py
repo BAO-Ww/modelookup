@@ -1250,6 +1250,7 @@ def stock_pull_cloud(log, force=True):
     """子账号：不从用友拉（没有登录态），直接取管理号共享的云端库存。
     force=False（自动轮询用）：云端 ts 跟本地一样就什么都不做（省流量、不打扰）；
     变了才拉全量、落盘、并 bump rev 让页面无感刷新。"""
+    global STOCK
     if not force:
         cloud_ts = stock_cloud_peek()
         if not cloud_ts:
@@ -1268,7 +1269,6 @@ def stock_pull_cloud(log, force=True):
     if not j or not j.get("ok") or not isinstance(j.get("stock"), dict):
         set_state("error", (j or {}).get("msg") or "云端还没有库存数据（等管理号更新一次）")
         return
-    global STOCK
     with STOCK_LOCK:
         STOCK = {"ts": j.get("ts"), "rows": j.get("rows") or 0, "stock": j["stock"]}
     stock_save()

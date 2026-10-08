@@ -11,8 +11,8 @@ on:
       note:
         description: "备注（可选）"
         required: false
-  # schedule:
-  #   - cron: "0 */2 * * *"   # UTC 每 2 小时 = 北京时间每 2 小时（跑通后取消注释）
+  schedule:
+    - cron: "30 */2 * * *"   # UTC 每 2 小时（xx:30）= 北京时间每 2 小时；跑通实证后启用
 
 permissions:
   contents: read
