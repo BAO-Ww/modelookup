@@ -105,6 +105,8 @@ main{padding:22px 0 60px}
 .chip.on{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
 .chip.g.on{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600}
 .chip.w.on{background:var(--warn);border-color:var(--warn);color:#fff;font-weight:600}
+/* 软件更新按钮发现新版本时的高亮（点过/装完就恢复普通样式） */
+.chip.hot{background:#fff7e8;border-color:#f0c36d;color:#9a6a00;font-weight:700}
 .chip i{font-style:normal;opacity:.6;font-size:10.5px;margin-left:3px}
 /* 「更多 ▾」这种次要按钮 */
 .chip.mini{padding:4px 9px;font-size:12px;color:var(--ink3);border-style:dashed}
@@ -161,12 +163,14 @@ main{padding:22px 0 60px}
 }
 .addimg:hover{background:#e2ecff}
 .kimgdel{
-  position:absolute;top:4px;right:78px;z-index:2;
+  position:absolute;top:2px;left:66px;z-index:2;   /* 贴在补图右上角（pimg 74px 宽），别再飘到按钮上 */
   width:16px;height:16px;line-height:14px;padding:0;border-radius:50%;
   font:700 11px/14px inherit;text-align:center;cursor:pointer;
   color:#8a93a5;background:rgba(255,255,255,.92);border:1px solid var(--line);
-  opacity:.55;                                    /* 平时半透明小角标，不是「图片加载失败」 */
+  opacity:0;                                       /* 平时完全看不见，鼠标扫到卡片才浮出来 */
+  transition:opacity .15s;
 }
+.chead:hover .kimgdel{opacity:.6}
 .kimgdel:hover{opacity:1;color:#fff;background:#d63838;border-color:#d63838}
 .chead-main{flex:1;min-width:200px}
 .moline{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
@@ -305,6 +309,7 @@ footer a:hover{text-decoration:underline}
   .top .meta{margin-left:0;text-align:left;width:100%}
   .mo{font-size:16px}
   .pimg{width:58px;height:58px}
+  .kimgdel{left:50px}
   .prices{grid-template-columns:repeat(auto-fill,minmax(112px,1fr))}
   .row>label{width:58px}
   .acts{margin-left:0;width:100%}
@@ -375,7 +380,8 @@ footer a:hover{text-decoration:underline}
       <div class="updbar" id="updbar" hidden style="display:none">
         <!-- 四个操作按钮已移到窗口顶部菜单栏（帮助前）；这里只留隐藏按钮给菜单触发用 -->
         <button class="chip" id="updbtn">↻ 从金山文档更新数据</button>
-        <button class="chip" id="stkbtn" title="从用友 YonSuite 拉实时现存量（登录一次，之后一键更新）">⟳ 更新实时库存（用友）</button>
+        <button class="chip" id="stkbtn" title="管理号：从用友 YonSuite 拉实时现存量，拉完自动共享给所有子账号；子账号：直接从云端同步管理号共享的库存（不用登用友）">⟳ 更新实时库存</button>
+        <button class="chip" id="appupd" title="检查并安装新版本：下载后在软件里直接静默覆盖安装，不用自己去下">⬆ 软件更新</button>
         <button class="chip" id="expimg" title="把你自己补的图导出成一个 json 文件（发给我，下次重建直接烤进页面）">导出我补的图</button>
         <button class="chip" id="impimg" title="导入之前导出的 补图.json">导入补图</button>
       </div>
@@ -735,9 +741,12 @@ function calcHTML(it){
     + '<input type="number" min="0" step="1" inputmode="decimal" placeholder="输入你的定价"'
     + (isNum(saved) ? ' value="' + saved + '"' : '') + '>'
     + sel
-    /* 发全国要加 100 运费（卖家出），默认算上；只卖深惠广莞就把勾去掉 */
-    + '<label class="cfr" title="发深惠广莞以外要加 100 运费，勾上就在利润里扣掉；本地卖可以取消勾选">'
-    + '<input type="checkbox" class="cfrbox" checked> 发全国 −100运费</label>'
+    /* 发全国要加 100 运费（卖家出），默认算上；只卖深惠广莞就把勾去掉。
+       ⚠ 只有发往是「可发全国」的型号才渲染这个勾选框（canNationwide），别的一律不出 */
+    + (canNationwide(it)
+       ? '<label class="cfr" title="发深惠广莞以外要加 100 运费，勾上就在利润里扣掉；本地卖可以取消勾选">'
+         + '<input type="checkbox" class="cfrbox" checked> 发全国 −100运费</label>'
+       : '')
     + '<span class="ci">平台费1.6% <b class="p-fee">—</b></span>'
     + '<span class="ci">挣 <b class="p-out">—</b></span>'
     + '</div>';
@@ -1311,6 +1320,16 @@ function shipTextOf(it){
   if (!raw) return null;
   var m = SHIP_EXTRA[raw];
   return m ? m.t : raw;
+}
+
+/* 这台能不能「发全国」——决定计算器要不要出「−100运费」勾选框（2026-10-08 用户口径：
+   只有发往里明确是「可发全国」的型号才该有这个选项，只发深惠广莞的不出）。
+   命中条件：全国可发列写「可以 / 报备可发全国」，或发货区域是「可发全国加运费100」这一族。 */
+function canNationwide(it){
+  var natRaw = String(it.nat == null ? '' : it.nat).replace(/^[\s\-—－–]+/, '').trim();
+  if (natRaw && NAT_EXTRA[natRaw] === 'y') return true;
+  var ship = it.ship == null ? '' : String(it.ship).trim();
+  return !!(ship && SHIP_EXTRA[ship] && SHIP_EXTRA[ship].k === 'y');
 }
 
 function renderItem(it){
@@ -1909,7 +1928,7 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   function busy(on, label){
     btn.disabled = on; stk.disabled = on;
     btn.textContent = on ? (label || '正在更新…') : '↻ 从金山文档更新数据';
-    stk.textContent = on ? (label || '正在更新…') : '⟳ 更新实时库存（用友）';
+    stk.textContent = on ? (label || '正在更新…') : '⟳ 更新实时库存';
   }
   function reset(){ busy(false); }
 
@@ -1946,12 +1965,51 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   stk.addEventListener('click', function(){
     if (stk.disabled) return;
     busy(true, '正在更新库存…');
-    msg.innerHTML = '<span class="spin"></span>正在连接用友 YonSuite…（如需登录会自动弹窗，登录一次即可）';
+    var isAdmin = AUTH && AUTH.role === 'admin';
+    msg.innerHTML = '<span class="spin"></span>' + (isAdmin
+      ? '正在连接用友 YonSuite…（拉完自动共享给所有子账号；如需登录会先尝试自动登录）'
+      : '正在从云端同步库存（管理号共享的用友实时数据）…');
     fetch('/api/stock', { method: 'POST', cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
       if (!r.ok){ msg.textContent = '更新失败：' + (r.msg || ''); reset(); return; }
       poll();
     }).catch(function(e){ msg.textContent = '请求失败：' + e; reset(); });
   });
+
+  /* ---- 软件自更新：查新版 → 一键下载静默覆盖安装（2026-10-08） ---- */
+  (function(){
+    var au = document.getElementById('appupd');
+    if (!au) return;
+    au.addEventListener('click', function(){
+      if (au.disabled) return;
+      au.disabled = true; au.textContent = '检查中…';
+      msg.textContent = '正在检查新版本…';
+      fetch('/api/appcheck', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
+        if (!r.ok){ msg.textContent = '检查失败：' + (r.msg || ''); au.disabled = false; au.textContent = '⬆ 软件更新'; return; }
+        if (!r.newer){
+          msg.textContent = '✓ 已经是最新版 v' + r.cur + '（云端最新 v' + r.latest + '）';
+          au.disabled = false; au.textContent = '⬆ 软件更新';
+          return;
+        }
+        msg.innerHTML = '发现新版本 <b>v' + esc(r.latest) + '</b>（当前 v' + esc(r.cur) + '），正在下载（'
+          + Math.round((r.size || 0) / 1048576) + ' MB，下载完自动安装）…';
+        au.textContent = '正在下载…';
+        fetch('/api/appinstall', { method: 'POST', cache: 'no-store' })
+          .then(function(r2){ return r2.json(); })
+          .then(function(r2){
+            if (!r2.ok){ msg.textContent = '更新失败：' + (r2.msg || ''); au.disabled = false; au.textContent = '⬆ 软件更新'; return; }
+            poll();     // 下载进度走 /api/state（running 状态的 msg 里有百分比），装完软件自动重启
+          })
+          .catch(function(e){ msg.textContent = '请求失败：' + e; au.disabled = false; au.textContent = '⬆ 软件更新'; });
+      }).catch(function(e){
+        msg.textContent = '检查失败：' + e;
+        au.disabled = false; au.textContent = '⬆ 软件更新';
+      });
+    });
+    // 启动时静默查一次：有新版就把按钮点亮成「⬆ 有新版本 v2.7.3」
+    fetch('/api/appcheck', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
+      if (r.ok && r.newer){ au.textContent = '⬆ 有新版本 v' + r.latest; au.classList.add('hot'); }
+    }).catch(function(){});
+  })();
 
   fetch('/api/state', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
     if (s.status === 'running' || s.status === 'login'){ busy(true); poll(); }

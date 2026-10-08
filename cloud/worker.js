@@ -350,5 +350,85 @@ async function route(request, env, path) {
     return J({ ok: true });
   }
 
+  // ---------- 用友库存云中转（2026-10-08）：管理号更新 → 全员共享 ----------
+  // KV: stocklive = { ts, rows, stock }（约 1.5MB）。管理号 POST 上传，所有登录者 GET 读取。
+  // 子账号软件从此不碰用友、不用登用友，库存跟管理号的更新走。
+  if (path === "/stockcloud" && request.method === "POST") {
+    const users = await getUsers(env);
+    if ((users[who] || {}).role !== "admin") return jerr("只有管理号能上传库存", 403);
+    const b = await request.json().catch(() => ({}));
+    if (!b || typeof b.stock !== "object" || !b.stock || !Object.keys(b.stock).length)
+      return jerr("库存数据为空，拒收");
+    const obj = { ts: String(b.ts || ""), rows: +b.rows || 0, stock: b.stock,
+                  by: who, up: Date.now() };
+    await env.KV.put("stocklive", JSON.stringify(obj));
+    return J({ ok: true, mb: Math.round(JSON.stringify(obj).length / 1048576 * 10) / 10,
+               n: Object.keys(b.stock).length });
+  }
+  if (path === "/stockcloud" && request.method === "GET") {
+    const raw = await env.KV.get("stocklive");
+    if (!raw) return jerr("云端还没有共享库存（管理号更新一次后这里就有了）", 404);
+    const obj = JSON.parse(raw);
+    return J({ ok: true, ts: obj.ts, rows: obj.rows, stock: obj.stock, by: obj.by });
+  }
+
+  // ---------- 用友账密（云端存，跟管理号走）----------
+  // 2026-10-08 用户口径：不管在哪台电脑登录管理号，都要能自动担起用友更新 →
+  // 账密存 KV（yyauth），任何一台登着管理号的机器都能取到并自动登录用友。
+  // 仅 admin 可读写；子账号机器走库存云中转，永远不需要这个。
+  if (path === "/yyauth" && request.method === "GET") {
+    const users = await getUsers(env);
+    if ((users[who] || {}).role !== "admin") return jerr("只有管理号能读", 403);
+    const raw = await env.KV.get("yyauth");
+    const d = raw ? JSON.parse(raw) : null;
+    return J({ ok: true, u: (d && d.u) || "", p: (d && d.p) || "" });
+  }
+  if (path === "/yyauth" && request.method === "POST") {
+    const users = await getUsers(env);
+    if ((users[who] || {}).role !== "admin") return jerr("只有管理号能设置", 403);
+    const b = await request.json().catch(() => ({}));
+    if (!b.u || !b.p) return jerr("账号和密码都要填");
+    await env.KV.put("yyauth", JSON.stringify({
+      u: String(b.u).slice(0, 40), p: String(b.p).slice(0, 60), up: Date.now() }));
+    return J({ ok: true });
+  }
+
+  // ---------- 软件自更新中转（2026-10-08）：软件内一键升级，客户端不碰 GitHub ----------
+  // 私有仓库 → worker 拿 GH_TOKEN 代查/代下。KV 不用；GH_TOKEN 是 secret_text binding。
+  const GH_API = "https://api.github.com/repos/BAO-Ww/modelookup/releases/latest";
+  async function ghLatest() {
+    const r = await fetch(GH_API, { headers: {
+      "Authorization": "Bearer " + (env.GH_TOKEN || ""),
+      "User-Agent": "modelookup-worker", "Accept": "application/vnd.github+json" } });
+    if (!r.ok) return null;
+    return r.json();
+  }
+  function setupAsset(rel) {
+    const a = (rel.assets || []).find((x) => /^ModelLookup-Setup-\d[\w.]*\.exe$/i.test(x.name))
+           || (rel.assets || []).find((x) => /\.exe$/i.test(x.name));
+    return a || null;
+  }
+  if (path === "/appcheck" && request.method === "GET") {
+    const rel = await ghLatest();
+    if (!rel || !rel.tag_name) return jerr("GitHub 查询失败（检查 GH_TOKEN 配置）", 502);
+    const a = setupAsset(rel);
+    return J({ ok: true, tag: rel.tag_name, ver: String(rel.tag_name).replace(/^v/i, ""),
+               name: a ? a.name : "", size: a ? a.size : 0 });
+  }
+  if (path === "/appdl" && request.method === "GET") {
+    const rel = await ghLatest();
+    if (!rel || !rel.tag_name) return jerr("GitHub 查询失败", 502);
+    const a = setupAsset(rel);
+    if (!a) return jerr("Release 里没有安装包", 404);
+    const dr = await fetch(a.url, { headers: {          // API asset URL + octet-stream = 原始下载
+      "Authorization": "Bearer " + (env.GH_TOKEN || ""),
+      "User-Agent": "modelookup-worker", "Accept": "application/octet-stream" } });
+    if (!dr.ok || !dr.body) return jerr("安装包下载失败（GitHub 侧）", 502);
+    const h = { "Content-Type": "application/octet-stream",
+                "Content-Disposition": 'attachment; filename="' + a.name + '"' };
+    if (dr.headers.get("content-length")) h["Content-Length"] = dr.headers.get("content-length");
+    return new Response(dr.body, { headers: h });       // 流式转发，不占 worker 内存
+  }
+
   return jerr("接口不存在", 404);
 }
