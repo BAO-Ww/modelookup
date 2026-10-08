@@ -81,7 +81,7 @@ Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"
     StatusMsg: "正在安装 Microsoft Edge WebView2 运行时（第一次装需要，约 1 分钟）…"; \
     Flags: waituntilterminated runhidden; Check: not WebView2Installed
 Filename: "{app}\{#ExeName}"; Description: "立即打开 型号查询"; \
-    Flags: nowait postinstall skipifsilent
+    Flags: nowait postinstall
 
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/C taskkill /F /IM {#ExeName} >nul 2>&1"; Flags: runhidden; RunOnceId: "KillApp"
