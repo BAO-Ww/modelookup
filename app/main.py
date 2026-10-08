@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-型号查询  v2.7.1
+型号查询  v2.7.2
 ====================================
 独立窗口的桌面软件（自带 WebView2 内核，无地址栏 / 无浏览器外壳）：
 
@@ -29,6 +29,7 @@ import os
 import re
 import ssl
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -43,7 +44,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.1"
+APP_VERSION = "2.7.2"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1171,6 +1172,150 @@ def stock_save():
             pass
 
 
+# ------------------------------------------------------------------ 云端中转（Cloudflare Worker）
+# 2026-10-08 用户口径：用友库存「我更新了全员跟着更新」——
+#   管理号的机器拉用友 → 整包上传 worker（KV stocklive）；子账号不碰用友，直接从云端取。
+#   子账号从此**不用登用友**；管理号机器仍是唯一的用友登录点。
+CLOUD_HOST = "https://auth.baozang.kdns.fr"
+_CLOUD_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+             " (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+
+def _cloud_token():
+    """页面登录态镜像，调 worker 用。auth_token.json 兼容两种格式：
+    页面 /api/token POST 的是 JSON {"u","token","role"...}；裸 token 字符串也认。"""
+    try:
+        with io.open(wp("auth_token.json"), encoding="utf-8") as f:
+            raw = f.read().strip()
+        if not raw:
+            return ""
+        try:
+            d = json.loads(raw)
+            if isinstance(d, dict):
+                return str(d.get("token") or "").strip()
+        except Exception:
+            pass
+        return raw
+    except Exception:
+        return ""
+
+
+def cloud_req(path, method="GET", obj=None, timeout=90):
+    """调云端 worker（带页面登录态）。返回 (dict|None, err|None)。"""
+    tok = _cloud_token()
+    if not tok:
+        return None, "还没有登录态（页面没登录过）"
+    body = json.dumps(obj).encode("utf-8") if obj is not None else None
+    req = urllib.request.Request(CLOUD_HOST + path, data=body, method=method)
+    req.add_header("X-Token", tok)
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", _CLOUD_UA)
+    req.add_header("Origin", CLOUD_HOST)
+    req.add_header("Referer", CLOUD_HOST + "/")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8")), None
+    except urllib.error.HTTPError as e:
+        try:
+            j = json.loads(e.read().decode("utf-8"))
+            return (j, None) if isinstance(j, dict) else (None, "HTTP %d" % e.code)
+        except Exception:
+            return None, "HTTP %d" % e.code
+    except Exception as e:
+        return None, str(e)
+
+
+def stock_push_cloud(log):
+    """管理号拉完用友 → 整包上传云端，全员共享。失败只记日志，不影响本机。"""
+    with STOCK_LOCK:
+        obj = {"ts": STOCK.get("ts"), "rows": STOCK.get("rows"), "stock": STOCK.get("stock")}
+    j, err = cloud_req("/stockcloud", "POST", obj, timeout=180)
+    if err or not j or not j.get("ok"):
+        log("⚠ 库存上传云端失败（子账号拿不到这次的更新）：%s" % (err or (j or {}).get("msg")))
+    else:
+        log("库存已上传云端（%.1f MB），子账号自动共享" % (j.get("mb") or 0))
+
+
+def stock_pull_cloud(log):
+    """子账号：不从用友拉（没有登录态），直接取管理号共享的云端库存。"""
+    log("正在从云端同步库存（管理号共享的用友实时数据）…")
+    set_state("running", "正在从云端同步库存…")
+    j, err = cloud_req("/stockcloud", "GET", timeout=180)
+    if err:
+        set_state("error", "云端库存同步失败：%s" % err)
+        return
+    if not j or not j.get("ok") or not isinstance(j.get("stock"), dict):
+        set_state("error", (j or {}).get("msg") or "云端还没有库存数据（等管理号更新一次）")
+        return
+    global STOCK
+    with STOCK_LOCK:
+        STOCK = {"ts": j.get("ts"), "rows": j.get("rows") or 0, "stock": j["stock"]}
+    stock_save()
+    ts = j.get("ts") or ""
+    log("云端库存同步完成：%s 行（%s）" % (j.get("rows") or 0, ts))
+    set_state("done", "库存已同步（云端共享 · %s）" % ts, stock_at=ts)
+
+
+def _ver_gt(a, b):
+    """版本号比较：'2.7.2' > '2.7.1'。"""
+    def nums(s):
+        return [int(x) for x in re.findall(r"\d+", str(s) or "")]
+    try:
+        return nums(a) > nums(b)
+    except Exception:
+        return False
+
+
+def _app_install_bg(log):
+    """软件自更新：从云端下安装包 → 静默覆盖安装 → 本进程退出让位（2026-10-08）。
+    走 worker 中转（/appdl），客户端不用碰 GitHub。"""
+    try:
+        j, err = cloud_req("/appcheck", timeout=30)
+        if err or not j or not j.get("ok"):
+            set_state("error", "查询新版本失败：%s" % (err or (j or {}).get("msg")))
+            return
+        tag = str(j.get("tag") or "")
+        ver = str(j.get("ver") or "")
+        log("自更新：开始下载 %s（%.1f MB）…" % (j.get("name") or tag, (j.get("size") or 0) / 1048576.0))
+        set_state("running", "正在下载新版本 v%s（几十 MB，视网速 1-3 分钟）…" % ver)
+        tok = _cloud_token()
+        req = urllib.request.Request(CLOUD_HOST + "/appdl?tag=" + urllib.parse.quote(tag))
+        req.add_header("X-Token", tok)
+        req.add_header("User-Agent", _CLOUD_UA)
+        dest = os.path.join(os.environ.get("TEMP") or wp(""),
+                            "ModelLookup-Setup-%s.exe" % (ver or APP_VERSION))
+        got, total = 0, 0
+        with urllib.request.urlopen(req, timeout=900) as r:
+            total = int(r.headers.get("Content-Length") or 0)
+            with io.open(dest, "wb") as f:
+                while True:
+                    chunk = r.read(262144)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    got += len(chunk)
+                    if total:
+                        set_state("running", "正在下载新版本 v%s… %d%%" % (ver, got * 100 // total))
+        if got < 1048576:
+            set_state("error", "安装包下载不完整（%d 字节），重试一次" % got)
+            return
+        log("自更新：下载完成 %s（%.1f MB），启动静默安装…" % (dest, got / 1048576.0))
+        set_state("running", "下载完成，正在静默安装…软件将自动关闭，装完重新打开就是新版")
+        # Inno Setup 静默覆盖装：装到同一目录，开始菜单/快捷方式都沿用
+        subprocess.Popen([dest, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+                          "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"], close_fds=True)
+        time.sleep(2.5)                      # 让安装进程先起来（页面这时已收到 ok 回应）
+        try:
+            if MAIN_WIN is not None:
+                MAIN_WIN.hide()
+        except Exception:
+            pass
+        os._exit(0)                          # 让位给安装器覆盖文件
+    except Exception as e:
+        set_state("error", "自更新失败：%s" % e)
+
+
 def _jsq(s):
     """把 Python 字符串安全塞进 JS 单引号字符串字面量。"""
     return str(s).replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
@@ -1414,15 +1559,116 @@ def yy_finish(recs, log):
     log("实时库存更新完成：%d 行 · %d 个型号 · 命中表中 %d 个型号" % (len(recs), len(agg), hit))
     set_state("done", "实时库存已更新：%d 行 · 命中表中 %d 个型号（%s）" % (len(recs), hit, ts),
               stock_at=ts)
+    stock_push_cloud(log)          # 管理号拉完即上云，子账号全员自动跟进（2026-10-08）
+
+
+YY_USER = ""     # 用友登录账号（留空 = 从云端/本地配置取；也可写 wp()/yy_auth.json）
+YY_PASS = ""
+
+
+def yy_creds():
+    """自动登录用的账密，三级来源（2026-10-08 用户口径：账密挂云端跟管理号走，
+    任何一台电脑登着管理号都能担起用友更新）：
+    ① 内置常量 ② 本地 wp()/yy_auth.json ③ 云端 worker /yyauth（仅管理号可读，取回后缓存本地）。
+    都没有 → None。"""
+    if YY_USER and YY_PASS:
+        return YY_USER, YY_PASS
+    try:
+        with io.open(wp("yy_auth.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        if d.get("u") and d.get("p"):
+            return str(d["u"]), str(d["p"])
+    except Exception:
+        pass
+    j, err = cloud_req("/yyauth", timeout=30)
+    if j and j.get("ok") and j.get("u") and j.get("p"):
+        try:
+            with io.open(wp("yy_auth.json"), "w", encoding="utf-8") as f:
+                json.dump({"u": j["u"], "p": j["p"]}, f, ensure_ascii=False)
+        except Exception:
+            pass
+        return str(j["u"]), str(j["p"])
+    return None
+
+
+def auto_yy_login(log):
+    """用保存的账密在 YY 窗口里自动填 CAS 表单登录（2026-10-08）。
+    成功建立会话返回 True；没凭据/没窗口/表单不对/有验证码 → False（调用方按原流程走）。"""
+    c = yy_creds()
+    if not c:
+        return False
+    u, p = c
+    if YY_WIN is None or YY_CLOSED.is_set():
+        return False
+    try:
+        log("用友会话失效，尝试用保存的账号自动登录…")
+        set_state("running", "正在自动登录用友…")
+        try:
+            YY_WIN.load_url(YY_CAS_ENTRY)
+        except Exception:
+            pass
+        # 等页面定型：要么已经在 c3（会话其实还活着），要么落在 CAS 登录页
+        on_login = False
+        for _ in range(30):
+            time.sleep(0.5)
+            if YY_CLOSED.is_set():
+                return False
+            if yy_on_c3(YY_WIN):
+                return True
+            if yy_on_login_page(YY_WIN):
+                on_login = True
+                break
+        if not on_login:
+            return False
+        # 填表提交：用原生 setter 兼容 Vue/React 受控输入
+        js = ("(function(){"
+              "var u=document.querySelector('input[name=\\'username\\'],input[name=\\'loginName\\'],input[type=\\'text\\'],input[type=\\'email\\']');"
+              "var p=document.querySelector('input[name=\\'password\\'],input[type=\\'password\\']');"
+              "if(!u||!p) return 'NOFORM';"
+              "var setv=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;"
+              "setv.call(u,%s); u.dispatchEvent(new Event('input',{bubbles:true}));"
+              "setv.call(p,%s); p.dispatchEvent(new Event('input',{bubbles:true}));"
+              "var b=document.querySelector('button[type=\\'submit\\'],input[type=\\'submit\\'],#login-btn,.login-btn,button.btn-primary');"
+              "if(b){b.click(); return 'CLICKED';}"
+              "var f=u.closest('form'); if(f){f.submit(); return 'SUBMIT';}"
+              "return 'NOBTN';})()") % (_jsq(u), _jsq(p))
+        r = ""
+        try:
+            r = YY_WIN.evaluate_js(js) or ""
+        except Exception:
+            pass
+        log("自动登录提交结果：%s" % (r or "NOFORM"))
+        if r not in ("CLICKED", "SUBMIT"):
+            return False
+        # 最多等 60 秒跳到 c3；还在登录页多半是密码错或冒了验证码 → 放弃走人工
+        for _ in range(120):
+            time.sleep(0.5)
+            if YY_CLOSED.is_set():
+                return False
+            if yy_on_c3(YY_WIN):
+                yy_capture_cookies(log)
+                log("用友自动登录成功，会话已存住")
+                return True
+        return False
+    except Exception as e:
+        log("用友自动登录异常：%s" % e)
+        return False
 
 
 def do_stock_update(log, auto=False):
     """拉用友实时库存：优先用存下的会话直拉（免登录）；失效才弹窗等人登录一次。
-    auto=True（定时自动更新）时绝不弹窗：会话失效就这轮跳过，下小时再试。"""
+    auto=True（定时自动更新）时绝不弹窗：会话失效就这轮跳过，下小时再试。
+    2026-10-08 两条新规：
+    · 子账号（role != admin）不碰用友，直接取云端共享库存（管理号更新后全员跟进）；
+    · 有保存的用友账密（YY_USER/YY_PASS 或 wp()/yy_auth.json）→ 会话失效时自动填表登录。"""
     if not _update_lock.acquire(blocking=False):
         set_state("error", "已有更新在进行中")
         return
     try:
+        # ---- 子账号：云端直达（这是 2026-10-08 的主路径，用友只由管理号登录）
+        if PERM_STATE.get("role") not in (None, "admin"):
+            return stock_pull_cloud(log)
+
         # ---- 快路径：本地存过用友会话 → urllib 直拉，不开窗、不用登录
         saved = yy_cookies_load()
         if saved:
@@ -1441,8 +1687,28 @@ def do_stock_update(log, auto=False):
 
         # ---- 慢路径：WebView 登录流程（登录成功后抓 cookie 存盘，下次走快路径）
         if auto:
-            log("自动更新：用友会话已失效，这轮跳过（不弹登录窗，下小时再试）")
+            # 自动模式绝不弹窗：先试自动登录（有账密），不行这轮跳过
+            if auto_yy_login(log):
+                data, err = yy_call_direct(1, 1)
+                if err is None:
+                    recs, err = yy_pull_all(yy_call_direct, log)
+                    if err is None:
+                        yy_finish(recs, log)
+                        return
+                set_state("error", "用友接口异常：%s" % (err or "?"))
+                return
+            log("自动更新：用友会话失效且自动登录不可用，这轮跳过（下小时再试）")
             set_state("done", "自动更新跳过（下次再试）")
+            return
+        # 手动点按钮：也先试自动登录（省得人点）；不行再走人工弹窗
+        if auto_yy_login(log):
+            data, err = yy_call_direct(1, 1)
+            if err is None:
+                recs, err = yy_pull_all(yy_call_direct, log)
+                if err is None:
+                    yy_finish(recs, log)
+                    return
+            set_state("error", "用友接口异常：%s" % (err or "?"))
             return
         if YY_WIN is None or YY_CLOSED.is_set():
             set_state("error", "用友窗口不可用，重启软件再试")
@@ -1612,7 +1878,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
 # ------------------------------------------------------------------ HTTP（本地服务：给窗口里的页面用）
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ModelLookup/2.7.1"
+    server_version = "ModelLookup/2.7.2"
 
     def log_message(self, *a):
         pass
@@ -1712,6 +1978,21 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             return
 
+        if path == "/api/appcheck":
+            # 软件自更新：查云端（worker 转发 GitHub 最新 Release），跟本机版本比
+            j, err = cloud_req("/appcheck", timeout=30)
+            if err or not j or not j.get("ok"):
+                self._send(200, json.dumps({"ok": False,
+                                            "msg": err or (j or {}).get("msg") or "查询失败"},
+                                           ensure_ascii=False))
+                return
+            latest = str(j.get("ver") or "")
+            self._send(200, json.dumps({
+                "ok": True, "cur": APP_VERSION, "latest": latest, "tag": j.get("tag"),
+                "name": j.get("name"), "size": j.get("size"),
+                "newer": _ver_gt(latest, APP_VERSION)}, ensure_ascii=False))
+            return
+
         if path == "/api/token":
             # 登录态镜像（读）：页面启动时 localStorage 没有 token 就从这里兜底恢复。
             # 背景：托盘「退出」会硬杀进程，WebView2 的 localStorage 偶发没落盘 → 每次都要重登。
@@ -1745,6 +2026,16 @@ class Handler(BaseHTTPRequestHandler):
                                  args=(d.get("role"),), daemon=True).start()
             except Exception as e:
                 LOG.append("权限同步失败：%s" % e)
+            self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            return
+        if u.path == "/api/appinstall":
+            # 一键更新：后台线程下安装包 → 静默覆盖装 → 本进程退出
+            if read_state()["status"] in ("running", "login"):
+                self._send(200, json.dumps({"ok": False, "msg": "数据更新进行中，等它跑完再更新软件"},
+                                           ensure_ascii=False))
+                return
+            set_state("running", "正在下载新版本安装包…")
+            threading.Thread(target=_app_install_bg, args=(LOG.append,), daemon=True).start()
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             return
         if u.path == "/api/token":
@@ -1994,15 +2285,15 @@ def build_menu(sub=False):
         threading.Thread(target=do_update, args=(LOG.append,), daemon=True).start()
 
     def upd_stock():
-        if not guarded("从用友更新实时库存", "upd_yy"):
-            return
-        if YY_WIN is None or YY_CLOSED.is_set():
-            webview.windows[0].evaluate_js(
-                "alert('用友窗口不可用（可能被关掉了），重启软件再试。')")
-            return
         if read_state()["status"] in ("running", "login"):
             return
+        # 2026-10-08：库存更新不再卡权限——子账号走云端同步（不碰用友），
+        # 管理号走用友（自动登录 + 拉完共享云端）。人人都能点。
         threading.Thread(target=do_stock_update, args=(LOG.append,), daemon=True).start()
+
+    def upd_app():
+        """软件自更新：菜单点一下 = 页面里点「⬆ 软件更新」按钮（下载+静默覆盖装）。"""
+        js_click("appupd")
 
     def reload_page():
         if not guarded("重新加载页面", "upd_kdocs"):
@@ -2058,11 +2349,11 @@ def build_menu(sub=False):
             return
         js_click("impimg")
 
-    # 2026-10 六次改版：侧栏底部四个按钮 + 补图两个按钮上移到菜单栏，排在帮助前面
+    # 子账号（2026-10-08 十次改版）：菜单 = 账号管理 / 软件更新 / 退出登录
     if sub:
-        # 子账号（2026-10 八次改版）：菜单栏只显示这两项
         return [
             MenuAction("账号管理", adm),
+            MenuAction("软件更新…", upd_app),
             MenuAction("退出登录", logout),
         ]
     return [
@@ -2073,7 +2364,8 @@ def build_menu(sub=False):
             MenuAction("打开在线表（价格表）", source_price),
         ]),
         MenuAction("从金山文档更新数据", upd),
-        MenuAction("更新实时库存（用友）", upd_stock),
+        MenuAction("更新实时库存", upd_stock),
+        MenuAction("软件更新…", upd_app),
         MenuAction("账号管理", adm),
         MenuAction("退出登录", logout),
         MenuAction("导出我补的图", exp_img),
