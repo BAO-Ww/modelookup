@@ -44,7 +44,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.4"
+APP_VERSION = "2.7.5"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1360,20 +1360,33 @@ def _app_install_bg(log):
         if got < 1048576:
             set_state("error", "安装包下载不完整（%d 字节），重试一次" % got)
             return
-        log("自更新：下载完成 %s（%.1f MB），启动静默安装…" % (dest, got / 1048576.0))
-        set_state("running", "下载完成，正在静默安装…软件将自动关闭，装完重新打开就是新版")
-        # Inno Setup 静默覆盖装：装到同一目录，开始菜单/快捷方式都沿用。
-        # /SILENT（不是 VERYSILENT）：保留安装进度窗口，用户能看见「正在安装」；
-        # 装完 [Run] 的 postinstall 条目自动拉起新版软件（2026-10-08 用户要求全程可见）。
-        subprocess.Popen([dest, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
-                          "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"], close_fds=True)
-        time.sleep(2.5)                      # 让安装进程先起来（页面这时已收到 ok 回应）
+        log("自更新：下载完成 %s（%.1f MB），准备退出并静默安装…" % (dest, got / 1048576.0))
+        set_state("running", "下载完成，软件将自动关闭并安装新版，装完会自动重新打开…")
+        # 2026-10-09 修复「下载了但静默安装没落地」：原来是先起安装器、自己 2.5 秒后再退，
+        # 安装器解压快的话旧进程还没让位就去覆盖 ModelLookup.exe → 文件被占用，
+        # /SUPPRESSMSGBOXES 又吞掉报错窗 → 静默失败什么都不装。
+        # 改成交给一个独立的 cmd 帮助进程（DETACHED，跟本进程无父子关系）：
+        # 等 2 秒 → 强杀本程序（含 onefile 引导进程）→ 等 1 秒放句柄 →
+        # 跑静默安装（带 /LOG 留痕）→ 装完拉起新版。安装器 InitializeSetup
+        # 里另有同样的 taskkill 兜底（双保险，手动双击安装也吃这层）。
+        logf = os.path.join(os.environ.get("TEMP") or wp(""), "ModelLookup-Setup.log")
+        newexe = os.path.join(os.environ.get("LOCALAPPDATA") or "",
+                              "Programs", "ModelLookup", "ModelLookup.exe")
+        chain = ("ping -n 3 127.0.0.1 >nul"                            # ~2 秒，页面把提示显示完
+                 ' & taskkill /F /IM ModelLookup.exe >nul 2>&1'        # 先退出旧实例
+                 " & ping -n 2 127.0.0.1 >nul"                         # 等文件句柄释放
+                 ' & "%s" /SILENT /SUPPRESSMSGBOXES /NORESTART /LOG="%s"'
+                 ' & if exist "%s" start "" "%s"'
+                 ) % (dest, logf, newexe, newexe)
+        subprocess.Popen(["cmd", "/d", "/c", chain],
+                         creationflags=0x00000008)       # DETACHED_PROCESS
+        time.sleep(1.5)                      # 帮助进程先起来，页面此时已收到 ok 回应
         try:
             if MAIN_WIN is not None:
                 MAIN_WIN.hide()
         except Exception:
             pass
-        os._exit(0)                          # 让位给安装器覆盖文件
+        os._exit(0)                          # 让位给安装器（正常情况已被 taskkill 杀掉，这里是兜底）
     except Exception as e:
         set_state("error", "自更新失败：%s" % e)
 
