@@ -44,7 +44,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.3"
+APP_VERSION = "2.7.4"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -2424,21 +2424,28 @@ def build_menu(sub=False):
             MenuAction("软件更新…", upd_app),
             MenuAction("退出登录", logout),
         ]
+    # 2026-10-08 顶部菜单归类（用户要求：平铺 9 项太乱，收成三个下拉）：
+    #   数据(D) = 页面/在线表/数据更新/补图导入导出；账号(A) = 账号管理/退出登录；帮助(H) = 软件更新/关于
     return [
         Menu("数据(&D)", [
             MenuAction("重新加载页面", reload_page),
             MenuSeparator(),
+            MenuAction("从金山文档更新数据", upd),
+            MenuAction("更新实时库存", upd_stock),
+            MenuSeparator(),
             MenuAction("打开在线表（公布版）", source),
             MenuAction("打开在线表（价格表）", source_price),
+            MenuSeparator(),
+            MenuAction("导出我补的图", exp_img),
+            MenuAction("导入补图", imp_img),
         ]),
-        MenuAction("从金山文档更新数据", upd),
-        MenuAction("更新实时库存", upd_stock),
-        MenuAction("软件更新…", upd_app),
-        MenuAction("账号管理", adm),
-        MenuAction("退出登录", logout),
-        MenuAction("导出我补的图", exp_img),
-        MenuAction("导入补图", imp_img),
+        Menu("账号(&A)", [
+            MenuAction("账号管理", adm),
+            MenuAction("退出登录", logout),
+        ]),
         Menu("帮助(&H)", [
+            MenuAction("软件更新…", upd_app),
+            MenuSeparator(),
             MenuAction("关于", about),
         ]),
     ]
