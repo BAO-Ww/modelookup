@@ -277,6 +277,9 @@ a.markbtn.web:hover{border-color:var(--brand);background:#dde9ff}
 }
 .calc .ci{font-size:12px;color:var(--ink3)}
 .calc .ci b{color:var(--ink2);font-weight:600;font-variant-numeric:tabular-nums}
+.calc .cfr{font-size:11.5px;color:var(--ink3);display:inline-flex;align-items:center;gap:4px;cursor:pointer;flex:none;white-space:nowrap}
+.calc .cfr:hover{color:var(--ink2)}
+.calc .cfr input{width:auto;margin:0;accent-color:var(--brand);cursor:pointer}
 .calc .p-out{font-size:14.5px}
 .calc .p-out.pos{color:var(--ok)}
 .calc .p-out.neg{color:var(--neg)}
@@ -732,12 +735,15 @@ function calcHTML(it){
     + '<input type="number" min="0" step="1" inputmode="decimal" placeholder="输入你的定价"'
     + (isNum(saved) ? ' value="' + saved + '"' : '') + '>'
     + sel
+    /* 发全国要加 100 运费（卖家出），默认算上；只卖深惠广莞就把勾去掉 */
+    + '<label class="cfr" title="发深惠广莞以外要加 100 运费，勾上就在利润里扣掉；本地卖可以取消勾选">'
+    + '<input type="checkbox" class="cfrbox" checked> 发全国 −100运费</label>'
     + '<span class="ci">平台费1.6% <b class="p-fee">—</b></span>'
     + '<span class="ci">挣 <b class="p-out">—</b></span>'
     + '</div>';
 }
 function calcUpdate(box){
-  var inp = box.querySelector('input');
+  var inp = box.querySelector('input[type=number]');
   var sel = box.querySelector('.costsel');
   var cost = parseFloat(sel.value);
   var price = parseFloat(inp.value);
@@ -748,9 +754,15 @@ function calcUpdate(box){
   // 出库奖励加回利润：选中「滞销清理价」带滞销奖励、「样机清理价」带样机奖励（选项上 data-bn，无权限时为 0）
   var bn = 0;
   try { bn = parseFloat(sel.options[sel.selectedIndex].getAttribute('data-bn')) || 0; } catch(e){}
-  var fee = round2(price * FEE), profit = round2(price - price * FEE - cost + bn);
+  // 发全国运费 100（卖家承担）：勾上就扣；只发深惠广莞的本地单取消勾选
+  var cfr = box.querySelector('.cfrbox');
+  var freight = (cfr && cfr.checked) ? 100 : 0;
+  var fee = round2(price * FEE), profit = round2(price - price * FEE - cost + bn - freight);
+  var tags = [];
+  if (bn > 0) tags.push('含奖' + money(bn));
+  if (freight) tags.push('已扣运费100');
   feeEl.textContent = money(fee);
-  outEl.textContent = (profit >= 0 ? '+' : '−') + money(Math.abs(profit)) + (bn > 0 ? '（含奖' + money(bn) + '）' : '');
+  outEl.textContent = (profit >= 0 ? '+' : '−') + money(Math.abs(profit)) + (tags.length ? '（' + tags.join(' · ') + '）' : '');
   outEl.className = 'p-out ' + (profit >= 0 ? 'pos' : 'neg');
 }
 
@@ -769,7 +781,6 @@ var PERM_DEFS = [
   ['live',        '库存明细行（各仓）',        '界面显示'],
   ['sum',         '汇总行（正品/样机/次品仓）', '界面显示'],
   ['subsidy',     '补贴栏',                  '界面显示'],
-  ['xianyu',      '闲鱼行（ID/价/利润）',      '界面显示'],
   ['calc',        '闲鱼定价 / 已发布 / 复制',  '界面显示'],
   ['pubview',     '「已发布」筛选按钮',        '界面显示'],
   ['supplier',    '发货 / 货源',              '界面显示'],
@@ -793,7 +804,15 @@ var PERM_DEFS = [
   ['upd_yy',      '用友更新',                '操作按钮'],
   ['addimg',      '补图 / 导出比价图',        '操作按钮'],
 ];
-function authSave(){ try { localStorage.setItem('ml_auth', JSON.stringify(AUTH)); } catch(e){} }
+function authSave(){
+  try { localStorage.setItem('ml_auth', JSON.stringify(AUTH)); } catch(e){}
+  /* 镜像到本地服务存文件：WebView2 被「退出」硬杀时 localStorage 可能没落盘，
+     下次启动从这里兜底恢复（GET/POST /api/token）。AUTH=null 表示退出登录 → 清掉镜像。 */
+  try {
+    fetch('/api/token', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: AUTH ? JSON.stringify(AUTH) : '' }) });
+  } catch(e){}
+}
 function pok(k){
   if (!AUTH) return false;
   if (AUTH.role === 'admin') return true;
@@ -911,17 +930,29 @@ function ensureAuth(){
       m.querySelector('#ago').addEventListener('click', submit);
       m.querySelector('#ap').addEventListener('keydown', function(e){ if (e.key === 'Enter') submit(); });
     }
-    if (!AUTH){ showLogin(); return; }
-    authFetch('/perm').then(function(j){
-      if (j && j.ok){
-        AUTH.role = j.role; AUTH.perm = j.perm || {}; authSave();
-        afterAuth(); finish();
-      } else if (j && j._st === 0){
-        afterAuth(); finish();       // 云端连不上：先用缓存的权限顶着
-      } else {                       // 401 / 停用
-        AUTH = null; authSave(); showLogin();
-      }
-    });
+    function proceedAuth(){
+      if (!AUTH){ showLogin(); return; }
+      authFetch('/perm').then(function(j){
+        if (j && j.ok){
+          AUTH.role = j.role; AUTH.perm = j.perm || {}; authSave();
+          afterAuth(); finish();
+        } else if (j && j._st === 0){
+          afterAuth(); finish();       // 云端连不上：先用缓存的权限顶着
+        } else {                       // 401 / 停用
+          AUTH = null; authSave(); showLogin();
+        }
+      });
+    }
+    if (AUTH){ proceedAuth(); return; }
+    /* localStorage 里没有登录态（硬退出没落盘 / 换了缓存目录）→ 从本地服务镜像恢复 */
+    try {
+      fetch('/api/token').then(function(r){ return r.ok ? r.json() : null; }).then(function(j){
+        if (j && j.token){
+          try { AUTH = JSON.parse(j.token); } catch(e){ AUTH = null; }
+          if (AUTH) authSave();
+        }
+      }).catch(function(){}).then(function(){ proceedAuth(); });
+    } catch(e){ proceedAuth(); }
   });
 }
 function afterAuth(){
@@ -1325,8 +1356,10 @@ function renderItem(it){
   var natRaw = String(it.nat == null ? '' : it.nat).replace(/^[\s\-—－–]+/, '').trim();
   // 深惠广莞是所有型号的底线，而且**只有这里包邮**（用户口径）；外区要发就得加运费
   var natHTML = '<span class="pill loc">深惠广莞 · 包邮</span> ';
+  /* 表里光写「可以」的其实说的是「能发全国，但要加 100 运费」——按用户口径写明白 */
+  var NAT_LABEL = { '可以': '可发全国 · 加100运费' };
   if (natRaw && NAT_LOCAL.indexOf(natRaw) < 0){
-    natHTML += '<span class="pill nat-' + (NAT_EXTRA[natRaw] || 'q') + '">' + esc(natRaw) + '</span> ';
+    natHTML += '<span class="pill nat-' + (NAT_EXTRA[natRaw] || 'q') + '">' + esc(NAT_LABEL[natRaw] || natRaw) + '</span> ';
   }
 
   /* ---------- 库存（用友 YonSuite 实时数据，点「更新实时库存」刷新） ----------
@@ -1398,10 +1431,8 @@ function renderItem(it){
 
   /* ---------- 闲鱼 ----------
      利润同理：它 = 闲鱼价 - 平台费 - 成本，没填闲鱼价时算出来是负数，别显示。 */
-  var xyHTML = '';
-  if (it.xyid) xyHTML += '<span class="pill mono">ID ' + esc(it.xyid) + '</span> ';
-  if (isNum(it.xyp)) xyHTML += '<span class="pill">闲鱼价 ' + money(it.xyp) + '</span> ';
-  if (isNum(it.profit) && isNum(it.xyp)) xyHTML += '<span class="pill ' + (it.profit > 0 ? 'ok' : 'no') + '">利润 ' + money(it.profit) + '</span> ';
+  /* 闲鱼行（ID/价/利润）已按用户要求整行下掉（2026-10-08）：卡片不再显示。
+     it.xyid / it.xyp 数据保留，「导出比价图」里还在用。 */
 
   /* ---------- 汇总（2026-10 三次改版）：正品仓几台 / 样机仓几台 / 次品仓几台 ----------
      四次改版：跟库存行一样拆开 —— 一个仓类型一个 pill，别全挤在一个里。 */
@@ -1481,9 +1512,9 @@ function renderItem(it){
     + (pok('live') && liveHTML ? '<div class="row"><label>库存</label><span class="vs">' + liveHTML + '</span></div>' : '')
     + (pok('supplier') && shipHTML ? '<div class="row"><label>发货</label><span class="vs">' + shipHTML + '</span></div>' : '')
     // 美的系只在「美的」页里有报价，没有发货区域那一列 —— 不写「发往」免得误导
-    + (!it._md && pok('nat') && natHTML ? '<div class="row"><label>发往</label><span class="vs">' + natHTML + '</span></div>' : '')
+    + (pok('nat') && !it._md && natHTML ? '<div class="row"><label>发往</label><span class="vs">' + natHTML + '</span></div>' : '')
     + (pok('subsidy') && subHTML ? '<div class="row"><label>补贴</label><span class="vs">' + subHTML + '</span></div>' : '')
-    + (pok('xianyu') && xyHTML ? '<div class="row"><label>闲鱼</label><span class="vs">' + xyHTML + '</span></div>' : '')
+    /* 闲鱼行（ID/价/利润）整行下掉（2026-10-08 用户要求），导出比价图里仍保留 */
     + (pok('code') && it.code ? '<div class="row"><label>物料编码</label><span class="v mono">' + esc(it.code) + '</span></div>' : '')
     + '</article>';
 }
@@ -1966,13 +1997,21 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   }, 30000);
 })();
 
-/* ESC 关掉当前弹着的小窗（账号管理 / 我的账号 / 发布记录 / 正品·样机选择）；没有弹窗时不动 */
+/* ESC 关掉当前弹着的小窗（账号管理 / 我的账号 / 发布记录 / 正品·样机选择）；没有弹窗时不动。
+   Ctrl+W 收进托盘：WinForms 层的 KeyPreview 拦不到 WebView2 里的按键（键盘消息直达 Chromium 子窗口），
+   所以必须在页面里监听，经 pywebview js_api 调 Python 的 hide_main()（exe 版才挂了这个桥）。 */
 document.addEventListener('keydown', function(e){
-  if (e.key !== 'Escape') return;
-  var mk = document.getElementById('kindmask');
-  if (mk){ mk.remove(); return; }
-  var adm = document.getElementById('adminmask');
-  if (adm){ adm.remove(); }
+  if (e.key === 'Escape'){
+    var mk = document.getElementById('kindmask');
+    if (mk){ mk.remove(); return; }
+    var adm = document.getElementById('adminmask');
+    if (adm){ adm.remove(); }
+    return;
+  }
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'w' || e.key === 'W')){
+    e.preventDefault();
+    try { if (window.pywebview && window.pywebview.api) window.pywebview.api.hide_main(); } catch(err){}
+  }
 });
 
 window.addEventListener('scroll', function(){

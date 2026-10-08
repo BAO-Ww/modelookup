@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-型号查询  v2.7
+型号查询  v2.7.1
 ====================================
 独立窗口的桌面软件（自带 WebView2 内核，无地址栏 / 无浏览器外壳）：
 
@@ -43,7 +43,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7"
+APP_VERSION = "2.7.1"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1612,7 +1612,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
 # ------------------------------------------------------------------ HTTP（本地服务：给窗口里的页面用）
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ModelLookup/2.7"
+    server_version = "ModelLookup/2.7.1"
 
     def log_message(self, *a):
         pass
@@ -1712,6 +1712,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             return
 
+        if path == "/api/token":
+            # 登录态镜像（读）：页面启动时 localStorage 没有 token 就从这里兜底恢复。
+            # 背景：托盘「退出」会硬杀进程，WebView2 的 localStorage 偶发没落盘 → 每次都要重登。
+            f = wp("auth_token.json")
+            tok = None
+            try:
+                if os.path.isfile(f):
+                    with open(f, encoding="utf-8") as fh:
+                        tok = fh.read().strip() or None
+            except Exception:
+                tok = None
+            self._send(200, json.dumps({"token": tok}, ensure_ascii=False))
+            return
+
         self._send(404, json.dumps({"ok": False, "msg": "not found"}, ensure_ascii=False))
 
     def do_POST(self):
@@ -1731,6 +1745,22 @@ class Handler(BaseHTTPRequestHandler):
                                  args=(d.get("role"),), daemon=True).start()
             except Exception as e:
                 LOG.append("权限同步失败：%s" % e)
+            self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            return
+        if u.path == "/api/token":
+            # 登录态镜像（写）：登录时存 token JSON、退出登录时清掉。文件在 wp() 目录。
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+                f = wp("auth_token.json")
+                t = (d.get("token") or "").strip()
+                if t:
+                    with open(f, "w", encoding="utf-8") as fh:
+                        fh.write(t)
+                elif os.path.isfile(f):
+                    os.remove(f)
+            except Exception as e:
+                LOG.append("登录态镜像失败：%s" % e)
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             return
         if u.path == "/api/stock":
@@ -2097,6 +2127,15 @@ def run_app(httpd, port, startup_xlsx=None):
     global MAIN_WIN, LOGIN_WIN, YY_WIN
     url = "http://%s:%d/" % (HOST, port)
 
+    class _JsBridge:
+        """页面 → Python 的桥：Ctrl+W 在 WebView2 里拦不到（键盘直达 Chromium 子窗口，
+        WinForms KeyPreview 无效），由页面 keydown 调这里的 hide_main() 收进托盘。"""
+        def hide_main(self):
+            try:
+                MAIN_WIN.hide()
+            except Exception:
+                pass
+
     _dpi()                                  # 必须在量屏幕 / 建窗前：否则算出来是缩放前的尺寸
     w, h, x, y = fit_window(1480, 940)
     lw, lh, lx, ly = fit_window(1180, 860)
@@ -2110,6 +2149,7 @@ def run_app(httpd, port, startup_xlsx=None):
         background_color="#f5f7fb",
         text_select=True,
         menu=build_menu(),
+        js_api=_JsBridge(),
     )
     _tick("主窗口对象建好（%.0f ms）" % ((time.time() - t_cw) * 1000))
     t_cw = time.time()
@@ -2203,6 +2243,12 @@ def run_app(httpd, port, startup_xlsx=None):
                     httpd.shutdown()
                 except Exception:
                     pass
+                # 先优雅关窗（给 WebView2 半秒把 localStorage 落盘，登录态才保得住），再兜底硬退
+                try:
+                    bv.Close()
+                except Exception:
+                    pass
+                time.sleep(0.8)
                 os._exit(0)          # 后台线程（自动更新等）一并干净走人
 
             menu = WF.ContextMenuStrip()
