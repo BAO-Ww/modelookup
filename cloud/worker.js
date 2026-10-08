@@ -271,9 +271,7 @@ async function route(request, env, path) {
     const marks = await getPub(who);
     if (b.on === false) {
       delete marks[c];
-      const pp = await getPubP(who);
-      delete pp[c];
-      await env.KV.put("pubp_" + who, JSON.stringify(pp));
+      // 2026-10-08：取消发布**不再删定价** —— 价格跟型号走，不跟发布标记走（用户要求）
     } else {
       marks[c] = { t: Date.now(), k: b.k === "s" ? "s" : "l" };
       if (b.p != null && isFinite(+b.p)) {
@@ -299,11 +297,12 @@ async function route(request, env, path) {
     if (b.prices && typeof b.prices === "object") {
       const pp = await getPubP(who);
       for (const [c, p] of Object.entries(b.prices)) {
-        if (c in marks && isFinite(+p)) pp[c] = +p;
+        // 2026-10-08：全量收价 —— 没点「标记发布」的型号定价也要存（用户要求）
+        if (isFinite(+p)) pp[c] = +p;
       }
       await env.KV.put("pubp_" + who, JSON.stringify(pp));
     }
-    return J({ ok: true, marks });
+    return J({ ok: true, marks, prices: await getPubP(who) });
   }
   // 管理号看所有**子账号**各发布了什么（带各自的闲鱼定价；管理号自己不在这份名单里）
   if (path === "/puball" && request.method === "GET") {
