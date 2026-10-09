@@ -84,6 +84,17 @@ def fetch_xlsx(page, ctx, tab):
     page.on("request", lambda r: seen.append(r.url))
     page.goto(share, wait_until="domcontentloaded", timeout=90000)
     page.wait_for_timeout(8000)      # 等分享页自己发 API 请求，好从中捞真实 fileId
+    # 诊断：落地到哪了、页面标题是什么（分享被限制时会跳登录页，一眼看出来）
+    log("%s：落地 %s" % (name, (page.url or "")[:90]))
+    try:
+        log("%s：标题《%s》" % (name, (page.title() or "")[:40]))
+    except Exception:
+        pass
+    filereqs = [u for u in seen if "/file/" in u][:6]
+    if filereqs:
+        log("%s：页面发出的文件请求示例：%s" % (name, " | ".join(u[:100] for u in filereqs)))
+    else:
+        log("%s：页面 8 秒内没发过任何 /file/ 请求（分享页可能没进到文档）" % name)
     import re as _re
     for u in seen:
         m = _re.search(r"/file/(\d{6,})/", u)
