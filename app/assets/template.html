@@ -522,11 +522,16 @@ function stockOf(mo){
 /* 已发布型号按发布类型的剩余可售（2026-10-09 从 pubStockWarn 抽出来，筛选「没库存」也要用）：
    正品发布看非样机/非次品仓的可用量，样机发布看样机仓；库存里查不到返回 -1（也当没库存提醒） */
 function pubLeftOf(mo, kind){
-  /* 2026-10-09 用户定稿：跟卡片「清理数量」完全同一口径 —— 清理数量>0 = 有库存。
-     之前正品发布只数非样机非次品仓，结果型号那 1 台躺在别的仓，卡片显示清理数量 1
-     告警却说没库存（JSQ25/CXW 实锤误报）。现在永远用卡片显示的那个数 */
+  /* 2026-10-09 晚再定稿（用户：库存对不对是重中之重）：用友实时库存是唯一准绳——
+     · 用友能查到这台 → 用可用量（0 就是真的没货，要报）；
+     · 用友现存量报表里连这一行都没有 → 就是没有现存 = 没货（之前回退清理数量 1，
+       导致卖光/清完的型号永远「有货」不报警，CXW-358-C3Q90FGUD 实锤）；
+     · 只有实时库存还没拉过时才回退金山表清理数量兜底（此时横幅整体隐藏，仅筛选用）。
+     （更早的误报反例 JSQ25：型号在用友有货但躺在别的仓——那会儿只数非样机非次品仓
+       才漏的，现在直接用全仓可用量，不会重蹈） */
   var live = stockOf(mo);
-  if (live && isNum(live.a)) return Math.round(live.a);
+  if (live) return isNum(live.a) ? Math.round(live.a) : 0;
+  if (STOCKDATA && STOCKDATA.stock && Object.keys(STOCKDATA.stock).length) return 0;
   var it = null;
   for (var i = 0; i < ALL.length; i++){ if (ALL[i].mo === mo){ it = ALL[i]; break; } }
   var q = it ? (isNum(it.lq) ? it.lq : (isNum(it.sq) ? it.sq : null)) : null;
@@ -1703,10 +1708,17 @@ function renderItem(it){
     if (pok('p_lp') && isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
     if (pok('p_lb') && isNum(it.lb) && it.lb > 0) g.push(prCell('滞销出库奖励', it.lb, 'bonus', 'bonus-lb'));
     if (pok('p_sb') && isNum(it.sb) && it.sb > 0) g.push(prCell('样机出库奖励', it.sb, 'bonus', 'bonus-sb'));
-    /* 清理数量（2026-10 三次改版）：= 用友实时库存各仓数量加总；没拉过实时时退回金山表列 */
-    var qn = (live && isNum(live.a)) ? Math.round(live.a)
-           : (isNum(it.lq) ? it.lq : (isNum(it.sq) ? it.sq : null));
-    if (pok('p_qty') && qn != null) g.push('<div class="pr qty"><span>清理数量</span><b>' + qn + '</b></div>');
+    /* 清理数量（2026-10 三次改版）：= 用友实时库存各仓数量加总。
+       2026-10-09 晚（用户：库存对不对是重中之重）：实时已拉过就以用友为准——
+       报表里查不到这台 = 没有现存 = 0（不再拿金山表的计划清理数量冒充库存，
+       CXW-358-C3Q90FGUD 卖光了还显示 1 实锤）；0 时红字提示「已无库存」 */
+    var qn, qnT = '';
+    if (live && isNum(live.a)) qn = Math.round(live.a);
+    else if (STOCKDATA && STOCKDATA.stock && Object.keys(STOCKDATA.stock).length){ qn = 0; qnT = ' title="用友实时库存里已经没有这台了（0 台）；下面数字是价格表里的计划清理量，不是库存"'; }
+    else qn = (isNum(it.lq) ? it.lq : (isNum(it.sq) ? it.sq : null));
+    if (pok('p_qty') && qn != null) g.push('<div class="pr qty"' + qnT + '><span>清理数量</span><b'
+      + (qn === 0 ? ' style="color:#b42318">0 <i style="font-style:normal;font-weight:400;font-size:11px">已无库存</i>' : '>' + qn)
+      + '</b></div>');
     if (pok('p_pt') && isNum(it.pt)) pg.push(prCell('价格含税', it.pt, 'tax', '价格含税'));
     if (pok('p_np') && isNum(it.npz)) pg.push(prCell('滞销价格', it.npz, 'hot2', '滞销价格'));
     if (pok('p_ny') && isNum(it.nyz)) pg.push(prCell('样机价格', it.nyz, 'hot2', '样机价格'));

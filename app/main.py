@@ -44,7 +44,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.12"
+APP_VERSION = "2.7.13"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1467,21 +1467,37 @@ def _app_install_bg(log):
         # 等 2 秒 → 强杀本程序（含 onefile 引导进程）→ 等 1 秒放句柄 →
         # 跑静默安装（带 /LOG 留痕）→ 装完拉起新版。安装器 InitializeSetup
         # 里另有同样的 taskkill 兜底（双保险，手动双击安装也吃这层）。
-        logf = os.path.join(os.environ.get("TEMP") or wp(""), "ModelLookup-Setup.log")
+        logf = os.path.join(os.environ.get("TEMP") or wp(""), "ModelLookup-Update.log")
         newexe = os.path.join(os.environ.get("LOCALAPPDATA") or "",
                               "Programs", "ModelLookup", "ModelLookup.exe")
-        chain = ("ping -n 3 127.0.0.1 >nul"                            # ~2 秒，页面把提示显示完
-                 ' & taskkill /F /IM ModelLookup.exe >nul 2>&1'        # 先退出旧实例
-                 " & ping -n 2 127.0.0.1 >nul"                         # 等文件句柄释放
-                 ' & "%s" /SILENT /SUPPRESSMSGBOXES /NORESTART /LOG="%s"'
-                 ' & if exist "%s" start "" "%s"'
-                 ) % (dest, logf, newexe, newexe)
-        # 2026-10-09 修「更新时弹黑色 ping 窗口」：原来用 DETACHED_PROCESS 起 cmd——
-        # cmd 自己没控制台，但逐个跑 ping/taskkill 这些控制台程序时 Windows 会给
-        # 每个子程序新分配控制台 → 黑窗口弹出来。换成 CREATE_NO_WINDOW：cmd 带
-        # 一个隐藏控制台，所有子程序继承同一个隐藏控制台，全程无窗口。
-        # （父进程 os._exit 后帮助进程照样存活，不依赖父子关系，等效原来的 detached。）
-        subprocess.Popen(["cmd", "/d", "/c", chain],
+        # 2026-10-09 深夜 2.7.11→2.7.12 自更新静默失败复盘：安装链用 cmd /c 单行长命令 +
+        # 内嵌多层引号，经 list2cmdline 转义后 cmd 的引号剥离规则可能把命令行搞乱 →
+        # 安装器从未运行（TEMP 无 /LOG 文件实锤）。改成把步骤写成独立 .cmd 批处理
+        # （纯 ASCII，无引号嵌套问题），再 cmd /c 执行该文件；每步 echo 留痕到
+        # ModelLookup-Update.log，下次失败能直接看出断在哪一步。
+        bat = os.path.join(os.environ.get("TEMP") or wp(""), "ml_update.cmd")
+        setupf = dest
+        setlog = os.path.join(os.environ.get("TEMP") or wp(""), "ModelLookup-Setup.log")
+        q = lambda p: '"' + p + '"'           # 批处理路径加引号（不能用 % 格式化：
+        batlines = [                          # 行内 %date%/%errorlevel% 会被 Python 误解析）
+            "@echo off",
+            "echo [%date% %time%] update helper start > " + q(logf),
+            "ping -n 3 127.0.0.1 >nul",
+            "taskkill /F /IM ModelLookup.exe >>" + q(logf) + " 2>&1",
+            "echo taskkill rc=%errorlevel% >> " + q(logf),
+            "ping -n 2 127.0.0.1 >nul",
+            q(setupf) + " /SILENT /SUPPRESSMSGBOXES /NORESTART /LOG=" + q(setlog)
+            + " >>" + q(logf) + " 2>&1",
+            "echo setup rc=%errorlevel% >> " + q(logf),
+            "if exist " + q(newexe) + ' start "" ' + q(newexe),
+            "echo [%date% %time%] update helper done >> " + q(logf),
+        ]
+        with io.open(bat, "w", encoding="ascii", errors="ignore") as f:
+            f.write("\r\n".join(batlines) + "\r\n")
+        # 2026-10-09 修「更新时弹黑色 ping 窗口」：CREATE_NO_WINDOW 让 cmd 带一个
+        # 隐藏控制台，所有子程序继承它，全程无窗口。（父进程 os._exit 后帮助进程
+        # 照样存活，不依赖父子关系。）
+        subprocess.Popen(["cmd", "/d", "/c", bat],
                          creationflags=0x08000000)       # CREATE_NO_WINDOW
         time.sleep(1.5)                      # 帮助进程先起来，页面此时已收到 ok 回应
         try:
