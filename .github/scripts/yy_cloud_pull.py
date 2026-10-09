@@ -181,6 +181,17 @@ def login_and_fetch():
                 break
             page.wait_for_timeout(500)
 
+        # 原始行落日志（2026-10-10 排查「L2 显示 3 台实际 2 台」）：关注型号逐行打全字段
+        WATCHLIST = {"L2"}
+        for r0 in all_rows:
+            _mo = norm_model(r0.get(K_MODEL))
+            base = _mo
+            for w in WATCHLIST:
+                if _mo == w or (_mo.startswith(w) and len(_mo) <= len(w) + 6):
+                    log("WATCH %s 原始行：%s" % (
+                        base, json.dumps(r0, ensure_ascii=False)))
+                    break
+
         # 从浏览器侧拿全套 cookie（调试用）
         browser.close()
         return all_rows
