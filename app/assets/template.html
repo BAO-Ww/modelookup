@@ -1199,6 +1199,16 @@ function afterAuth(){
   ab.className = 'chip'; ab.id = 'admbtn'; ab.textContent = '👥 账号管理';
   ab.addEventListener('click', AUTH.role === 'admin' ? openAdmin : openSelf);
   bar.appendChild(ab);
+  // 我的显示开关（2026-10-10）：菜单「显示(S)」经 js_click 点这个隐藏按钮开面板。
+  // 之前菜单直接 evaluate_js 调 openSelfDisplay() 用户实测点不开（原因未明），
+  // 改走与「账号管理」菜单完全相同、实测可靠的 js_click + 直挂监听链路
+  if (AUTH.role === 'admin' && !document.getElementById('selfdispbtn')){
+    var sb = document.createElement('button');
+    sb.className = 'chip'; sb.id = 'selfdispbtn'; sb.hidden = true;
+    sb.textContent = '⚙ 我的显示开关';
+    sb.addEventListener('click', openSelfDisplay);
+    bar.appendChild(sb);
+  }
   applyPermBar();
   // 权限热刷新（2026-10-09）：perm 烤在登录 token 里，管理号勾完/撤了权限，
   // 子账号要重新登录才看得到变化。启动时拉一次最新权限表并重排界面——
@@ -1292,12 +1302,8 @@ function openAdmin(){
     + '<span style="font-size:12.5px;color:#7b8494;flex:none">选择子用户</span>'
     + '<select id="asel" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #d7dce6;border-radius:9px;font-size:13.5px;background:#fff;outline:0"></select>'
     + '</div>'
-    + '<div id="aself" style="margin-bottom:12px;padding:10px 12px;border:1px dashed #c9d3e3;border-radius:10px;background:#f8fafd">'
-    + '<div style="font-size:12.5px;color:#475467;margin-bottom:8px"><b>我的显示开关</b>'
-    + '<span style="color:#8a93a3">（管理号自己看什么，点亮=显示、点灰=隐藏，只影响本机，子用户不受影响）</span>'
-    + '<a href="javascript:void 0" id="aselfall" style="float:right;font-size:12px">全部显示</a></div>'
-    + '<div class="permgroups" id="aselfchips"></div>'
-    + '</div>'
+    /* 2026-10-10 用户反馈：管理号自己的「我的显示开关」不该出现在账号管理面板里
+       （选着子用户管权限时上面躺着自己的开关，乱）。已删，只留菜单「显示(S)」入口 */
     + '<div id="alist">加载中…</div>'
     + '<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">'
     + '<button class="achip" id="aadd">＋ 新增子账号</button>'
@@ -1305,15 +1311,6 @@ function openAdmin(){
     + '<button class="achip" id="apubs" title="看每个账号发布过哪些型号（云端记录，跟账号走）">📋 发布记录</button>'
     + '</div></div>';
   document.body.appendChild(m);
-  /* 我的显示开关（renderSelfChips 共用）：点一下立即生效（本机 + 云端），不用「保存全部」 */
-  var _sd = renderSelfChips(m.querySelector('#aselfchips'));
-  m.querySelector('#aselfall').addEventListener('click', function(){
-    ADMIN_HIDE = {};    // 恢复全看
-    adminHideSave();
-    _sd();
-    applyPermBar();
-    run();
-  });
   m.querySelector('#aclose').addEventListener('click', function(){ m.remove(); });
   m.querySelector('#apubs').addEventListener('click', function(){
     /* 发布记录视图里下拉没意义：藏起来，回账号列表再亮出来 */

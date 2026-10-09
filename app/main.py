@@ -59,10 +59,13 @@ for _k in [k for k in os.environ if k.startswith("_PYI") or k == "_MEIPASS2"]:
         del os.environ[_k]
     except Exception:
         pass
+# 2026-10-10：del _k 在「环境里本来就没有 _PYI_*」时会 NameError（源码直跑实锤）——
+# 循环体没执行 _k 就没定义。改成兜底赋值再删，两条路都安全。
+_k = None
 del _k
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.15"
+APP_VERSION = "2.7.16"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -2870,8 +2873,9 @@ def build_menu(sub=False):
 
     def selfdisp():
         # 我的显示开关（2026-10-09 用户要求：入口放顶部菜单栏，顶栏不放）
-        webview.windows[0].evaluate_js(
-            "if (typeof openSelfDisplay === 'function') openSelfDisplay();")
+        # 2026-10-10：直接 evaluate_js 调 openSelfDisplay() 用户实测点不开，
+        # 改走与 adm() 相同的 js_click 链路（点页面里的隐藏按钮 selfdispbtn）
+        js_click("selfdispbtn")
 
     def exp_img():
         if not guarded("导出我补的图", "addimg"):
