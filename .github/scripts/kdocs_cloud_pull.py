@@ -77,12 +77,23 @@ def worker_req(path, method="GET", obj=None, timeout=120):
 
 
 def fetch_xlsx(page, ctx, tab):
-    """打开分享页 → 等会话就绪 → 同源 XHR 拿直链 → 下载 xlsx 字节。"""
+    """打开分享页 → 从页面网络请求里反查 fileId（软件 probe_file_id 同款，
+    写死的 fid 可能过期）→ 同源 XHR 拿直链 → 下载 xlsx 字节。"""
     name, share, fid = tab["name"], tab["share"], tab["fid"]
+    seen = []
+    page.on("request", lambda r: seen.append(r.url))
     page.goto(share, wait_until="domcontentloaded", timeout=90000)
+    page.wait_for_timeout(8000)      # 等分享页自己发 API 请求，好从中捞真实 fileId
+    import re as _re
+    for u in seen:
+        m = _re.search(r"/file/(\d{6,})/", u)
+        if m:
+            if m.group(1) != fid:
+                log("%s：fileId 有更新（%s → %s），用新的" % (name, fid, m.group(1)))
+                fid = m.group(1)
+            break
     raw = b""
     for attempt in range(6):          # 登录态注入后一般一次就过；多试几轮防页面慢
-        page.wait_for_timeout(5000)
         r = page.evaluate(XHR_JS % fid)
         st, _, txt = str(r).partition("|")
         if st == "200" and txt[:2] != "PK":
@@ -95,14 +106,16 @@ def fetch_xlsx(page, ctx, tab):
                 resp = ctx.request.get(du, timeout=120000)
                 raw = resp.body()
                 if raw[:2] == b"PK":
-                    log("%s：拿到直链并下载 %.2f MB（第 %d 次尝试）"
-                        % (name, len(raw) / 1048576.0, attempt + 1))
+                    log("%s：拿到直链并下载 %.2f MB（第 %d 次尝试，fid=%s）"
+                        % (name, len(raw) / 1048576.0, attempt + 1, fid))
                     return raw
                 log("%s：直链返回的不是文件（前 4 字节 %r）" % (name, raw[:4]))
         else:
             log("%s：第 %d 次还没拿到（status=%s，%s）"
                 % (name, attempt + 1, st, txt[:80].replace("\n", " ")))
-    raise RuntimeError("%s：多次尝试都拿不到直链（登录态可能过期，管理号机器重新上传一次）" % name)
+            if "permissionDenied" in txt and attempt == 2:
+                break                 # 换 fid 也没戏，别空耗
+    raise RuntimeError("%s：多次尝试都拿不到直链（fid=%s，登录态/分享权限检查一遍）" % (name, fid))
 
 
 def load_kdocs_cookies():
