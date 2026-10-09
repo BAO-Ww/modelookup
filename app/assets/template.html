@@ -2412,9 +2412,14 @@ function pickCell(cell){
   /* 走一遍 input 事件：calcUpdate + PRICES 持久化都挂在那儿，别抄第二份 */
   if (inp) inp.dispatchEvent(new Event('input', { bubbles: true }));
 }
+/* 看子用户发布 = 只读（2026-10-10 用户补刀）：点价格格会把价填进定价框并
+   dispatch input → PRICES 存进全局定价表——readonly 挡得住键盘挡不住这个，
+   查看模式下 prpick 点格（填价/切口径/奖励开关）一律不响应。 */
+function svRONow(){ return !!(window.SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0'); }
 listEl.addEventListener('click', function(e){
   var cell = e.target.closest ? e.target.closest('.pr.prpick') : null;
-  if (cell) pickCell(cell);
+  if (!cell || svRONow()) return;
+  pickCell(cell);
 });
 
 [pminEl, pmaxEl].forEach(function(el){
