@@ -69,6 +69,10 @@ body{
 .sidefoot .upnote .spin{display:inline-block;width:11px;height:11px;border:2px solid #cfdcf6;
   border-top-color:var(--brand);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:4px}
 .sidecount{font-size:11.5px;color:var(--ink3);margin-top:6px;line-height:1.6}
+.sideall{display:block;width:100%;margin-top:10px;padding:9px 12px;border:0;border-radius:9px;
+  background:var(--brand);color:#fff;font-size:13px;font-weight:600;cursor:pointer;text-align:center}
+.sideall:hover{background:var(--brand-d)}
+.sideall:disabled{opacity:.55;cursor:default}
 .sidecount b{color:var(--ink2);font-weight:600}
 /* 清理价区间：标签 + 最低 ~ 最高 一行。⚠ flex:1+min-width:0 ——
    之前 width:100% 叠在标签旁边直接把 fgroup 撑破，侧栏底部被顶出横向滚动条 */
@@ -425,7 +429,8 @@ footer a:hover{text-decoration:underline}
         </div>
       </div>
       <div class="updbar" id="updbar" hidden style="display:none">
-        <!-- 四个操作按钮已移到窗口顶部菜单栏（帮助前）；这里只留隐藏按钮给菜单触发用 -->
+        <!-- 四个操作按钮已移到窗口顶部菜单栏（帮助前）；这里只留隐藏按钮给菜单触发用。
+             「全部更新」2026-10-09 按用户要求挪到侧栏底部常显（见 .sidefoot） -->
         <button class="chip" id="updbtn">↻ 从金山文档更新数据</button>
         <button class="chip" id="stkbtn" title="管理号：从用友 YonSuite 拉实时现存量，拉完自动共享给所有子账号；子账号：直接从云端同步管理号共享的库存（不用登用友）">⟳ 更新实时库存</button>
         <button class="chip" id="appupd" title="检查并安装新版本：下载后在软件里直接静默覆盖安装，不用自己去下">⬆ 软件更新</button>
@@ -437,6 +442,7 @@ footer a:hover{text-decoration:underline}
       <div class="sidefoot">
         <span class="upnote" id="updmsg"></span>
         <div class="sidecount" id="meta"></div>
+        <button class="sideall" id="allbtn" title="一键全量：金山表格（型号/价格/补贴）→ 用友实时库存，一条龙跑完">全部更新</button>
       </div>
     </aside>
 
@@ -2089,13 +2095,14 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   var bar   = document.getElementById('updbar');
   var btn   = document.getElementById('updbtn');
   var stk   = document.getElementById('stkbtn');
+  var all   = document.getElementById('allbtn');
   var msg   = document.getElementById('updmsg');
-  bar.hidden = false;
-
   function busy(on, label){
-    btn.disabled = on; stk.disabled = on;
-    btn.textContent = on ? (label || '正在更新…') : '↻ 从金山文档更新数据';
-    stk.textContent = on ? (label || '正在更新…') : '⟳ 更新实时库存';
+    // 2026-10-09：进度反馈全在侧栏底部（updmsg 转圈文字 + 全部更新按钮变灰变字），
+    // 隐藏按钮条不再闪现（用户反馈闪一排隐藏按钮很怪）
+    if (btn){ btn.disabled = on; btn.textContent = on ? (label || '正在更新…') : '↻ 从金山文档更新数据'; }
+    if (stk){ stk.disabled = on; stk.textContent = on ? (label || '正在更新…') : '⟳ 更新实时库存'; }
+    if (all){ all.disabled = on; all.textContent = on ? (label || '正在更新…') : '全部更新'; }
   }
   function reset(){ busy(false); }
 
@@ -2141,6 +2148,41 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
       poll();
     }).catch(function(e){ msg.textContent = '请求失败：' + e; reset(); });
   });
+
+  /* ---- 全部更新：金山表格 + 用友库存 一条龙（2026-10-09） ---- */
+  if (all){
+    all.addEventListener('click', function(){
+      if (all.disabled) return;
+      busy(true, '正在全部更新…');
+      msg.innerHTML = '<span class="spin"></span>正在全量更新（型号/价格/补贴 → 库存）…';
+      fetch('/api/updateall', { method: 'POST', cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
+        if (!r.ok){
+          if (r.running){ pollAll(); return; }   // 已经在跑（比如定时任务先动了）：直接接管显示进度
+          msg.textContent = '更新失败：' + (r.msg || ''); busy(false); return;
+        }
+        pollAll();
+      }).catch(function(e){ msg.textContent = '请求失败：' + e; busy(false); });
+    });
+  }
+  function pollAll(){
+    fetch('/api/updateall', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
+      if (s.running){
+        fetch('/api/state', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(st){
+          msg.innerHTML = '<span class="spin"></span>' + esc(st.msg || '正在更新…');
+          setTimeout(pollAll, 1200);
+        }).catch(function(){ setTimeout(pollAll, 1500); });
+        return;
+      }
+      if (s.had_err){
+        var bad = esc(s.msg || '');
+        msg.innerHTML = '⚠ 更新完成，部分环节失败<br>' + esc(s.summary || '').replace(/\u3000\|\u3000/g, '<br>')
+          + (bad ? '<br>失败：' + bad : '');
+      } else {
+        msg.innerHTML = '✅ 全部更新完成<br>' + esc(s.summary || '').replace(/\u3000\|\u3000/g, '<br>') + '<br>正在刷新…';
+      }
+      setTimeout(function(){ location.reload(); }, s.had_err ? 6000 : 3500);
+    }).catch(function(){ setTimeout(pollAll, 1500); });
+  }
 
   /* ---- 软件自更新：查新版 → 一键下载静默覆盖安装（2026-10-08） ---- */
   (function(){

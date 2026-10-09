@@ -12,7 +12,7 @@ on:
         description: "备注（可选）"
         required: false
   schedule:
-    - cron: "0 */2 * * *"   # UTC 每 2 小时（xx:00，错开库存链的 xx:30）= 北京时间每 2 小时
+    - cron: "40 0-15 * * *"   # UTC 0-15 点每小时（:40，错开用友链的 :10）= 北京时间 8:40–23:40 每小时一次；0点-8点不跑（2026-10-09 用户口径）
 
 permissions:
   contents: read
