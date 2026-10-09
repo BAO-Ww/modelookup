@@ -80,7 +80,12 @@ Name: "{userdesktop}\型号查询"; Filename: "{app}\{#ExeName}"; Tasks: desktop
 Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; \
     StatusMsg: "正在安装 Microsoft Edge WebView2 运行时（第一次装需要，约 1 分钟）…"; \
     Flags: waituntilterminated runhidden; Check: not WebView2Installed
-Filename: "{app}\{#ExeName}"; Description: "立即打开 型号查询"; \
+; 2026-10-10：postinstall 不能直接拉起 exe——PyInstaller 6.22.2 的父进程校验会把
+; 环境里继承来的 _PYI_* 引导变量当成「onefile 子进程」特征，若父进程不是同一个 exe
+; 就弹 Security validation failure 起不来（旧版 2.7.14 自更新链传下来的环境是脏的）。
+; 括号分组：先 for 删光 _PYI_* 再 start（不分组的话 start 会绑进 do 体，
+; 每个变量拉起一次；实测验证清理后 set _PYI 无残留、start 只跑一次）。
+Filename: "{cmd}"; Parameters: "/d /c (for /f \"tokens=1 delims==\" %v in ('set _PYI 2^>nul') do set \"%v=\") & start \"\" \"{app}\{#ExeName}\""; Description: "立即打开 型号查询"; \
     Flags: nowait postinstall
 
 [UninstallRun]
