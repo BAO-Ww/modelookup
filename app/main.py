@@ -65,7 +65,7 @@ _k = None
 del _k
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.17"
+APP_VERSION = "2.7.18"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
