@@ -111,28 +111,24 @@ begin
   Result := HasPv(HKLM32) or HasPv(HKLM64) or HasPv(HKCU32) or HasPv(HKCU64);
 end;
 
-; 2026-10-10：PyInstaller 6.22.2 父进程安全校验（GHSA-9fxf-4qw3-ghmr）——Setup 环境里
-; 若带着 _PYI_* 引导变量（旧版 2.7.14 自更新链用脏环境拉起 Setup 时会传入），postinstall
-; 拉起的新版 exe 引导器会误判自己是 onefile 子进程，弹 Security validation failure 起不来。
-; 在 InitializeSetup 里把这些变量从 Setup 自己的环境删光（SetEnvironmentVariable 传空值
-; 即删除该变量），子进程一律继承干净环境。变量清单对齐 PyInstaller 6.22.x bootloader。
+// 2026-10-10：PyInstaller 6.22.2 父进程安全校验（GHSA-9fxf-4qw3-ghmr）——Setup 环境里
+// 若带着 _PYI_* 引导变量（旧版 2.7.14 自更新链用脏环境拉起 Setup 时会传入），postinstall
+// 拉起的新版 exe 引导器会误判自己是 onefile 子进程，弹 Security validation failure 起不来。
+// 在 InitializeSetup 里把这些变量从 Setup 自己的环境删光（SetEnvironmentVariable 传空值
+// 即删除该变量），子进程一律继承干净环境。变量清单对齐 PyInstaller 6.22.x bootloader。
+// 注意：[Code] 段内注释只能用 //，不能用 iss 其他段的 ; 。
 function SetEnvironmentVariable(lpName: string; lpValue: string): BOOL;
   external 'SetEnvironmentVariableW@kernel32.dll stdcall';
 
 procedure ScrubPyiEnv();
-var
-  Names: array[0..6] of string;
-  I: Integer;
 begin
-  Names[0] := '_MEIPASS2';
-  Names[1] := '_PYI_ARCHIVE_FILE';
-  Names[2] := '_PYI_APPLICATION_HOME_DIR';
-  Names[3] := '_PYI_ONESHOT_PARENT_PID';
-  Names[4] := '_PYI_PARENT_PROCESS_LEVEL';
-  Names[5] := '_PYI_SPLASH_IPC';
-  Names[6] := '_PYI_MODULE_COFFEE';
-  for I := 0 to 6 do
-    SetEnvironmentVariable(Names[I], '');
+  SetEnvironmentVariable('_MEIPASS2', '');
+  SetEnvironmentVariable('_PYI_ARCHIVE_FILE', '');
+  SetEnvironmentVariable('_PYI_APPLICATION_HOME_DIR', '');
+  SetEnvironmentVariable('_PYI_ONESHOT_PARENT_PID', '');
+  SetEnvironmentVariable('_PYI_PARENT_PROCESS_LEVEL', '');
+  SetEnvironmentVariable('_PYI_SPLASH_IPC', '');
+  SetEnvironmentVariable('_PYI_MODULE_COFFEE', '');
 end;
 
 function InitializeSetup(): Boolean;
