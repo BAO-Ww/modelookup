@@ -170,6 +170,7 @@ def main():
         log("探测云端 ts 失败（按无旧数据处理）：%s" % e)
 
     files, hashes = {}, []
+    failures = []
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         ctx = browser.new_context(
@@ -179,10 +180,23 @@ def main():
         ctx.add_cookies(load_kdocs_cookies())   # 注入管理号的金山登录态
         page = ctx.new_page()
         for tab in TABLES:
-            raw = fetch_xlsx(page, ctx, tab)
+            try:
+                raw = fetch_xlsx(page, ctx, tab)
+            except Exception as e:
+                # 单表容错：一张被拒（比如分享设置了禁止下载）不要拖死另一张
+                failures.append("%s：%s" % (tab["name"], e))
+                log("⚠ %s 拉取失败，先上传拉到的部分：%s" % (tab["name"], e))
+                continue
             files[tab["name"]] = base64.b64encode(raw).decode("ascii")
             hashes.append(hashlib.sha256(raw).hexdigest()[:12])
         browser.close()
+
+    if not files:
+        raise RuntimeError("两张表一张都没拉到：%s" % "; ".join(failures))
+    if failures:
+        OUT.write("⚠ 部分表格没拉到（软件端会继续用旧数据）：\n")
+        for f in failures:
+            OUT.write("- %s\n" % f)
 
     ts = "-".join(hashes)
     log("本次内容哈希 ts=%s（云端 %s）" % (ts, old_ts or "无"))

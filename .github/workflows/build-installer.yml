@@ -137,11 +137,14 @@ jobs:
 
       - name: 上传 Artifact（供检查 / 手动下载）
         uses: actions/upload-artifact@v4
+        # 2026-10-09：Artifact 存储配额满会把整个任务拖死，连 Release 都发不出去 ——
+        # 产物只是备用下载渠道（Release 资产才是正主），失败就跳过
+        continue-on-error: true
         with:
           name: 型号查询-${{ steps.ver.outputs.tag || 'dev' }}
           path: out/*
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 7
 
       - name: 发布 Release
         if: steps.ver.outputs.release == 'true'
