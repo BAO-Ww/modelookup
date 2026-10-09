@@ -405,6 +405,25 @@ async function route(request, env, path) {
     return J({ ok: true, ts: obj.ts || "", by: obj.by || "" });
   }
 
+  // ---------- 金山登录态中转（2026-10-09）----------
+  // 云端浏览器没有金山会话，匿名拉表会被拒（实测 userNotLogin）。
+  // 管理号机器把自己 WebView2 里的 kdocs cookies 提取出来存这里（CDP 抓取），
+  // 云端定时任务每次跑之前取走注入浏览器。仅管理号可读写。
+  if (path === "/kdauth" && request.method === "POST") {
+    const users = await getUsers(env);
+    if ((users[who] || {}).role !== "admin") return jerr("只有管理号能存金山登录态", 403);
+    const b = await request.json().catch(() => ({}));
+    if (!b || !Array.isArray(b.cookies) || !b.cookies.length) return jerr("cookies 为空，拒收");
+    await env.KV.put("kdauth", JSON.stringify({ cookies: b.cookies, by: who, up: Date.now() }));
+    return J({ ok: true, n: b.cookies.length });
+  }
+  if (path === "/kdauth" && request.method === "GET") {
+    const raw = await env.KV.get("kdauth");
+    if (!raw) return jerr("云端还没有金山登录态（管理号机器上传一次）", 404);
+    const obj = JSON.parse(raw);
+    return J({ ok: true, cookies: obj.cookies || [], up: obj.up || 0 });
+  }
+
   // ---------- 用友账密（云端存，跟管理号走）----------
   // 2026-10-08 用户口径：不管在哪台电脑登录管理号，都要能自动担起用友更新 →
   // 账密存 KV（yyauth），任何一台登着管理号的机器都能取到并自动登录用友。
