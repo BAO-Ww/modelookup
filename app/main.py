@@ -44,7 +44,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.7"
+APP_VERSION = "2.7.8"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1345,10 +1345,12 @@ def _ver_gt(a, b):
         return False
 
 
-def sync_xlsx_cloud(log):
+def sync_xlsx_cloud(log, touch=False):
     """从云端同步金山表格（2026-10-09 v2.8 全云端口径）：
     轻探 /xlsxmeta（ts=各文件内容哈希）→ 有新内容拉 /xlsxcloud 全量 →
     落盘（公布版/价格表/补贴表）→ 重建 → 记 ts。
+    touch=True（手动「全部更新」）：即使内容没变也算「云端确认过最新」，刷新侧栏时间；
+    自动跟随（touch=False）不刷——不然每 60 秒时间都会动，失去意义。
     返回："synced"（同步并重建完成）/ "unchanged"（云端没新东西）/ 其他 = 错误信息。"""
     try:
         j, err = cloud_req("/xlsxmeta", "GET", timeout=30)
@@ -1361,6 +1363,8 @@ def sync_xlsx_cloud(log):
         except Exception:
             pass
         if ts == local:
+            if touch:
+                set_state(price_at=time.strftime("%m-%d %H:%M"))
             return "unchanged"
         if not _update_lock.acquire(blocking=False):
             return "busy"                # 别的更新正在跑，这轮先不动
@@ -1962,7 +1966,12 @@ def do_stock_update(log, auto=False):
         _update_lock.release()
 
 
-_ALLRUN = [False, "", ""]      # [是否在跑全部更新, 最后的错误信息, 更新摘要（2026-10-09 用户要求显示更新了哪些）]
+_ALLRUN = [False, "", "", "", 0, 0.0]   # [在跑, 错误, 摘要, 阶段文案, 估算进度%, 开始时间] —— 进度条用（2026-10-09）
+
+def _all_stage(stage, pct):
+    """更新全部更新的阶段文案与估算进度（前端进度条轮询用）。"""
+    _ALLRUN[3] = stage
+    _ALLRUN[4] = max(int(_ALLRUN[4] or 0), int(pct))   # 只进不退
 _UPD_DETAIL = [""]             # 最近一次金山表格更新的明细（do_update 填）
 _STK_DETAIL = [""]             # 最近一次用友库存更新的明细（do_stock_update 填）
 
@@ -1972,51 +1981,83 @@ def _updateall_bg(log, wf="all"):
     （GitHub Actions：金山拉表 + 用友拉库存），跑完自动从云端同步下来。
     wf = all | kd（只表格）| yy（只库存）。"""
     errs, parts = [], []
+    _ALLRUN[4] = 0
+    _ALLRUN[5] = time.time()
     try:
+        _all_stage("正在触发云端任务（GitHub Actions）…", 5)
         set_state("running", "正在触发云端更新（GitHub Actions）…")
         j, err = cloud_req("/citrigger", "POST", {"wf": wf}, timeout=60)
         if err or not j or not j.get("ok"):
             raise RuntimeError("触发云端任务失败：%s" % (err or (j or {}).get("msg")))
         tmark = str(j.get("at") or "")[:19]          # ISO UTC 截到秒，比较 run 是否本次触发的
+        prev = j.get("prev") or {}                   # 触发前各任务最新 run id（比 tmark 更可靠）
         log("云端任务已触发（%s），等它跑完（一般 1-3 分钟）…" % wf)
+        _all_stage("云端任务已触发，等待开跑…", 12)
         res, done = {}, False
         deadline = time.time() + 900
         time.sleep(25)                               # dispatch 后 run 要几秒才出现在列表里
+        n_fail, last_err = 0, ""                     # 失败留痕（2026-10-09：之前静默 continue，15 分钟瞎等查不到原因）
         while time.time() < deadline:
             time.sleep(15)
-            js, err2 = cloud_req("/cistatus", "GET", timeout=60)
+            # 云端一般 1-3 分钟跑完：按已等时长平滑推进 15%→68%（只进不退）
+            waited = time.time() - _ALLRUN[5]
+            _all_stage("云端拉数据中（已等 %d 分 %02d 秒，一般 1-3 分钟）…"
+                       % (int(waited // 60), int(waited % 60)),
+                       min(68, 15 + int(waited * 53 / 180.0)))
+            js, err2 = cloud_req("/cistatus", "GET", timeout=30)
             if err2 or not js or not js.get("ok"):
+                n_fail += 1
+                last_err = err2 or (js or {}).get("msg") or "未知"
+                _all_stage("云端状态查询失败 %d 次（%s），重试中…"
+                           % (n_fail, last_err[:40]), _ALLRUN[4])
+                if n_fail % 5 == 0:
+                    log("⚠ 查询云端状态第 %d 次失败：%s" % (n_fail, last_err))
+                if n_fail >= 40:
+                    raise RuntimeError("云端状态连续查询失败 %d 次（最后错误：%s）——"
+                                       "检查本机网络/代理（Clash 需给 %s 加直连规则）"
+                                       % (n_fail, last_err, CLOUD_HOST.split("//")[-1]))
                 continue                             # 网络抖动：下轮再试
+            n_fail = 0
             res = js
             want = [k for k in ("yy", "kd")
                     if (k == "yy" and wf in ("all", "yy")) or (k == "kd" and wf in ("all", "kd"))]
-            if all(((res.get(k) or {}).get("status") == "completed"
-                    and str((res.get(k) or {}).get("at") or "")[:19] >= tmark) for k in want):
+            def _is_this_run(k, _res=res, _prev=prev, _tmark=tmark):
+                r = _res.get(k) or {}
+                if (r.get("status") or "") != "completed":
+                    return False
+                rid = int(r.get("id") or 0)
+                if _prev.get(k) and rid:             # 有触发前 id：run 必须比它新（防止旧 run 误判）
+                    return rid > int(_prev[k])
+                return str(r.get("at") or "")[:19] >= _tmark
+            if all(_is_this_run(k) for k in want):
                 done = True
                 break
         if not done:
             raise RuntimeError("云端任务等了 15 分钟还没跑完（去 GitHub Actions 页面看看）")
+        _all_stage("云端跑完了，正在下载数据到本机…", 72)
         for k, label in (("kd", "表格"), ("yy", "库存")):
             if k not in want_local(wf):
                 continue
             r = res.get(k) or {}
-            if (r.get("conclusion") or "") != "success":
+            if (r.get("con") or r.get("conclusion") or "") != "success":
                 msg = "云端%s任务失败（%s）" % (label, r.get("conclusion") or "未知")
                 errs.append(msg)
                 parts.append("云端%s：❌ %s" % (label, r.get("conclusion") or "未知"))
                 continue
             if k == "kd":
-                st = sync_xlsx_cloud(log)
+                _all_stage("正在同步云端表格并重建数据（约 20-40 秒）…", 78)
+                st = sync_xlsx_cloud(log, touch=True)
                 if st == "synced":
                     parts.append("表格：云端已更新，本机已同步重建")
                     _UPD_DETAIL[0] = "云端表格同步重建"
                 elif st == "unchanged":
-                    parts.append("表格：云端跑过，内容没变化")
-                    _UPD_DETAIL[0] = "云端表格无变化"
+                    parts.append("表格：云端确认过最新（内容无变化，时间已刷新）")
+                    _UPD_DETAIL[0] = "云端表格确认最新"
                 else:
                     errs.append("表格：%s" % st)
                     parts.append("表格：❌ %s" % st)
             else:
+                _all_stage("正在同步云端用友库存…", 88)
                 before = (STOCK or {}).get("ts") or ""
                 stock_pull_cloud(log, force=False)
                 after = (STOCK or {}).get("ts") or ""
@@ -2024,8 +2065,9 @@ def _updateall_bg(log, wf="all"):
                     parts.append("库存：云端已更新，本机已同步（%s）" % after)
                     _STK_DETAIL[0] = "从云端同步 %s 行（云端定时共享）" % (STOCK.get("rows") or 0)
                 else:
-                    parts.append("库存：云端跑过，内容没变化")
-                    _STK_DETAIL[0] = "云端库存无变化"
+                    set_state(stock_at=time.strftime("%m-%d %H:%M"))
+                    parts.append("库存：云端确认过最新（内容无变化，时间已刷新）")
+                    _STK_DETAIL[0] = "云端库存确认最新"
     except Exception as e:
         errs.append(str(e))
         parts.append("❌ %s" % e)
@@ -2037,6 +2079,8 @@ def _updateall_bg(log, wf="all"):
         _ALLRUN[0] = False
         _ALLRUN[1] = "；".join(errs)
         _ALLRUN[2] = "　|　".join(parts)
+        _ALLRUN[3] = ""
+        _ALLRUN[4] = 100
         if not errs:
             set_state("done", "云端更新完成", rev=STATE.get("rev", 0) + 1)
         log("全部更新结束 → %s" % _ALLRUN[2])
@@ -2259,7 +2303,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, json.dumps({"ok": True, "running": _ALLRUN[0],
                                         "had_err": bool(_ALLRUN[1]), "msg": _ALLRUN[1],
-                                        "summary": _ALLRUN[2]},
+                                        "summary": _ALLRUN[2],
+                                        "stage": _ALLRUN[3], "pct": _ALLRUN[4],
+                                        "elapsed": int(time.time() - _ALLRUN[5]) if _ALLRUN[0] else 0},
                                        ensure_ascii=False))
             return
 
@@ -2326,6 +2372,14 @@ class Handler(BaseHTTPRequestHandler):
                 PERM_STATE["perm"] = d.get("perm") or {}
                 LOG.append("权限已同步：%s（%s）" % (
                     d.get("u") or "?", "管理号" if d.get("role") == "admin" else "子账号"))
+                # 2026-10-09 用户要求：标题栏显示当前登录账号
+                try:
+                    _u = str(d.get("u") or "")
+                    _r = "管理号" if d.get("role") == "admin" else "子账号"
+                    if MAIN_WIN is not None:
+                        MAIN_WIN.set_title("型号查询 — %s（%s）" % (_u, _r))
+                except Exception:
+                    pass
                 # 按角色重画原生菜单：子账号只留 账号管理/退出登录
                 threading.Thread(target=rebuild_menu_for,
                                  args=(d.get("role"),), daemon=True).start()
@@ -2559,6 +2613,47 @@ def _webview2_pv():
     return None
 
 
+def _wire_menu_autoclose():
+    """原生菜单鼠标移出自动收起（2026-10-09 用户要求：点开菜单后鼠标离开老是不收）。
+    给每个顶级菜单项的下拉挂 MouseLeave → Close；菜单重画后必须重新挂。"""
+    bv = getattr(MAIN_WIN, "native", None)
+    if bv is None:
+        return
+
+    def _do():
+        try:
+            import System.Windows.Forms as WF
+            n = 0
+            for c in list(bv.Controls):
+                if not isinstance(c, WF.MenuStrip):
+                    continue
+                for item in c.Items:
+                    if isinstance(item, WF.ToolStripMenuItem) and item.HasDropDownItems:
+                        dd = item.DropDown
+
+                        def _close(sender=None, e=None, _dd=dd):
+                            try:
+                                _dd.Close()
+                            except Exception:
+                                pass
+
+                        dd.MouseLeave += _close
+                        n += 1
+            if n:
+                LOG.append("菜单自动收起已挂到 %d 个下拉" % n)
+        except Exception as e:
+            LOG.append("菜单自动收起挂接失败：%s" % e)
+
+    try:
+        from System import Func, Type
+        if bv.InvokeRequired:
+            bv.Invoke(Func[Type](_do))
+        else:
+            _do()
+    except Exception:
+        _do()
+
+
 def rebuild_menu_for(role):
     """登录后按角色重画原生菜单（2026-10 八次改版）：
     子账号只留 账号管理/退出登录，管理员恢复全量。winforms 的 set_window_menu
@@ -2590,6 +2685,7 @@ def rebuild_menu_for(role):
             except Exception:
                 pass
         bv.set_window_menu(menus)
+        _wire_menu_autoclose()
         LOG.append("菜单已按角色重画：%s" % ("管理号全量" if role == "admin" else "子账号精简"))
     except Exception as e:
         LOG.append("菜单重画失败：%s" % e)
@@ -2692,7 +2788,7 @@ def build_menu(sub=False):
     if sub:
         return [
             MenuAction("账号管理", adm),
-            MenuAction("软件更新…", upd_app),
+            MenuAction("软件更新", upd_app),
             MenuAction("退出登录", logout),
         ]
     # 2026-10-08 顶部菜单归类（用户要求：平铺 9 项太乱，收成三个下拉）：
@@ -2716,7 +2812,7 @@ def build_menu(sub=False):
             MenuAction("退出登录", logout),
         ]),
         Menu("帮助(&H)", [
-            MenuAction("软件更新…", upd_app),
+            MenuAction("软件更新", upd_app),
             MenuSeparator(),
             MenuAction("关于", about),
         ]),
@@ -3022,6 +3118,8 @@ def run_app(httpd, port, startup_xlsx=None):
         LOG.append(lambda m: print("[%s] %s" % (APP_NAME, m)))
         LOG.append(lambda m: None)
         setup_tray()
+        time.sleep(1.5)                      # 等 GUI 把初始菜单建完
+        _wire_menu_autoclose()
         # 开机自启（2026-10-08）：管理号机器要常驻后台每小时推库存，子账号要自动跟随云端。
         # 全默认开启；托盘菜单里有「取消开机自启」可以关。
         threading.Thread(target=autostart_enable, args=(LOG.append,), daemon=True).start()

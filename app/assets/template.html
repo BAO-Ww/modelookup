@@ -169,6 +169,19 @@ main{padding:22px 0 60px}
 .updbar .spin{display:inline-block;width:12px;height:12px;border:2px solid #cfdcf6;
   border-top-color:var(--brand);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:5px}
 @keyframes sp{to{transform:rotate(360deg)}}
+/* 云端更新进度条（2026-10-09）：GPU 合成动画保证丝滑，width 过渡让轮询间隙也平滑 */
+.uprog{width:100%;margin-top:4px}
+.uprog .bar{height:8px;border-radius:99px;background:#e8eef9;overflow:hidden}
+.uprog .fill{height:100%;width:0%;border-radius:99px;
+  background:linear-gradient(90deg,#4f8bf7,#2e6be6);
+  transition:width 1.2s cubic-bezier(.4,0,.2,1)}
+.uprog .fill .glow{height:100%;width:100%;border-radius:99px;
+  background:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,.45) 50%,rgba(255,255,255,0) 100%);
+  background-size:200% 100%;animation:uglow 1.6s linear infinite}
+@keyframes uglow{from{background-position:100% 0}to{background-position:-100% 0}}
+.uprog .meta{display:flex;justify-content:space-between;margin-top:5px;
+  font-size:11.5px;color:var(--ink3)}
+.uprog .meta b{color:var(--brand);font-variant-numeric:tabular-nums}
 
 /* ---------- cards ---------- */
 .list{display:flex;flex-direction:column;gap:12px}
@@ -1298,16 +1311,32 @@ function loadSubRec(){
   if (lbl) lbl.textContent = (AUTH && AUTH.role === 'admin') ? '子用户发布' : '我的发布';
   sel.innerHTML = '<option value="">加载中…</option>';
   if (AUTH && AUTH.role === 'admin'){
-    authFetch('/puball').then(function(j){
+    /* 2026-10-09 用户要求：下拉列出【全部子账号】+ 发布数 + 在线状态
+       （云端心跳：10 分钟内有请求=在线；发布数来自发布记录；账号列表来自账号管理） */
+    Promise.all([
+      authFetch('/puball'),
+      authFetch('/presence').catch(function(){ return null; }),
+      authFetch('/admin/list').catch(function(){ return null; })
+    ]).then(function(rs){
+      var j = rs[0], pv = (rs[1] && rs[1].ok && rs[1].presence) || null,
+          al = (rs[2] && rs[2].ok && rs[2].users) || null;
       if (!j || !j.ok){ sel.innerHTML = '<option value="">' + esc((j && j.msg) || '拉取失败') + '</option>'; return; }
       window._SUBPUB = j;
-      var us = Object.keys(j.all || {}).sort().filter(function(x){ return x !== AUTH.u; });   // 自己的不放这里
+      var npub = j.all || {};
+      var us = {};
+      Object.keys(npub).forEach(function(x){ if (x !== AUTH.u) us[x] = 1; });          // 有发布记录的
+      (al || []).forEach(function(r){ if (r.u && r.u !== AUTH.u) us[r.u] = 1; });       // 账号管理里的全部子账号
+      us = Object.keys(us).sort();
       var h = '<option value="">不筛选（看全部）</option>';
+      function onTag(u){
+        if (!pv) return '';
+        return (Date.now() - (pv[u] || 0) < 600000) ? ' ●在线' : ' ○离线';
+      }
       us.forEach(function(u){
-        var n = Object.keys(j.all[u] || {}).length;
-        h += '<option value="' + esc(u) + '">' + esc(u) + '（发布 ' + n + '）</option>';
+        var n = Object.keys(npub[u] || {}).length;
+        h += '<option value="' + esc(u) + '">' + esc(u) + '（发布 ' + n + '）' + onTag(u) + '</option>';
       });
-      if (!us.length) h = '<option value="">子账号还没有发布记录</option>';
+      if (!us.length) h = '<option value="">还没有子账号</option>';
       sel.innerHTML = h;
     }).catch(function(){
       sel.innerHTML = '<option value="">网络不通（开了代理请给 kdns.fr 设直连）</option>';
@@ -2156,7 +2185,9 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   function startCloud(wf){
     if (all && all.disabled) return;
     busy(true, '正在云端更新…');
-    msg.innerHTML = '<span class="spin"></span>正在触发云端更新（GitHub Actions）…';
+    msg.innerHTML =
+      '<div class="uprog"><div class="meta"><span>正在触发云端更新（GitHub Actions）…</span><b>3%</b></div>'
+      + '<div class="bar"><div class="fill" style="width:3%"><div class="glow"></div></div></div></div>';
     fetch('/api/updateall', { method: 'POST', cache: 'no-store',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wf: wf || 'all' })
     }).then(function(r){ return r.json(); }).then(function(r){
@@ -2171,15 +2202,23 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   if (all){
     all.addEventListener('click', function(){ startCloud('all'); });
   }
+  function fmtSec(t){ var m=Math.floor(t/60), s=t%60; return m>0 ? m+' 分 '+String(s).padStart(2,'0')+' 秒' : s+' 秒'; }
   function pollAll(){
     fetch('/api/updateall', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
       if (s.running){
-        fetch('/api/state', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(st){
-          msg.innerHTML = '<span class="spin"></span>' + esc(st.msg || '正在更新…');
-          setTimeout(pollAll, 1200);
-        }).catch(function(){ setTimeout(pollAll, 1500); });
+        var pct = Math.min(99, Math.max(3, s.pct || 5));
+        var stage = esc(s.stage || '正在更新…');
+        var el = fmtSec(s.elapsed || 0);
+        msg.innerHTML =
+          '<div class="uprog">'
+          + '<div class="meta"><span>' + stage + '</span><b>' + pct + '% · 已用 ' + el + '</b></div>'
+          + '<div class="bar"><div class="fill" style="width:' + pct + '%"><div class="glow"></div></div></div>'
+          + '</div>';
+        all.textContent = '正在云端更新 ' + pct + '%';
+        setTimeout(pollAll, 1500);
         return;
       }
+      all.textContent = '全部更新';
       if (s.had_err){
         var bad = esc(s.msg || '');
         msg.innerHTML = '⚠ 更新完成，部分环节失败<br>' + esc(s.summary || '').replace(/\u3000\|\u3000/g, '<br>')

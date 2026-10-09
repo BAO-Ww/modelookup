@@ -169,6 +169,16 @@ async function route(request, env, path) {
   const who = await checkToken(env, token);
   if (!who) return jerr("登录已过期，请重新登录", 401);
 
+  // 在线心跳（2026-10-09）：任何带 token 的请求都算活跃；KV 写 5 分钟节流（省额度）
+  try {
+    const pv = JSON.parse((await env.KV.get("presence")) || "{}");
+    const now = Date.now();
+    if (!pv[who] || now - (pv[who].t || 0) > 300000) {
+      pv[who] = { t: now };
+      await env.KV.put("presence", JSON.stringify(pv));
+    }
+  } catch (e) {}
+
   // ---------- 启动校验 / 权限拉取 ----------
   if (path === "/perm" && request.method === "GET") {
     const users = await getUsers(env);
@@ -176,6 +186,17 @@ async function route(request, env, path) {
     if (!user || user.disabled) return jerr("账号不存在或已停用", 403);
     return J({ ok: true, u: who, role: user.role || "sub",
                perm: user.role === "admin" ? {} : migratePerm(user.perm) });
+  }
+
+  if (path === "/presence" && request.method === "GET") {
+    const users = await getUsers(env);
+    const me = users[who];
+    if (!me || me.role !== "admin") return jerr("只有管理号能看在线状态", 403);
+    let pv = {};
+    try { pv = JSON.parse((await env.KV.get("presence")) || "{}"); } catch (e) {}
+    const out = {};
+    for (const [u, v] of Object.entries(pv)) out[u] = v.t || 0;
+    return J({ ok: true, presence: out });
   }
 
   if (path === "/changepw" && request.method === "POST") {
@@ -527,12 +548,14 @@ async function route(request, env, path) {
   if (path === "/citrigger" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     const want = String((b && b.wf) || "all");            // all | yy | kd
+    const prev = {};
+    for (const k of Object.keys(CI_WF)) prev[k] = (await ghLastRun(CI_WF[k]) || {}).id || 0;
     const out = {};
     if (want === "all" || want === "yy") out.yy = await ghDispatch(CI_WF.yy);
     if (want === "all" || want === "kd") out.kd = await ghDispatch(CI_WF.kd);
     if (!Object.keys(out).length || !Object.values(out).every(Boolean))
       return jerr("触发云端任务失败（检查 GH_TOKEN 是否有 workflow 权限）", 502);
-    return J({ ok: true, triggered: out, at: new Date().toISOString() });
+    return J({ ok: true, triggered: out, at: new Date().toISOString(), prev });
   }
   if (path === "/cistatus" && request.method === "GET") {
     const yy = await ghLastRun(CI_WF.yy);
