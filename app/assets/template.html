@@ -460,7 +460,7 @@ footer a:hover{text-decoration:underline}
         <!-- 四个操作按钮已移到窗口顶部菜单栏（帮助前）；这里只留隐藏按钮给菜单触发用。
              「全部更新」2026-10-09 按用户要求挪到侧栏底部常显（见 .sidefoot） -->
         <button class="chip" id="updbtn">↻ 从金山文档更新数据</button>
-        <button class="chip" id="stkbtn" title="管理号：从用友 YonSuite 拉实时现存量，拉完自动共享给所有子账号；子账号：直接从云端同步管理号共享的库存（不用登用友）">⟳ 更新实时库存</button>
+        <button class="chip" id="stkbtn" title="管理号：触发云端重新拉用友实时现存量（约 2-4 分钟），跑完自动共享给所有子账号；子账号：直接从云端同步管理号共享的库存（不用登用友）">⟳ 更新实时库存</button>
         <button class="chip" id="appupd" title="检查并安装新版本：下载后在软件里直接静默覆盖安装，不用自己去下">⬆ 软件更新</button>
         <button class="chip" id="expimg" title="把你自己补的图导出成一个 json 文件（发给我，下次重建直接烤进页面）">导出我补的图</button>
         <button class="chip" id="impimg" title="导入之前导出的 补图.json">导入补图</button>
@@ -2499,23 +2499,18 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
     }).catch(function(){ setTimeout(poll, 1500); });
   }
 
+  /* 2026-10-10 全云端：本机直拉金山/用友已退役，两个按钮改走云端任务（与原生菜单同链路） */
   btn.addEventListener('click', function(){
     if (btn.disabled) return;
-    busy(true, '正在更新…');
-    msg.innerHTML = '<span class="spin"></span>正在连接金山文档…';
-    fetch('/api/update', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
-      if (!r.ok){ msg.textContent = '更新失败：' + (r.msg || ''); reset(); return; }
-      poll();
-    }).catch(function(e){ msg.textContent = '请求失败：' + e; reset(); });
+    startCloud('kd');
   });
 
   stk.addEventListener('click', function(){
     if (stk.disabled) return;
+    if (AUTH && AUTH.role === 'admin'){ startCloud('yy'); return; }  /* 管理号：云端拉用友（约 2-4 分钟） */
+    /* 子账号：不碰用友，直接从云端同步管理号共享的库存 */
     busy(true, '正在更新库存…');
-    var isAdmin = AUTH && AUTH.role === 'admin';
-    msg.innerHTML = '<span class="spin"></span>' + (isAdmin
-      ? '正在连接用友 YonSuite…（拉完自动共享给所有子账号；如需登录会先尝试自动登录）'
-      : '正在从云端同步库存（管理号共享的用友实时数据）…');
+    msg.innerHTML = '<span class="spin"></span>正在从云端同步库存（管理号共享的用友实时数据）…';
     fetch('/api/stock', { method: 'POST', cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
       if (!r.ok){ msg.textContent = '更新失败：' + (r.msg || ''); reset(); return; }
       poll();
