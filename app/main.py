@@ -44,7 +44,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.10"
+APP_VERSION = "2.7.11"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1476,8 +1476,13 @@ def _app_install_bg(log):
                  ' & "%s" /SILENT /SUPPRESSMSGBOXES /NORESTART /LOG="%s"'
                  ' & if exist "%s" start "" "%s"'
                  ) % (dest, logf, newexe, newexe)
+        # 2026-10-09 修「更新时弹黑色 ping 窗口」：原来用 DETACHED_PROCESS 起 cmd——
+        # cmd 自己没控制台，但逐个跑 ping/taskkill 这些控制台程序时 Windows 会给
+        # 每个子程序新分配控制台 → 黑窗口弹出来。换成 CREATE_NO_WINDOW：cmd 带
+        # 一个隐藏控制台，所有子程序继承同一个隐藏控制台，全程无窗口。
+        # （父进程 os._exit 后帮助进程照样存活，不依赖父子关系，等效原来的 detached。）
         subprocess.Popen(["cmd", "/d", "/c", chain],
-                         creationflags=0x00000008)       # DETACHED_PROCESS
+                         creationflags=0x08000000)       # CREATE_NO_WINDOW
         time.sleep(1.5)                      # 帮助进程先起来，页面此时已收到 ok 回应
         try:
             if MAIN_WIN is not None:
@@ -2735,8 +2740,7 @@ def build_menu(sub=False):
             pass
 
     def reload_page():
-        if not guarded("重新加载页面", "upd_kdocs"):
-            return
+        # 2026-10-09：子账号菜单也有这项（用户要求），刷新页面无副作用，不再过权限
         try:
             webview.windows[0].evaluate_js("location.reload()")
         except Exception:
@@ -2788,10 +2792,11 @@ def build_menu(sub=False):
             return
         js_click("impimg")
 
-    # 子账号（2026-10-08 十次改版）：菜单 = 账号管理 / 软件更新 / 退出登录
+    # 子账号（2026-10-08 十次改版）：菜单 = 账号管理 / 重新加载页面 / 软件更新 / 退出登录
     if sub:
         return [
             MenuAction("账号管理", adm),
+            MenuAction("重新加载页面", reload_page),
             MenuAction("软件更新", upd_app),
             MenuAction("退出登录", logout),
         ]
