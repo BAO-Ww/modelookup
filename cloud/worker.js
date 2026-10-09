@@ -52,6 +52,8 @@ const PERM_KEYS = [
   "upd_yy",      // 「更新实时库存（用友）」按钮
   "addimg",      // 补图 / 导出比价图
   "pubview",     // 「已发布」筛选按钮（看已发布的型号）
+  "updpanel",    // 更新面板（型号数/数据/库存时间 + 全部更新）—— v2.7.11 漏加导致勾了存不上，v2.7.12 补
+  "pubmeta",     // 发布卡片显示「闲鱼定价 / 发布于」小字（2026-10-09：管理号要看，子用户默认不给、要了再勾）
 ];
 
 // 旧权限键 → 新键映射（v2.5 之前的 perm 只存 guide/clear_price 两个粗键）
@@ -186,6 +188,27 @@ async function route(request, env, path) {
     if (!user || user.disabled) return jerr("账号不存在或已停用", 403);
     return J({ ok: true, u: who, role: user.role || "sub",
                perm: user.role === "admin" ? {} : migratePerm(user.perm) });
+  }
+
+  // 管理号「我的显示开关」上云（2026-10-09）：跟账号走，换电脑登录不用重弄
+  // KV: selfhide_<u> = { 权限key: true(=隐藏) }；子账号无此设置（显示由管理号 perm 管）
+  if (path === "/selfhide" && request.method === "GET") {
+    const users = await getUsers(env);
+    const me = users[who];
+    if (!me || me.role !== "admin") return jerr("只有管理号有显示开关", 403);
+    const r = await env.KV.get("selfhide_" + who);
+    let hide = {};
+    try { hide = r ? JSON.parse(r) : {}; } catch (e) {}
+    return J({ ok: true, hide: hide && typeof hide === "object" ? hide : {} });
+  }
+  if (path === "/selfhide" && request.method === "POST") {
+    const users = await getUsers(env);
+    const me = users[who];
+    if (!me || me.role !== "admin") return jerr("只有管理号有显示开关", 403);
+    const b = await request.json().catch(() => ({}));
+    if (!b.hide || typeof b.hide !== "object") return jerr("参数错误");
+    await env.KV.put("selfhide_" + who, JSON.stringify(b.hide));
+    return J({ ok: true });
   }
 
   if (path === "/presence" && request.method === "GET") {

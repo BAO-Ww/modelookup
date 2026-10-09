@@ -232,6 +232,12 @@ main{padding:22px 0 60px}
   display:inline-block;font-size:11px;font-weight:700;color:#0f7a45;background:var(--ok-l);
   border:1px solid #c9e8d6;border-radius:6px;padding:2px 8px;margin-top:2px;
 }
+/* 发布卡片小字「闲鱼定价 ¥x · 发布于 x-x x:x」：管理号默认显示（头部「定价/时间」可关），
+   子账号默认不给，管理号在「账号管理」勾 pubmeta 才显示（2026-10-09） */
+.pubmeta{
+  display:inline-block;font-size:11.5px;color:#8a93a3;margin:2px 0 0 8px;vertical-align:middle;
+  white-space:nowrap;
+}
 .acts{margin-left:auto;display:flex;gap:8px;flex:none}
 .markbtn,.copy{
   border:1px solid var(--line);background:#fff;color:var(--ink2);
@@ -428,8 +434,8 @@ footer a:hover{text-decoration:underline}
           <button class="chip fchk" data-flag="stock" title="只列出当前有现货的型号"><span class="box"></span>有现货</button>
           <button class="chip fchk" data-flag="send" title="只列出能发往外区（全国）的型号"><span class="box"></span>发全国</button>
           <button class="chip fchk" data-flag="hide" title="隐藏你已标记发布的型号"><span class="box"></span>未发布</button>
-          <button class="chip fchk" data-flag="pub" title="只看你已标记发布的型号"><span class="box"></span>已发布</button>
-          <button class="chip fchk" data-flag="nostock" title="已发布但没库存的（正品看正品仓、样机看样机仓）；在看子用户发布时筛 TA 的"><span class="box"></span>没库存</button>
+          <button class="chip fchk" data-flag="pub" title="看自己的发布记录（顶栏可筛正品/样机、开关定价时间；各账号各看各的）"><span class="box"></span>已发布</button>
+          <button class="chip fchk" data-flag="nostock" title="已发布但没库存的（正品看正品仓、样机看样机仓）；看发布记录时筛当前这份的"><span class="box"></span>没库存</button>
         </div>
         <!-- 子用户发布（管理号=看每个子账号；子账号=看自己的）。下拉选中主区直接列出 TA 发布的卡片 -->
         <div class="subrec" id="subrec" hidden>
@@ -534,6 +540,22 @@ function itemOf(c){
 }
 
 /* ================= 本地存储 ================= */
+/* 发布缓存按账号隔离（2026-10-09 修「已发布串号」）：旧版 xy2-* 键不分账号，
+   同一台电脑换账号登录后，上一个账号的发布记录会残留给下一个账号看，
+   甚至被 /pubsync 整包推上别人的云端。检测「上次账号 ≠ 本次账号」
+   → 旧全局键按无主残留清掉（不迁移，避免把别人的搬进来），reload 一次吃干净状态 */
+(function(){
+  var lu = null; try { lu = localStorage.getItem('ml_lastuser'); } catch(e){}
+  var au = ''; try { var a = JSON.parse(localStorage.getItem('ml_auth') || 'null'); au = (a && a.u) || ''; } catch(e){}
+  if (lu !== au){
+    try {
+      ['xy2-published', 'xy2-prices', 'xy2-imgs', 'xy-published-v1', 'xy-prices-v1', 'xy-imgs-v1']
+        .forEach(function(k){ localStorage.removeItem(k); });
+      localStorage.setItem('ml_lastuser', au);
+    } catch(e){ return; }              // 写不进（隐私模式等）就不 reload，防死循环
+    if (lu !== null) location.reload(); // 首次部署只写标记不刷；真换了账号才刷
+  }
+})();
 var MARK_KEY = 'xy2-published';
 var HIDE_KEY = 'xy2-hidemarked';
 var PRICE_KEY = 'xy2-prices';
@@ -931,7 +953,8 @@ var PERM_DEFS = [
   ['sum',         '汇总行（正品/样机/次品仓）', '界面显示'],
   ['subsidy',     '补贴栏',                  '界面显示'],
   ['calc',        '闲鱼定价 / 已发布 / 复制',  '界面显示'],
-  ['pubview',     '看发布记录（我的发布 / 已发布·没库存筛选）', '界面显示'],
+  ['pubview',     '已发布（看自己的发布）/没库存筛选', '界面显示'],
+  ['pubmeta',     '发布卡片显示闲鱼定价/发布时间', '界面显示'],
   ['updpanel',    '更新面板（型号数/数据/库存时间 + 全部更新）', '界面显示'],
   ['supplier',    '发货 / 货源',              '界面显示'],
   ['nat',         '发往（可发区域）',          '界面显示'],
@@ -963,9 +986,27 @@ function authSave(){
       body: JSON.stringify({ token: AUTH ? JSON.stringify(AUTH) : '' }) });
   } catch(e){}
 }
+/* 管理号自己的显示开关（2026-10-09）：跟子用户权限同一套 key，默认全看。
+   「账号管理」最上面一块里自己勾，只影响本机管理号自己的界面，子用户不受影响；
+   存本机 localStorage（ml_adminhide），换电脑各自独立 */
+var ADMIN_HIDE = (function(){
+  try { var v = JSON.parse(localStorage.getItem('ml_adminhide') || '{}'); return (v && typeof v === 'object') ? v : {}; } catch(e){ return {}; }
+})();
+function adminHideSave(){
+  try { localStorage.setItem('ml_adminhide', JSON.stringify(ADMIN_HIDE)); } catch(e){}
+  /* 同时上云（2026-10-09 用户要求：设置跟账号走，换电脑不用重弄）。防抖 600ms，
+     云端 KV 最终一致 ~25s（另一台机器要等一会才见）；失败静默，下次改动再推 */
+  if (!AUTH || AUTH.role !== 'admin' || !AUTH.token) return;
+  clearTimeout(_shPushT);
+  _shPushT = setTimeout(function(){
+    authFetch('/selfhide', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hide: ADMIN_HIDE }) }, true);
+  }, 600);
+}
+var _shPushT = null;
 function pok(k){
   if (!AUTH) return false;
-  if (AUTH.role === 'admin') return true;
+  if (AUTH.role === 'admin') return !ADMIN_HIDE[k];
   return !!AUTH.perm[k];
 }
 /* 带 X-Token 的云端请求；网络不通时 _st=0，会自动换备用域名试一轮 */
@@ -1112,10 +1153,23 @@ function afterAuth(){
       { u: AUTH.u, role: AUTH.role, perm: AUTH.perm || {} }) });
   } catch(e){}
   syncMarks();   // 发布记录并到云端（本地旧记录也会被合并上去）
-  // 侧栏「子用户发布 / 我的发布」块：管理号恒有；子账号由管理号勾「pubview」权限决定
-  //（2026-10-09 用户要求：给不给看子用户发布，管理员逐个勾）
-  var sr = document.getElementById('subrec');
-  if (sr && (AUTH.role === 'admin' || pok('pubview'))){ sr.hidden = false; loadSubRec(); }
+  /* 我的显示开关上云拉取（2026-10-09）：云端有 → 以云端为准；云端还没存过 → 把本机的推上去 */
+  if (AUTH.role === 'admin'){
+    authFetch('/selfhide').then(function(j){
+      if (!j || !j.ok) return;
+      var h = (j.hide && typeof j.hide === 'object') ? j.hide : {};
+      if (Object.keys(h).length){
+        ADMIN_HIDE = h;
+        try { localStorage.setItem('ml_adminhide', JSON.stringify(ADMIN_HIDE)); } catch(e){}
+        applyPermBar(); run();
+      } else if (Object.keys(ADMIN_HIDE).length){
+        authFetch('/selfhide', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hide: ADMIN_HIDE }) }, true);
+      }
+    }).catch(function(){});
+  }
+  /* 侧栏只保留管理号的「子用户发布」下拉（2026-10-09 定稿：子账号看自己的发布
+     走「已发布」chip + 顶栏，不再要「我的发布」块）；显隐统一在 applyPermBar 管 */
   syncImgs();    // 补图并到云端（别人补的拉下来，自己补的推上去）
   var bar = document.getElementById('updbar');
   if (!bar) return;
@@ -1141,7 +1195,7 @@ function afterAuth(){
     AUTH.perm = j.perm || {};
     authSave();
     var sr2 = document.getElementById('subrec');
-    if (sr2 && (AUTH.role === 'admin' || pok('pubview')) && sr2.hidden){ sr2.hidden = false; loadSubRec(); }
+    if (sr2 && AUTH.role === 'admin' && pok('pubview') && sr2.hidden){ sr2.hidden = false; loadSubRec(); }
     applyPermBar();
   }).catch(function(){});
 }
@@ -1149,18 +1203,74 @@ function applyPermBar(){
   var b = document.getElementById('updbtn'), s = document.getElementById('stkbtn');
   if (b) b.hidden = !pok('upd_kdocs');
   if (s) s.hidden = !pok('upd_yy');
-  // 「已发布」「没库存」筛选按钮：管理号恒有；子账号由管理号勾「pubview」权限决定
-  var isAdmin = AUTH && AUTH.role === 'admin';
+  // 侧栏「子用户发布」块：只有管理号有（子账号看自己的发布走「已发布」chip + 顶栏）
+  var sr = document.getElementById('subrec');
+  if (sr){
+    var srShow = !!(AUTH && AUTH.role === 'admin' && pok('pubview'));
+    sr.hidden = !srShow;
+    if (srShow && !sr.dataset.loaded){ sr.dataset.loaded = '1'; loadSubRec(); }
+  }
+  // 「已发布」「没库存」筛选按钮：管理号默认有（可在「我的显示开关」里自己关）；子账号由权限决定
   var pb = document.querySelector('.chip[data-flag="pub"]');
-  if (pb) pb.hidden = !(isAdmin || pok('pubview'));
+  if (pb) pb.hidden = !pok('pubview');
   var nb = document.querySelector('.chip[data-flag="nostock"]');
-  if (nb) nb.hidden = !(isAdmin || pok('pubview'));
+  if (nb) nb.hidden = !pok('pubview');
   // 侧栏底部「更新面板」（型号数/数据/库存时间 + 全部更新 + 更新消息）：
-  // 管理号恒有；子账号由管理号勾「updpanel」权限决定（2026-10-09 用户要求）
+  // 管理号默认有（可在「我的显示开关」里自己关）；子账号由管理号勾「updpanel」权限决定
   var foot = document.querySelector('.sidefoot');
-  if (foot) foot.style.display = (isAdmin || pok('updpanel')) ? '' : 'none';
+  if (foot) foot.style.display = pok('updpanel') ? '' : 'none';
 }
 /* ---------- 管理号：账号管理 ---------- */
+/* 「我的显示开关」chips 渲染（账号管理面板和独立小窗共用）：点一下立即生效并存云端 */
+function renderSelfChips(box){
+  function draw(){
+    var groups = [];
+    PERM_DEFS.forEach(function(p){
+      if (!groups.length || groups[groups.length - 1].g !== p[2]) groups.push({ g: p[2], items: [] });
+      groups[groups.length - 1].items.push(p);
+    });
+    var h = '';
+    groups.forEach(function(gr){
+      h += '<div class="pgbox"><h5>' + esc(gr.g) + '</h5><div class="pks">';
+      gr.items.forEach(function(p){
+        var on = !ADMIN_HIDE[p[0]];
+        h += '<span class="pk' + (on ? ' on' : '') + '" data-k="' + p[0]
+           + '" title="管我自己要不要显示这个（点亮=显示、点灰=隐藏）">' + p[1] + '</span>';
+      });
+      h += '</div></div>';
+    });
+    box.innerHTML = h;
+    box.querySelectorAll('.pk').forEach(function(c){
+      c.addEventListener('click', function(){
+        var k = c.dataset.k;
+        if (ADMIN_HIDE[k]) delete ADMIN_HIDE[k]; else ADMIN_HIDE[k] = true;
+        adminHideSave();
+        c.classList.toggle('on');
+        applyPermBar();
+        run();          // 卡片/侧栏立即重排
+      });
+    });
+  }
+  draw();
+  return draw;
+}
+/* 我的显示开关独立小窗（发布顶栏「⚙ 显示」打开）：同一份 ADMIN_HIDE */
+function openSelfDisplay(){
+  var old = document.getElementById('adminmask'); if (old) old.remove();
+  var m = document.createElement('div'); m.id = 'adminmask';
+  m.innerHTML = '<div class="amodal" style="max-width:880px"><h3>我的显示开关 '
+    + '<button class="achip" id="sdclose" style="float:right">关闭</button></h3>'
+    + '<div style="font-size:12.5px;color:#8a93a3;margin-bottom:10px">管我自己看什么：点亮=显示、点灰=隐藏，点了立即生效；跟账号走存在云端，换电脑登录不用重弄（子用户不受影响）</div>'
+    + '<div class="permgroups" id="sdchips"></div>'
+    + '<div style="margin-top:12px"><button class="achip" id="sdall">全部显示</button></div></div>';
+  document.body.appendChild(m);
+  var _sd = renderSelfChips(m.querySelector('#sdchips'));
+  m.querySelector('#sdall').addEventListener('click', function(){
+    ADMIN_HIDE = {}; adminHideSave(); _sd(); applyPermBar(); run();
+  });
+  m.querySelector('#sdclose').addEventListener('click', function(){ m.remove(); });
+  m.addEventListener('click', function(e){ if (e.target === m) m.remove(); });
+}
 function openAdmin(){
   var old = document.getElementById('adminmask'); if (old) old.remove();
   var m = document.createElement('div'); m.id = 'adminmask';
@@ -1169,6 +1279,12 @@ function openAdmin(){
     + '<span style="font-size:12.5px;color:#7b8494;flex:none">选择子用户</span>'
     + '<select id="asel" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #d7dce6;border-radius:9px;font-size:13.5px;background:#fff;outline:0"></select>'
     + '</div>'
+    + '<div id="aself" style="margin-bottom:12px;padding:10px 12px;border:1px dashed #c9d3e3;border-radius:10px;background:#f8fafd">'
+    + '<div style="font-size:12.5px;color:#475467;margin-bottom:8px"><b>我的显示开关</b>'
+    + '<span style="color:#8a93a3">（管理号自己看什么，点亮=显示、点灰=隐藏，只影响本机，子用户不受影响）</span>'
+    + '<a href="javascript:void 0" id="aselfall" style="float:right;font-size:12px">全部显示</a></div>'
+    + '<div class="permgroups" id="aselfchips"></div>'
+    + '</div>'
     + '<div id="alist">加载中…</div>'
     + '<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">'
     + '<button class="achip" id="aadd">＋ 新增子账号</button>'
@@ -1176,6 +1292,15 @@ function openAdmin(){
     + '<button class="achip" id="apubs" title="看每个账号发布过哪些型号（云端记录，跟账号走）">📋 发布记录</button>'
     + '</div></div>';
   document.body.appendChild(m);
+  /* 我的显示开关（renderSelfChips 共用）：点一下立即生效（本机 + 云端），不用「保存全部」 */
+  var _sd = renderSelfChips(m.querySelector('#aselfchips'));
+  m.querySelector('#aselfall').addEventListener('click', function(){
+    ADMIN_HIDE = {};    // 恢复全看
+    adminHideSave();
+    _sd();
+    applyPermBar();
+    run();
+  });
   m.querySelector('#aclose').addEventListener('click', function(){ m.remove(); });
   m.querySelector('#apubs').addEventListener('click', function(){
     /* 发布记录视图里下拉没意义：藏起来，回账号列表再亮出来 */
@@ -1354,9 +1479,19 @@ function subHeaderHTML(){
     return '<a href="javascript:void 0" data-fk="' + k + '" style="display:inline-block;margin-left:6px;padding:1px 9px;border-radius:9px;font-size:12px;cursor:pointer;'
          + (on ? 'background:#2e6be6;color:#fff;' : 'background:#eef1f6;color:#475467;') + '">' + label + '</a>';
   }
-  return '<b>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（' + Object.keys(SUBVIEW.set).length + ' 个型号）</b>'
+  var h = '<b>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（' + Object.keys(SUBVIEW.set).length + ' 个型号）</b>'
        + '<a href="javascript:void 0" id="subexit" style="margin-left:8px;font-size:12.5px">✕ 退出</a>'
        + _chip('', '全部') + _chip('l', '正品') + _chip('s', '样机');
+  /* 管理号自己的显示选项：卡片上「闲鱼定价/发布于」小字看不看（=「我的显示开关」里的
+     「发布卡片显示闲鱼定价/发布时间」，同一份设置，这里给个快捷开关，2026-10-09） */
+  if (AUTH && AUTH.role === 'admin'){
+    var pmOn = !ADMIN_HIDE.pubmeta;
+    h += '<a href="javascript:void 0" data-pm="1" title="卡片上「闲鱼定价 / 发布于」小字：点一下开、再点一下关（只影响我自己，和「我的显示开关」是同一项）" style="display:inline-block;margin-left:6px;padding:1px 9px;border-radius:9px;font-size:12px;cursor:pointer;'
+       + (pmOn ? 'background:#e8f1ff;color:#2e6be6;border:1px solid #bcd2f7;' : 'background:#eef1f6;color:#98a1b0;border:1px solid #d7dce6;')
+       + '">定价/时间 ' + (pmOn ? '开' : '关') + '</a>'
+       + '<a href="javascript:void 0" data-selfdisp="1" title="我的显示开关：管我自己看哪些（跟账号走，存云端）" style="display:inline-block;margin-left:6px;font-size:12px;cursor:pointer;color:#2e6be6">⚙ 显示</a>';
+  }
+  return h;
 }
 /* ---------- 侧栏「子用户发布」（管理号）----------
    点子用户名 → 时间倒序列出 TA 发布的型号 + 闲鱼定价；点型号直接填进搜索框定位。 */
@@ -1445,12 +1580,20 @@ document.getElementById('hint').addEventListener('click', function(e){
     run();
     return;
   }
-  if (e.target && e.target.id === 'subexit'){
-    SUBVIEW = null;
-    pubStockWarn();                                  // 退出查看，横幅切回盯自己的
-    var sel = document.getElementById('subrecsel');
-    if (sel) sel.value = (AUTH && AUTH.role !== 'admin') ? '0' : '';   // 子账号只有「我的发布」一个选项，退了也停在它上面
+  if (e.target && e.target.getAttribute && e.target.getAttribute('data-selfdisp')){   // ⚙ 我的显示开关
+    openSelfDisplay();
+    return;
+  }
+  if (e.target && e.target.getAttribute && e.target.getAttribute('data-pm')){   // 定价/时间 小字快捷开关（管理号）
+    if (ADMIN_HIDE.pubmeta) delete ADMIN_HIDE.pubmeta; else ADMIN_HIDE.pubmeta = true;
+    adminHideSave();
     run();
+    return;
+  }
+  if (e.target && e.target.id === 'subexit'){
+    exitSelfPub();                                   // 退出查看（侧栏「已发布」chip 高亮一并摘掉）
+    var sel = document.getElementById('subrecsel');
+    if (sel && AUTH && AUTH.role === 'admin') sel.value = '';
   }
 });
 /* 子账号：改自己密码的小面板（worker /changepw） */
@@ -1688,10 +1831,24 @@ function renderItem(it){
     return '';
   }
   var webUrl = webOf(it);
-  /* 子用户发布查看模式：标题行显示「已发布 · 正品/样机」绿标（2026-10-09 用户定稿：
-     不再带闲鱼定价/发布时间小字——定价输入框里本来就有 TA 填的价） */
+  /* 子用户发布查看模式：标题行显示「已发布 · 正品/样机」绿标；
+     闲鱼定价/发布时间小字（2026-10-09 定稿）：管理号默认看（头部「定价/时间」胶囊自己开关），
+     子账号默认不给，管理号在「账号管理」勾 pubmeta 才给开 */
   var svInfo = (SUBVIEW && SUBVIEW.info && SUBVIEW.info[it.c]) ? SUBVIEW.info[it.c] : null;
   var svKind = svInfo ? (svInfo.k || (it.k === 'l' ? 'l' : (it.k === 's' ? 's' : ''))) : '';
+  function pmMoney(v){
+    var n = Math.round(+v || 0);
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+  var pmOK = pok('pubmeta');   // 管理号：默认开，「我的显示开关/顶栏胶囊」可关；子账号：管理号勾了才开
+  var pmHTML = '';
+  if (svInfo && pmOK && (svInfo.p || svInfo.t)){
+    pmHTML = '<span class="pubmeta">'
+           + (svInfo.p ? '闲鱼定价 ¥' + pmMoney(svInfo.p) : '')
+           + (svInfo.p && svInfo.t ? ' · ' : '')
+           + (svInfo.t ? '发布于 ' + fmtTs(svInfo.t) : '')
+           + '</span>';
+  }
 
   return '<article class="card' + (marked ? ' marked' : '') + '" data-key="' + esc(it.c) + '">'
     + '<div class="chead" style="position:relative">'
@@ -1704,6 +1861,7 @@ function renderItem(it){
     + (svInfo ? ' · ' + (svKind === 's' ? '样机' : '正品')
               : (marked && MARKED[it.c] ? ' · ' + kindLabel(MARKED[it.c]) : ''))
     + '</span>'
+    + pmHTML
     + '<span class="acts">'
     + (pok('calc') ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + (marked ? '取消发布' : '标记已发布') + '</button>' : '')
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
@@ -2064,22 +2222,49 @@ toolsEl.addEventListener('click', function(e){
     flagSend = !flagSend; b.classList.toggle('on', flagSend);
   } else if (b.dataset.flag === 'hide'){
     hideMarked = !hideMarked;
-    if (hideMarked){ flagPub = false; var _pb = toolsEl.querySelector('.chip[data-flag="pub"]'); if (_pb) _pb.classList.remove('on'); }
+    if (hideMarked){
+      flagPub = false;
+      var _pb = toolsEl.querySelector('.chip[data-flag="pub"]'); if (_pb) _pb.classList.remove('on');
+      if (SUBVIEW && SUBVIEW.u === '0'){ SUBVIEW = null; pubStockWarn(); }   // 自看发布时点「未发布」= 退出自看
+    }
     b.classList.toggle('on', hideMarked);
     try { localStorage.setItem(HIDE_KEY, hideMarked ? '1' : '0'); } catch(e){}
   } else if (b.dataset.flag === 'pub'){
-    flagPub = !flagPub;
-    if (flagPub){
-      hideMarked = false;
-      var _hb = toolsEl.querySelector('.chip[data-flag="hide"]'); if (_hb) _hb.classList.remove('on');
-      try { localStorage.setItem(HIDE_KEY, '0'); } catch(e){}
+    /* 已发布 = 看自己的发布记录（2026-10-09 定稿）：带顶栏（全部/正品/样机/定价时间），
+       各账号只看各自己的，互不串。再点一次或点顶栏 ✕ 退出 */
+    if (SUBVIEW && SUBVIEW.u === '0'){
+      exitSelfPub();
+    } else {
+      enterSelfPub(b);
+      return;              // enterSelfPub 里异步拉完数据自己 run，这里不走统一 run
     }
-    b.classList.toggle('on', flagPub);
   } else if (b.dataset.flag === 'nostock'){
     flagNoStock = !flagNoStock; b.classList.toggle('on', flagNoStock);
   }
   run();
 });
+/* 进入「看自己的发布」：拉自己的云端记录塞进 SUBVIEW（u='0'=自己），复用子用户发布的
+   顶栏/筛选/卡片渲染；管理号和子账号同一条路（/pub 按登录账号走，天然各看各的） */
+function enterSelfPub(chip){
+  authFetch('/pub').then(function(j){
+    if (!j || !j.ok){ if (chip) chip.classList.remove('on'); run(); return; }
+    window._SUBPUB = { all: { 0: j.marks || {} }, prices: { 0: j.prices || {} } };
+    SUBVIEW = null;
+    showSubRec('0');
+    if (chip) chip.classList.add('on');
+    var _hb = toolsEl.querySelector('.chip[data-flag="hide"]'); if (_hb) _hb.classList.remove('on');
+    hideMarked = false;
+    try { localStorage.setItem(HIDE_KEY, '0'); } catch(e){}
+  }).catch(function(){ if (chip) chip.classList.remove('on'); });
+}
+function exitSelfPub(){
+  SUBVIEW = null;
+  pubStockWarn();
+  var _pb = toolsEl.querySelector('.chip[data-flag="pub"]'); if (_pb) _pb.classList.remove('on');
+  var sel = document.getElementById('subrecsel');
+  if (sel) sel.value = '';
+  run();
+}
 
 /* 点「标记已发布」→ 先问是正品还是样机（这个信息用于库存提醒：哪种没货了要下架） */
 function openPickKind(k){
