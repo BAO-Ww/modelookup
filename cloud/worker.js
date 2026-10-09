@@ -315,7 +315,9 @@ async function route(request, env, path) {
     const marks = await getPub(who);
     if (b.on === false) {
       delete marks[c];
-      // 2026-10-08：取消发布**不再删定价** —— 价格跟型号走，不跟发布标记走（用户要求）
+      // 2026-10-10 新规矩：取消发布，定价一并清掉（旧的「价格跟型号走」作废）
+      const pp0 = await getPubP(who);
+      if (c in pp0) { delete pp0[c]; await env.KV.put("pubp_" + who, JSON.stringify(pp0)); }
     } else {
       marks[c] = { t: Date.now(), k: b.k === "s" ? "s" : "l" };
       if (b.p != null && isFinite(+b.p)) {
@@ -360,6 +362,23 @@ async function route(request, env, path) {
       prices[u] = await getPubP(u);
     }
     return J({ ok: true, all: out, prices });
+  }
+
+  // 定点清理定价表（2026-10-10）：管理号删掉指定账号 pubp_ 里的指定键。
+  // /pubsync 的合并只增不删——泄漏/串号写进去的脏价永远灌得回来，必须有个能删的口子。
+  if (path === "/pubclean" && request.method === "POST") {
+    const users = await getUsers(env);
+    const me = users[who];
+    if (!me || me.role !== "admin") return jerr("只有管理号能清理", 403);
+    const b = await request.json().catch(() => ({}));
+    const u = String(b.u || who);
+    if (!users[u]) return jerr("没有这个账号", 404);
+    const keys = Array.isArray(b.keys) ? b.keys.map(String) : [];
+    const pp = await getPubP(u);
+    const removed = [];
+    for (const k of keys) { if (k in pp) { delete pp[k]; removed.push(k); } }
+    await env.KV.put("pubp_" + u, JSON.stringify(pp));
+    return J({ ok: true, u, removed, prices: pp });
   }
 
   // ---------- 补图上云（所有人共享：谁补的大家都能看到） ----------
