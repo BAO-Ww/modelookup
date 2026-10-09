@@ -169,6 +169,9 @@ main{padding:22px 0 60px}
 .updbar .spin{display:inline-block;width:12px;height:12px;border:2px solid #cfdcf6;
   border-top-color:var(--brand);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:5px}
 @keyframes sp{to{transform:rotate(360deg)}}
+/* 软件更新弹窗里的转圈（openAppUpdate，2026-10-09） */
+.apspin{display:inline-block;width:12px;height:12px;border:2px solid #cfdcf6;
+  border-top-color:var(--brand);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:5px}
 /* 云端更新进度条（2026-10-09）：GPU 合成动画保证丝滑，width 过渡让轮询间隙也平滑 */
 .uprog{width:100%;margin-top:4px}
 .uprog .bar{height:8px;border-radius:99px;background:#e8eef9;overflow:hidden}
@@ -426,6 +429,7 @@ footer a:hover{text-decoration:underline}
           <button class="chip fchk" data-flag="send" title="只列出能发往外区（全国）的型号"><span class="box"></span>发全国</button>
           <button class="chip fchk" data-flag="hide" title="隐藏你已标记发布的型号"><span class="box"></span>未发布</button>
           <button class="chip fchk" data-flag="pub" title="只看你已标记发布的型号"><span class="box"></span>已发布</button>
+          <button class="chip fchk" data-flag="nostock" title="已发布但没库存的（正品看正品仓、样机看样机仓）；在看子用户发布时筛 TA 的"><span class="box"></span>没库存</button>
         </div>
         <!-- 子用户发布（管理号=看每个子账号；子账号=看自己的）。下拉选中主区直接列出 TA 发布的卡片 -->
         <div class="subrec" id="subrec" hidden>
@@ -508,6 +512,26 @@ var STOCKDATA = null;
 function stockOf(mo){
   var s = STOCKDATA && STOCKDATA.stock;
   return s ? (s[norm(mo)] || null) : null;
+}
+/* 已发布型号按发布类型的剩余可售（2026-10-09 从 pubStockWarn 抽出来，筛选「没库存」也要用）：
+   正品发布看非样机/非次品仓的可用量，样机发布看样机仓；库存里查不到返回 -1（也当没库存提醒） */
+function pubLeftOf(mo, kind){
+  var st = stockOf(mo);
+  if (!st) return -1;
+  var good = 0, samp = 0;
+  Object.keys(st.wt || {}).forEach(function(t){
+    var n = st.wt[t] || 0;
+    if (t.indexOf('样机') >= 0) samp += n;
+    else if (t.indexOf('次品') >= 0){ /* 次品仓不算可售 */ }
+    else good += n;
+  });
+  return (kind === 's') ? samp : good;
+}
+/* 按卡片键找型号条目（告警/筛选要用 it.mo 查库存——发布记录的键可能是变体码，
+   直接拿去查库存会把有货的误报成「查不到」，2026-10-09 实锤 JSQ22 就是这么误报的） */
+function itemOf(c){
+  for (var i = 0; i < ALL.length; i++){ if (ALL[i].c === c) return ALL[i]; }
+  return null;
 }
 
 /* ================= 本地存储 ================= */
@@ -767,7 +791,7 @@ function buildIndex(){
 function brandOf(it){ return it.b || ''; }
 function nameOf(it){ return it.n || ''; }
 
-var curBrand = '', curCat = '', curKind = '', flagStock = false, flagSend = false, flagPub = false;
+var curBrand = '', curCat = '', curKind = '', flagStock = false, flagSend = false, flagPub = false, flagNoStock = false;
 /* 子用户发布查看模式（管理号）：点侧栏子用户名 → 主区直接列出 TA 发布的商品卡片；
    再点一次同名 chip 退出。set = 该用户已发布的型号 key 集合 */
 var SUBVIEW = null;
@@ -838,6 +862,9 @@ function calcHTML(it){
   //    只是成本那栏写「无成本价」，输定价进去「挣」显示 —（总比整行不见了强）
   var opts = costOptions(it);
   var saved = PRICES[it.c];
+  /* 看子用户发布时：他自己填过价就直接填进输入框（改了会存成自己的，不影响 TA） */
+  var _sv = (SUBVIEW && SUBVIEW.info && SUBVIEW.info[it.c]) ? SUBVIEW.info[it.c] : null;
+  if (!isNum(saved) && _sv && isNum(_sv.p)) saved = _sv.p;
   var pick = opts.length ? opts[0] : { v: '', l: '无成本价' };
   var sel;
   if (opts.length > 1){
@@ -1288,7 +1315,9 @@ function openPubAll(m){
           var t = fmtTs(tsOf(v));
           var kk = (typeof v === 'object' && v && v.k) ? (v.k === 's' ? '样机' : '正品') : '';
           return '<span class="pk on" title="标记于 ' + t + '">' + esc(k)
-               + (kk ? ' <i style="font-style:normal;color:#98a2b3">' + kk + '</i>' : '')
+               + (kk ? ' <i style="font-style:normal;display:inline-block;padding:0 6px;border-radius:8px;font-size:11px;font-weight:600;line-height:16px;vertical-align:1px;'
+                    + (kk === '样机' ? 'background:#e8f0fe;color:#1a56c4;">样机' : 'background:#e7f6ec;color:#0f7b3a;">正品')
+                    + '</i>' : '')
                + (isNum(p) ? ' <b>¥' + esc(money(p)) + '</b>' : '') + '</span>';
         }).join('') + '</div>';
       }
@@ -1299,6 +1328,18 @@ function openPubAll(m){
 }
 /* 兼容云端两种值格式：旧 = 时间戳数字，新 = {t: 时间戳, p: 定价} */
 function tsOf(v){ return typeof v === 'object' && v ? (v.t || 0) : (v || 0); }
+/* 子用户发布查看模式的顶部条：标题 + 退出 + 全部/正品/样机筛选胶囊（2026-10-09 用户要求）
+   筛的是「发布时标的正品/样机」；老记录没存 k 就按型号自身的滞销/样机兜底 */
+function subHeaderHTML(){
+  function _chip(k, label){
+    var on = ((SUBVIEW.fk || '')) === k;
+    return '<a href="javascript:void 0" data-fk="' + k + '" style="display:inline-block;margin-left:6px;padding:1px 9px;border-radius:9px;font-size:12px;cursor:pointer;'
+         + (on ? 'background:#2e6be6;color:#fff;' : 'background:#eef1f6;color:#475467;') + '">' + label + '</a>';
+  }
+  return '<b>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（' + Object.keys(SUBVIEW.set).length + ' 个型号）</b>'
+       + '<a href="javascript:void 0" id="subexit" style="margin-left:8px;font-size:12.5px">✕ 退出</a>'
+       + _chip('', '全部') + _chip('l', '正品') + _chip('s', '样机');
+}
 /* ---------- 侧栏「子用户发布」（管理号）----------
    点子用户名 → 时间倒序列出 TA 发布的型号 + 闲鱼定价；点型号直接填进搜索框定位。 */
 /* ---------- 侧栏「子用户发布」（管理号）/「我的发布」（子账号）----------
@@ -1356,24 +1397,32 @@ function loadSubRec(){
 function showSubRec(u){
   var j = window._SUBPUB; if (!j) return;
   var marks = (j.all || {})[u] || {}, pr = (j.prices || {})[u] || {};
-  SUBVIEW = { u: u, disp: (u === '0' ? AUTH.u : u), set: {}, info: {} };
+  SUBVIEW = { u: u, disp: (u === '0' ? AUTH.u : u), set: {}, info: {}, fk: '' };
   Object.keys(marks).forEach(function(k){
     SUBVIEW.set[k] = 1;
     SUBVIEW.info[k] = { t: tsOf(marks[k]), k: (typeof marks[k] === 'object' && marks[k]) ? marks[k].k : null, p: pr[k] };
   });
   run();   // 主区直接列出 TA 发布的商品卡片（时间/定价显示在卡片上，侧栏不再堆明细）
+  pubStockWarn();   // 横幅切到盯 TA 的已发布型号（TA 的没库存了也提醒）
 }
 (function(){
   var sel = document.getElementById('subrecsel'); if (!sel) return;
   sel.addEventListener('change', function(){
     var v = sel.value || '';
-    if (!v){ SUBVIEW = null; run(); return; }        // 选「不筛选」= 退出查看
+    if (!v){ SUBVIEW = null; pubStockWarn(); run(); return; }        // 选「不筛选」= 退出查看
     showSubRec(v);
   });
 })();
 document.getElementById('hint').addEventListener('click', function(e){
+  var fk = (e.target && e.target.getAttribute) ? e.target.getAttribute('data-fk') : null;
+  if (fk != null && SUBVIEW){                        // 正品/样机筛选胶囊
+    SUBVIEW.fk = fk;
+    run();
+    return;
+  }
   if (e.target && e.target.id === 'subexit'){
     SUBVIEW = null;
+    pubStockWarn();                                  // 退出查看，横幅切回盯自己的
     var sel = document.getElementById('subrecsel');
     if (sel) sel.value = '';
     run();
@@ -1614,6 +1663,10 @@ function renderItem(it){
     return '';
   }
   var webUrl = webOf(it);
+  /* 子用户发布查看模式：标题行显示「已发布 · 正品/样机」绿标 + 闲鱼定价 + 发布于时间
+     （2026-10-09 用户定稿：对齐自己标记已发布的样式，不再用标题下方那行小字） */
+  var svInfo = (SUBVIEW && SUBVIEW.info && SUBVIEW.info[it.c]) ? SUBVIEW.info[it.c] : null;
+  var svKind = svInfo ? (svInfo.k || (it.k === 'l' ? 'l' : (it.k === 's' ? 's' : ''))) : '';
 
   return '<article class="card' + (marked ? ' marked' : '') + '" data-key="' + esc(it.c) + '">'
     + '<div class="chead" style="position:relative">'
@@ -1622,19 +1675,21 @@ function renderItem(it){
     + (mine ? '<button class="kimgdel" data-delimg="' + esc(it.c) + '" title="删掉我补的这张图">×</button>' : '')
     + '<div class="chead-main"><div class="moline">'
     + '<span class="mo">' + esc(it.mo) + '</span>'
-    + '<span class="pub"' + (marked ? '' : ' hidden') + '>已发布' + (marked && MARKED[it.c] ? ' · ' + kindLabel(MARKED[it.c]) : '') + '</span>'
+    + '<span class="pub"' + ((marked || svInfo) ? '' : ' hidden') + '>已发布'
+    + (svInfo ? ' · ' + (svKind === 's' ? '样机' : '正品')
+              : (marked && MARKED[it.c] ? ' · ' + kindLabel(MARKED[it.c]) : ''))
+    + '</span>'
+    + (svInfo ? '<span style="font-size:12px;color:var(--ink3)">'
+         + (isNum(svInfo.p) ? '闲鱼定价 <b style="color:var(--ink2)">¥' + esc(money(svInfo.p)) + '</b>' : '')
+         + (isNum(svInfo.p) && svInfo.t ? ' · ' : '')
+         + (svInfo.t ? '发布于 ' + esc(fmtTs(svInfo.t)) : '')
+         + '</span>' : '')
     + '<span class="acts">'
     + (pok('calc') ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + (marked ? '取消发布' : '标记已发布') + '</button>' : '')
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
     + (webUrl ? '<a class="markbtn web" href="' + esc(webUrl) + '" target="_blank" rel="noopener" title="打开品牌官网（对应型号）">官网</a>' : '')
     + '</span></div>'
     + '<div class="tags">'
-    + (SUBVIEW && SUBVIEW.info && SUBVIEW.info[it.c]
-       ? '<div class="publine" style="width:100%;font-size:12px;color:var(--ink3);margin:0 0 4px">发布于 '
-         + esc(fmtTs(SUBVIEW.info[it.c].t))
-         + (SUBVIEW.info[it.c].k ? ' · ' + (SUBVIEW.info[it.c].k === 's' ? '样机' : '正品') : '')
-         + (isNum(SUBVIEW.info[it.c].p) ? ' · 闲鱼定价 <b style="color:var(--ink2)">¥' + esc(money(SUBVIEW.info[it.c].p)) + '</b>' : '')
-         + '</div>' : '')
     + (it.b ? '<span class="tag b">' + esc(it.b) + '</span>' : '')
     + (it.cat ? '<span class="tag">' + esc(it.cat) + '</span>' : '')
     + (stTxt ? '<span class="tag d">' + esc(stTxt) + '</span>' : '')
@@ -1767,7 +1822,19 @@ function pass(it){
   if (flagSend && (it.natk === 3 || it.natk == null)) return false;
   if (hideMarked && MARKED[it.c]) return false;
   if (flagPub && !MARKED[it.c]) return false;   // 只看已发布（跟 hide 互斥）
+  /* 「没库存」：已发布但剩余可售 ≤0（或库存里查不到）；在看子用户发布时筛 TA 的 */
+  if (flagNoStock){
+    var _nm = SUBVIEW ? SUBVIEW.info[it.c] : MARKED[it.c];
+    if (!_nm) return false;
+    var _nk = (typeof _nm === 'object' && _nm && _nm.k) ? _nm.k : (it.k === 's' ? 's' : 'l');
+    if (pubLeftOf(it.mo || it.c, _nk) > 0) return false;
+  }
   if (SUBVIEW && !SUBVIEW.set[it.c]) return false;   // 只看某子用户发布的
+  if (SUBVIEW && SUBVIEW.fk){                         // 正品/样机筛选（按发布时标的，老记录按型号兜底）
+    var _pv = SUBVIEW.info[it.c];
+    var _pk = _pv ? (_pv.k || (it.k === 'l' ? 'l' : (it.k === 's' ? 's' : ''))) : '';
+    if (_pk !== SUBVIEW.fk) return false;
+  }
   return pricePass(it);
 }
 
@@ -1875,13 +1942,15 @@ function run(){
   listEl.innerHTML = '';
   moreEl.hidden = true;
   shown = 0;
-  var hasFilter = !!(curBrand || curCat || curKind || flagStock || flagSend || flagPub || pminV != null || pmaxV != null || SUBVIEW);
+  var hasFilter = !!(curBrand || curCat || curKind || flagStock || flagSend || flagPub || flagNoStock || pminV != null || pmaxV != null || SUBVIEW);
   // 空搜索框 + 没点任何筛选 = 什么都不列。
   // （上一版是「打开就铺全部」，用户反馈又慢又没用 —— 这是查找工具，不是浏览工具）
   if (!q && !hasFilter){ cur = []; hintEl.innerHTML = ''; listEl.innerHTML = idleHTML(); return; }
   var res = q ? (search(q) || []) : allFiltered();
   cur = res;
-  if (!res.length){ hintEl.innerHTML = '无匹配结果'; listEl.innerHTML = emptyHTML(q || '当前筛选'); return; }
+  if (!res.length){
+    hintEl.innerHTML = (SUBVIEW ? subHeaderHTML() + ' <span class="dot"></span> ' : '') + '无匹配结果';
+    listEl.innerHTML = emptyHTML(q || '当前筛选'); return; }
   var ph = priceHint(), bits;
   if (q){
     var exact = 0, catm = 0;
@@ -1894,8 +1963,7 @@ function run(){
   } else {
     bits = '筛选到 <b>' + res.length + '</b> 条';
   }
-  hintEl.innerHTML = (SUBVIEW ? '<b>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（' + Object.keys(SUBVIEW.set).length + ' 个型号）</b>'
-                    + '<a href="javascript:void 0" id="subexit" style="margin-left:8px;font-size:12.5px">✕ 退出</a> <span class="dot"></span> ' : '')
+  hintEl.innerHTML = (SUBVIEW ? subHeaderHTML() + ' <span class="dot"></span> ' : '')
     + bits
     + (ph ? ' <span class="dot"></span> ' + esc(ph) : '')
     + (res.length >= QCAP ? ' <span class="dot"></span> 仅显示前 ' + QCAP + ' 条，请多输入几个字符' : '');
@@ -1987,6 +2055,8 @@ toolsEl.addEventListener('click', function(e){
       try { localStorage.setItem(HIDE_KEY, '0'); } catch(e){}
     }
     b.classList.toggle('on', flagPub);
+  } else if (b.dataset.flag === 'nostock'){
+    flagNoStock = !flagNoStock; b.classList.toggle('on', flagNoStock);
   }
   run();
 });
@@ -2266,6 +2336,54 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
     }).catch(function(){});
   })();
 
+  /* ---- 软件更新弹窗（2026-10-09）：菜单「帮助 → 软件更新」直接走这里 ----
+     旧实现是 evaluate_js 去点 #appupd 隐藏按钮，反馈只有侧栏底部一行 12px 小字，
+     已是最新版时几乎看不见 → 用户以为点了没反应「用不了」。
+     现在开正经弹窗：检查结果 / 下载百分比 / 安装提示全程可见。 */
+  window.openAppUpdate = function(){
+    var oldm = document.getElementById('adminmask'); if (oldm) oldm.remove();
+    var m = document.createElement('div'); m.id = 'adminmask';
+    m.innerHTML = '<div class="amodal" style="width:min(460px,94vw)">'
+      + '<h3>软件更新 <button class="achip" id="apx" style="float:right">关闭</button></h3>'
+      + '<div id="apbody" style="font-size:13.5px;color:#3a4354;line-height:1.9;min-height:48px">'
+      + '<i class="apspin"></i> 正在检查新版本…</div></div>';
+    document.body.appendChild(m);
+    m.querySelector('#apx').addEventListener('click', function(){ m.remove(); });
+    var body = m.querySelector('#apbody');
+    var SPIN = '<i class="apspin"></i> ';
+    function say(html){ body.innerHTML = html; }
+    function fail(html){
+      say('❌ ' + html + '<br><span style="color:#98a2b3;font-size:12.5px">'
+        + '如果开着 Clash 等代理，请给 kdns.fr 加直连规则或切直连后重试</span>');
+    }
+    fetch('/api/appcheck', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
+      if (!r.ok){ fail('检查失败：' + esc(r.msg || '')); return; }
+      if (!r.newer){
+        say('✅ 已经是最新版 <b>v' + esc(r.cur) + '</b>（云端最新 v' + esc(r.latest) + '），不用更新');
+        return;
+      }
+      say('🚀 发现新版本 <b>v' + esc(r.latest) + '</b>（当前 v' + esc(r.cur) + '，约 '
+        + Math.round((r.size || 0) / 1048576) + ' MB）<br>' + SPIN + '正在下载，下载完自动安装，不用你操作…');
+      fetch('/api/appinstall', { method: 'POST', cache: 'no-store' })
+        .then(function(r2){ return r2.json(); })
+        .then(function(r2){
+          if (!r2.ok){ fail('更新失败：' + esc(r2.msg || '')); return; }
+          var tick = function(){
+            fetch('/api/state', { cache: 'no-store' }).then(function(r3){ return r3.json(); }).then(function(s){
+              if (!m.isConnected) return;                 // 弹窗已关就不再刷
+              if (s.status === 'error'){ fail(esc(s.msg || '更新失败')); return; }
+              say('🚀 更新到 <b>v' + esc(r.latest) + '</b><br>' + SPIN + esc(s.msg || '处理中…'));
+              setTimeout(tick, 1200);
+            }).catch(function(){ setTimeout(tick, 1500); }); // 装新版时本地服务会断，静默重试
+          };
+          tick();
+        })
+        .catch(function(e){ fail('请求失败：' + esc(String(e))); });
+    }).catch(function(e){
+      fail('检查失败：' + esc(String(e)));
+    });
+  };
+
   fetch('/api/state', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
     if (s.status === 'running' || s.status === 'login'){ busy(true); poll(); }
   }).catch(function(){});
@@ -2430,31 +2548,38 @@ function initUI(){
   run();
 }
 
-/* 库存提醒：每次拿到实时库存就核对一遍所有已发布型号——
-   正品发布看「非样机/非次品」仓的可用量，样机发布看样机仓；为 0 就提醒下架 */
+/* 库存提醒：每次拿到实时库存就核对一遍已发布型号——
+   正品发布看「非样机/非次品」仓的可用量，样机发布看样机仓；为 0 就提醒下架。
+   平时盯自己标记的；在看某子用户发布时改成盯 TA 的（2026-10-09）。
+   型号可能一大串：逐个红色小牌排列，带总数 */
 function pubStockWarn(){
   var box = document.getElementById('pubwarn');
   if (!box) return;
   if (!STOCKDATA || !STOCKDATA.stock || !Object.keys(STOCKDATA.stock).length){ box.hidden = true; return; }
-  var lost = [];
-  Object.keys(MARKED).forEach(function(c){
-    var m = MARKED[c]; if (!m) return;
-    var kind = m.k || 'l';
-    var st = stockOf(c);
-    if (!st){ lost.push(c + '（库存里查不到）'); return; }
-    var good = 0, samp = 0;
-    Object.keys(st.wt || {}).forEach(function(t){
-      var n = st.wt[t] || 0;
-      if (t.indexOf('样机') >= 0) samp += n;
-      else if (t.indexOf('次品') >= 0){ /* 次品仓不算可售 */ }
-      else good += n;
+  var marks = MARKED, who = '';
+  if (SUBVIEW && SUBVIEW.info && Object.keys(SUBVIEW.info).length){
+    who = SUBVIEW.disp || SUBVIEW.u;
+    marks = {};
+    Object.keys(SUBVIEW.info).forEach(function(c){
+      var v = SUBVIEW.info[c];
+      marks[c] = { k: (v && v.k) ? v.k : 'l' };
     });
-    var left = (kind === 's') ? samp : good;
-    if (left <= 0) lost.push(c + '（' + (kind === 's' ? '样机' : '正品') + '）');
+  }
+  var lost = [];
+  Object.keys(marks).forEach(function(c){
+    var m = marks[c]; if (!m) return;
+    var it = itemOf(c);
+    var kind = m.k || (it && it.k === 's' ? 's' : 'l');
+    var left = pubLeftOf((it && it.mo) || c, kind);   // 用型号查库存，别用记录键（变体码查不到）
+    if (left < 0) lost.push(c + '（库存里查不到）');
+    else if (left <= 0) lost.push(c + '（' + (kind === 's' ? '样机' : '正品') + '）');
   });
   if (!lost.length){ box.hidden = true; box.innerHTML = ''; return; }
   box.hidden = false;
-  box.innerHTML = '⚠ 这些已发布的型号已经没库存了，记得下架：<b>' + lost.map(esc).join('、') + '</b>'
+  box.innerHTML = '⚠ ' + (who ? '「' + esc(who) + '」已发布的型号' : '这些你已发布的型号') + '已经没库存了，记得下架（<b>共 ' + lost.length + ' 个</b>）：'
+    + lost.map(function(s){
+      return '<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:8px;background:#fdecec;color:#b42318;font-weight:600;font-size:12px">' + esc(s) + '</span>';
+    }).join('')
     + '<a id="pubwarnx">知道了</a>';
   var x = box.querySelector('#pubwarnx');
   if (x) x.onclick = function(){ box.hidden = true; };

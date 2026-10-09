@@ -44,7 +44,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.8"
+APP_VERSION = "2.7.9"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -2727,8 +2727,12 @@ def build_menu(sub=False):
             pass
 
     def upd_app():
-        """软件自更新：菜单点一下 = 页面里点「⬆ 软件更新」按钮（下载+静默覆盖装）。"""
-        js_click("appupd")
+        """软件自更新：打开更新弹窗（检查/下载/安装全程可见）。
+        旧实现去点 #appupd 隐藏按钮，反馈只有侧栏一行小字，用户以为用不了。"""
+        try:
+            webview.windows[0].evaluate_js("openAppUpdate()")
+        except Exception:
+            pass
 
     def reload_page():
         if not guarded("重新加载页面", "upd_kdocs"):
@@ -2990,14 +2994,31 @@ def run_app(httpd, port, startup_xlsx=None):
 
     def setup_tray():
         """托盘：点 × / Ctrl+W = 收进托盘不退出；托盘双击恢复；托盘菜单「退出」真退。
-        winforms 层直接挂 FormClosing / KeyDown（KeyPreview 让 Ctrl+W 先于 WebView2 被拦下）。"""
+        winforms 层直接挂 FormClosing / KeyDown（KeyPreview 让 Ctrl+W 先于 WebView2 被拦下）。
+        坑（2026-10-09 修）：native 窗口是 GUI 线程异步建的，after_start 一进来就取十有八九
+        还是 None —— 旧代码取不到就直接跳过，等于托盘从没装上、点 × 直接真退出。
+        现在后台轮询等 native 出现，再 BeginInvoke 到 UI 线程装托盘。"""
+        def _late():
+            for _ in range(150):                 # 最多等 15 秒
+                bv = getattr(MAIN_WIN, "native", None)
+                if bv is not None:
+                    try:
+                        import System.Windows.Forms as _WF
+                        bv.BeginInvoke(_WF.MethodInvoker(lambda: _wire_tray(bv)))
+                    except Exception:
+                        try:
+                            _wire_tray(bv)       # BeginInvoke 不行就硬调（总比不装强）
+                        except Exception as e:
+                            _tick("托盘迟到安装失败: %r" % e)
+                    return
+                time.sleep(0.1)
+            _tick("托盘：始终没拿到原生窗口，放弃")
+        threading.Thread(target=_late, daemon=True).start()
+
+    def _wire_tray(bv):
         try:
             import System.Windows.Forms as WF
             import System.Drawing as DG
-            bv = getattr(MAIN_WIN, "native", None)
-            if bv is None:
-                _tick("托盘：拿不到原生窗口，跳过")
-                return
             ico_path = rp("icon.ico")
             ic = DG.Icon(ico_path) if os.path.isfile(ico_path) else DG.SystemIcons.Application
 
@@ -3056,7 +3077,7 @@ def run_app(httpd, port, startup_xlsx=None):
 
             menu = WF.ContextMenuStrip()
             mi1 = WF.ToolStripMenuItem("打开 型号查询")
-            mi1.add_Click(WF.EventHandler(_show))
+            mi1.Click += _show
             mi3 = WF.ToolStripMenuItem("开机自启")
             mi3.CheckOnClick = True
             try:
@@ -3066,14 +3087,14 @@ def run_app(httpd, port, startup_xlsx=None):
                 mi3.Checked = True
             except Exception:
                 mi3.Checked = False
-            mi3.add_Click(WF.EventHandler(_autostart_toggle))
+            mi3.Click += _autostart_toggle
             mi2 = WF.ToolStripMenuItem("退出")
-            mi2.add_Click(WF.EventHandler(_real_quit))
+            mi2.Click += _real_quit
             menu.Items.Add(mi1)
             menu.Items.Add(mi3)
             menu.Items.Add(mi2)
             ni.ContextMenuStrip = menu
-            ni.add_DoubleClick(WF.EventHandler(_show))
+            ni.DoubleClick += _show
 
             tipped = [False]
 
@@ -3106,9 +3127,9 @@ def run_app(httpd, port, startup_xlsx=None):
                 except Exception:
                     pass
 
-            bv.add_FormClosing(WF.FormClosingEventHandler(_on_closing))
+            bv.FormClosing += _on_closing
             bv.KeyPreview = True
-            bv.add_KeyDown(WF.KeyEventHandler(_on_keydown))
+            bv.KeyDown += _on_keydown
             _tick("托盘就绪：× / Ctrl+W 收进托盘，托盘双击恢复，右键退出")
         except Exception as e:
             _tick("托盘初始化失败（不影响其他功能）: %r" % e)
