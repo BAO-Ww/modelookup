@@ -516,16 +516,15 @@ function stockOf(mo){
 /* 已发布型号按发布类型的剩余可售（2026-10-09 从 pubStockWarn 抽出来，筛选「没库存」也要用）：
    正品发布看非样机/非次品仓的可用量，样机发布看样机仓；库存里查不到返回 -1（也当没库存提醒） */
 function pubLeftOf(mo, kind){
-  var st = stockOf(mo);
-  if (!st) return -1;
-  var good = 0, samp = 0;
-  Object.keys(st.wt || {}).forEach(function(t){
-    var n = st.wt[t] || 0;
-    if (t.indexOf('样机') >= 0) samp += n;
-    else if (t.indexOf('次品') >= 0){ /* 次品仓不算可售 */ }
-    else good += n;
-  });
-  return (kind === 's') ? samp : good;
+  /* 2026-10-09 用户定稿：跟卡片「清理数量」完全同一口径 —— 清理数量>0 = 有库存。
+     之前正品发布只数非样机非次品仓，结果型号那 1 台躺在别的仓，卡片显示清理数量 1
+     告警却说没库存（JSQ25/CXW 实锤误报）。现在永远用卡片显示的那个数 */
+  var live = stockOf(mo);
+  if (live && isNum(live.a)) return Math.round(live.a);
+  var it = null;
+  for (var i = 0; i < ALL.length; i++){ if (ALL[i].mo === mo){ it = ALL[i]; break; } }
+  var q = it ? (isNum(it.lq) ? it.lq : (isNum(it.sq) ? it.sq : null)) : null;
+  return isNum(q) ? q : 0;
 }
 /* 按卡片键找型号条目（告警/筛选要用 it.mo 查库存——发布记录的键可能是变体码，
    直接拿去查库存会把有货的误报成「查不到」，2026-10-09 实锤 JSQ22 就是这么误报的） */
@@ -932,7 +931,7 @@ var PERM_DEFS = [
   ['sum',         '汇总行（正品/样机/次品仓）', '界面显示'],
   ['subsidy',     '补贴栏',                  '界面显示'],
   ['calc',        '闲鱼定价 / 已发布 / 复制',  '界面显示'],
-  ['pubview',     '「已发布」筛选按钮',        '界面显示'],
+  ['pubview',     '看发布记录（我的发布 / 已发布·没库存筛选）', '界面显示'],
   ['supplier',    '发货 / 货源',              '界面显示'],
   ['nat',         '发往（可发区域）',          '界面显示'],
   ['code',        '物料编码行',              '界面显示'],
@@ -1112,9 +1111,10 @@ function afterAuth(){
       { u: AUTH.u, role: AUTH.role, perm: AUTH.perm || {} }) });
   } catch(e){}
   syncMarks();   // 发布记录并到云端（本地旧记录也会被合并上去）
-  // 侧栏「子用户发布 / 我的发布」块：所有角色都有（管理号看子账号、子账号看自己）
+  // 侧栏「子用户发布 / 我的发布」块：管理号恒有；子账号由管理号勾「pubview」权限决定
+  //（2026-10-09 用户要求：给不给看子用户发布，管理员逐个勾）
   var sr = document.getElementById('subrec');
-  if (sr){ sr.hidden = false; loadSubRec(); }
+  if (sr && (AUTH.role === 'admin' || pok('pubview'))){ sr.hidden = false; loadSubRec(); }
   syncImgs();    // 补图并到云端（别人补的拉下来，自己补的推上去）
   var bar = document.getElementById('updbar');
   if (!bar) return;
@@ -1137,10 +1137,12 @@ function applyPermBar(){
   var b = document.getElementById('updbtn'), s = document.getElementById('stkbtn');
   if (b) b.hidden = !pok('upd_kdocs');
   if (s) s.hidden = !pok('upd_yy');
-  // 「已发布」筛选按钮：管理号恒有；子账号由管理号勾「pubview」权限决定
+  // 「已发布」「没库存」筛选按钮：管理号恒有；子账号由管理号勾「pubview」权限决定
   var isAdmin = AUTH && AUTH.role === 'admin';
   var pb = document.querySelector('.chip[data-flag="pub"]');
   if (pb) pb.hidden = !(isAdmin || pok('pubview'));
+  var nb = document.querySelector('.chip[data-flag="nostock"]');
+  if (nb) nb.hidden = !(isAdmin || pok('pubview'));
 }
 /* ---------- 管理号：账号管理 ---------- */
 function openAdmin(){
@@ -1387,8 +1389,10 @@ function loadSubRec(){
       if (!j || !j.ok){ sel.innerHTML = '<option value="">' + esc((j && j.msg) || '拉取失败') + '</option>'; return; }
       window._SUBPUB = { all: (j.marks && Object.keys(j.marks).length) ? { 0: j.marks } : {}, prices: { 0: j.prices || {} } };
       var n = Object.keys(j.marks || {}).length;
-      sel.innerHTML = '<option value="">不筛选</option>'
-        + '<option value="0">看我发布的 ' + n + ' 个型号</option>';
+      /* 2026-10-09 用户定稿：子账号不要「不筛选」，就一个「我的发布」，加载完直接进入 */
+      sel.innerHTML = '<option value="0">看我发布的 ' + n + ' 个型号</option>';
+      sel.value = '0';
+      showSubRec('0');
     }).catch(function(){
       sel.innerHTML = '<option value="">网络不通（开了代理请给 kdns.fr 设直连）</option>';
     });
@@ -1424,7 +1428,7 @@ document.getElementById('hint').addEventListener('click', function(e){
     SUBVIEW = null;
     pubStockWarn();                                  // 退出查看，横幅切回盯自己的
     var sel = document.getElementById('subrecsel');
-    if (sel) sel.value = '';
+    if (sel) sel.value = (AUTH && AUTH.role !== 'admin') ? '0' : '';   // 子账号只有「我的发布」一个选项，退了也停在它上面
     run();
   }
 });
@@ -2256,7 +2260,7 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
     if (all && all.disabled) return;
     busy(true, '正在云端更新…');
     msg.innerHTML =
-      '<div class="uprog"><div class="meta"><span>正在触发云端更新（GitHub Actions）…</span><b>3%</b></div>'
+      '<div class="uprog"><div class="meta"><span>正在触发云端更新（GitHub Actions）…</span><b>刚点击</b></div>'
       + '<div class="bar"><div class="fill" style="width:3%"><div class="glow"></div></div></div></div>';
     fetch('/api/updateall', { method: 'POST', cache: 'no-store',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wf: wf || 'all' })
@@ -2279,12 +2283,13 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
         var pct = Math.min(99, Math.max(3, s.pct || 5));
         var stage = esc(s.stage || '正在更新…');
         var el = fmtSec(s.elapsed || 0);
+        /* 2026-10-09 用户定稿：百分比不要（云端等待期瞎跳没意义），只显示已用时间 */
         msg.innerHTML =
           '<div class="uprog">'
-          + '<div class="meta"><span>' + stage + '</span><b>' + pct + '% · 已用 ' + el + '</b></div>'
+          + '<div class="meta"><span>' + stage + '</span><b>已用 ' + el + '</b></div>'
           + '<div class="bar"><div class="fill" style="width:' + pct + '%"><div class="glow"></div></div></div>'
           + '</div>';
-        all.textContent = '正在云端更新 ' + pct + '%';
+        all.textContent = '正在云端更新（已用 ' + el + '）';
         setTimeout(pollAll, 1500);
         return;
       }
@@ -2571,8 +2576,7 @@ function pubStockWarn(){
     var it = itemOf(c);
     var kind = m.k || (it && it.k === 's' ? 's' : 'l');
     var left = pubLeftOf((it && it.mo) || c, kind);   // 用型号查库存，别用记录键（变体码查不到）
-    if (left < 0) lost.push(c + '（库存里查不到）');
-    else if (left <= 0) lost.push(c + '（' + (kind === 's' ? '样机' : '正品') + '）');
+    if (left <= 0) lost.push(c + '（' + (kind === 's' ? '样机' : '正品') + '）');
   });
   if (!lost.length){ box.hidden = true; box.innerHTML = ''; return; }
   box.hidden = false;
