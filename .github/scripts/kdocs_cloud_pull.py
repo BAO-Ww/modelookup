@@ -38,6 +38,8 @@ TABLES = [
      "fid": "548020345856"},   # 公布版-滞销样机清理明细
     {"name": "price.xlsx", "share": "https://www.kdocs.cn/l/cficbK9Drrdp",
      "fid": "570174983918"},   # 价格表
+    {"name": "subsidy.xlsx", "share": "https://www.kdocs.cn/l/cid8gbTzhB4c",
+     "fid": "0"},              # 深圳以旧换新补贴表（要登录态；fileId 靠页面请求现查）
 ]
 
 # 与 app/main.py sync_xhr_js 同一招：在 kdocs 域页面里发同源 XHR，自动带上会话 cookie

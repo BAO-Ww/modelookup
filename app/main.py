@@ -725,6 +725,11 @@ def set_state(status=None, msg=None, rev=None, built=None,
             STATE["built"] = built
         if price_at is not None:
             STATE["price_at"] = price_at
+            try:                            # 2026-10-09：型号库时间持久化，重启不丢
+                with io.open(wp("price_ts.txt"), "w", encoding="utf-8") as f:
+                    f.write(price_at)
+            except Exception:
+                pass
         if stock_at is not None:
             STATE["stock_at"] = stock_at
         if alert_ts is not None:
@@ -1151,6 +1156,18 @@ def has_perm(k):
     return bool(PERM_STATE.get("perm", {}).get(k))
 
 
+def price_load():
+    """启动时把上次的型号库更新时间读回侧栏（重启不丢）。"""
+    p = wp("price_ts.txt")
+    if os.path.isfile(p):
+        try:
+            t = io.open(p, encoding="utf-8").read().strip()
+            if t:
+                STATE["price_at"] = t
+        except Exception:
+            pass
+
+
 def stock_load():
     """启动时把上次的实时库存读回内存（没有就当没有）。"""
     global STOCK
@@ -1292,8 +1309,8 @@ def stock_pull_cloud(log, force=True):
             return                        # 探测失败：静默，下轮再说
         with STOCK_LOCK:
             local_ts = STOCK.get("ts") or ""
-        if cloud_ts == local_ts:
-            return                        # 云端没新东西
+        if cloud_ts <= local_ts:
+            return                        # 云端没有比本地更新的东西（2026-10-09 改成比先后，防止本机新的被云端旧的覆盖）
         log("云端库存有更新（%s → %s），自动同步…" % (local_ts or "无", cloud_ts))
     log("正在从云端同步库存（管理号共享的用友实时数据）…")
     set_state("running", "正在从云端同步库存…")
@@ -1328,71 +1345,79 @@ def _ver_gt(a, b):
         return False
 
 
+def sync_xlsx_cloud(log):
+    """从云端同步金山表格（2026-10-09 v2.8 全云端口径）：
+    轻探 /xlsxmeta（ts=各文件内容哈希）→ 有新内容拉 /xlsxcloud 全量 →
+    落盘（公布版/价格表/补贴表）→ 重建 → 记 ts。
+    返回："synced"（同步并重建完成）/ "unchanged"（云端没新东西）/ 其他 = 错误信息。"""
+    try:
+        j, err = cloud_req("/xlsxmeta", "GET", timeout=30)
+        ts = str((j or {}).get("ts") or "") if (j and j.get("ok")) else ""
+        if not ts:
+            return "unchanged"           # 云端还没有数据 / 探测失败：当没新东西
+        local = ""
+        try:
+            local = io.open(wp("xlsx_ts.txt"), encoding="utf-8").read().strip()
+        except Exception:
+            pass
+        if ts == local:
+            return "unchanged"
+        if not _update_lock.acquire(blocking=False):
+            return "busy"                # 别的更新正在跑，这轮先不动
+        try:
+            log("☁ 云端表格有更新（%s…），自动同步…" % ts[:8])
+            set_state("running", "正在从云端同步表格数据…")
+            j2, err2 = cloud_req("/xlsxcloud", "GET", timeout=300)
+            if err2 or not j2 or not j2.get("ok"):
+                msg = "云端表格同步失败：%s" % (err2 or (j2 or {}).get("msg"))
+                set_state("error", msg)
+                return msg
+            files = j2.get("files") or {}
+            saved = []
+            for name in ("data.xlsx", "price.xlsx", "subsidy.xlsx"):
+                b64 = files.get(name)
+                if not b64:
+                    continue
+                raw = base64.b64decode(b64)
+                if raw[:2] != b"PK":
+                    raise RuntimeError("%s 不是有效的表格文件" % name)
+                with open(wp(name), "wb") as f:
+                    f.write(raw)
+                saved.append(name)
+            if not saved:
+                return "unchanged"
+            set_state("running", "正在重建数据（云端表格）…")
+            rebuild(log)
+            with io.open(wp("xlsx_ts.txt"), "w", encoding="utf-8") as f:
+                f.write(ts)
+            set_state("done", "数据已自动同步（云端表格 · %s…）" % ts[:8],
+                      price_at=time.strftime("%m-%d %H:%M"))
+            log("云端表格同步完成：%s" % ", ".join(saved))
+            return "synced"
+        finally:
+            _update_lock.release()
+    except Exception as e:
+        try:
+            LOG.append("云端表格同步异常：%s" % e)
+            set_state("error", "云端表格同步异常：%s" % e)
+        except Exception:
+            pass
+        return "云端表格同步异常：%s" % e
+
+
 def xlsx_follower():
-    """云端表格跟随（2026-10-09，跟库存云同步同思路）：
-    GitHub Actions 定时任务（云端浏览器）从金山拉「公布版 + 价格表」传到云端
-    （ts = 两个文件内容的哈希，表格没改就不会变）；本机每 60 秒轻探一次
-    /xlsxmeta，有变才拉全量重建，rev bump 页面无感刷新。
-    管理号/子账号都跑——管理号自己直连金山的那条链照旧，两条互不影响；
-    这样金山表一更新，哪怕所有软件都关着，云端也会先拿到、开机 90 秒内跟上。"""
+    """云端表格跟随线程（每 60 秒轻探一次）：GitHub Actions 定时任务（云端浏览器）
+    从金山拉「公布版 + 价格表 + 补贴表」传云端；本机有新内容才拉全量重建。
+    金山表一更新，哪怕所有软件都关着，云端也会先拿到、开机 90 秒内跟上。"""
     time.sleep(90)                       # 启动头一会儿让位给首屏
     while True:
         try:
             if read_state()["status"] in ("running", "login"):
                 time.sleep(60)
                 continue
-            j, err = cloud_req("/xlsxmeta", "GET", timeout=30)
-            ts = str((j or {}).get("ts") or "") if (j and j.get("ok")) else ""
-            if not ts:
-                time.sleep(60)
-                continue
-            local = ""
-            try:
-                local = io.open(wp("xlsx_ts.txt"), encoding="utf-8").read().strip()
-            except Exception:
-                pass
-            if ts == local:
-                time.sleep(60)
-                continue
-            LOG.append("☁ 云端表格有更新（%s…），自动同步…" % ts[:8])
-            set_state("running", "正在从云端同步表格数据…")
-            j2, err2 = cloud_req("/xlsxcloud", "GET", timeout=300)
-            if err2 or not j2 or not j2.get("ok"):
-                set_state("error", "云端表格同步失败：%s" % (err2 or (j2 or {}).get("msg")))
-                time.sleep(300)
-                continue
-            files = j2.get("files") or {}
-            if not _update_lock.acquire(blocking=False):
-                time.sleep(60)
-                continue                 # 别的更新正在跑，下轮再看
-            try:
-                saved = []
-                for name in ("data.xlsx", "price.xlsx"):
-                    b64 = files.get(name)
-                    if not b64:
-                        continue
-                    raw = base64.b64decode(b64)
-                    if raw[:2] != b"PK":
-                        raise RuntimeError("%s 不是有效的表格文件" % name)
-                    with open(wp(name), "wb") as f:
-                        f.write(raw)
-                    saved.append(name)
-                if saved:
-                    set_state("running", "正在重建数据（云端表格）…")
-                    rebuild(LOG.append)
-                    with io.open(wp("xlsx_ts.txt"), "w", encoding="utf-8") as f:
-                        f.write(ts)
-                    set_state("done", "数据已自动同步（云端表格 · %s…）" % ts[:8],
-                              price_at=time.strftime("%m-%d %H:%M"))
-                    LOG.append("云端表格同步完成：%s" % ", ".join(saved))
-            finally:
-                _update_lock.release()
-        except Exception as e:
-            try:
-                LOG.append("云端表格跟随异常：%s" % e)
-                set_state("error", "云端表格同步异常：%s" % e)
-            except Exception:
-                pass
+            sync_xlsx_cloud(LOG.append)
+        except Exception:
+            pass
         time.sleep(60)
 
 
@@ -1942,43 +1967,83 @@ _UPD_DETAIL = [""]             # 最近一次金山表格更新的明细（do_up
 _STK_DETAIL = [""]             # 最近一次用友库存更新的明细（do_stock_update 填）
 
 
-def _updateall_bg(log):
-    """全部更新一条龙：金山表格（型号/价格/补贴）→ 用友实时库存（2026-10-09）。"""
+def _updateall_bg(log, wf="all"):
+    """全部更新（2026-10-09 v2.8 全云端口径）：本机不拉数据 —— 一键触发云端
+    （GitHub Actions：金山拉表 + 用友拉库存），跑完自动从云端同步下来。
+    wf = all | kd（只表格）| yy（只库存）。"""
     errs, parts = [], []
     try:
-        _UPD_DETAIL[0] = ""
-        try:
-            ok, msg = do_update(log)
-            if ok:
-                parts.append("金山表格：%s" % msg)
-            elif msg != "跳过":
-                errs.append("金山：%s" % msg)
-                parts.append("金山表格：❌ %s" % msg)
-            else:
-                parts.append("金山表格：这轮跳过")
-        except Exception as e:
-            errs.append("金山：%s" % e)
-            parts.append("金山表格：❌ %s" % e)
-        _STK_DETAIL[0] = ""
-        try:
-            do_stock_update(log)
-            if _STK_DETAIL[0]:
-                parts.append("库存：%s" % _STK_DETAIL[0])
-            else:
-                st = read_state()
-                if st.get("status") == "error":
-                    parts.append("库存：❌ %s" % (st.get("msg") or "失败"))
-                    errs.append("库存：%s" % (st.get("msg") or "失败"))
+        set_state("running", "正在触发云端更新（GitHub Actions）…")
+        j, err = cloud_req("/citrigger", "POST", {"wf": wf}, timeout=60)
+        if err or not j or not j.get("ok"):
+            raise RuntimeError("触发云端任务失败：%s" % (err or (j or {}).get("msg")))
+        tmark = str(j.get("at") or "")[:19]          # ISO UTC 截到秒，比较 run 是否本次触发的
+        log("云端任务已触发（%s），等它跑完（一般 1-3 分钟）…" % wf)
+        res, done = {}, False
+        deadline = time.time() + 900
+        time.sleep(25)                               # dispatch 后 run 要几秒才出现在列表里
+        while time.time() < deadline:
+            time.sleep(15)
+            js, err2 = cloud_req("/cistatus", "GET", timeout=60)
+            if err2 or not js or not js.get("ok"):
+                continue                             # 网络抖动：下轮再试
+            res = js
+            want = [k for k in ("yy", "kd")
+                    if (k == "yy" and wf in ("all", "yy")) or (k == "kd" and wf in ("all", "kd"))]
+            if all(((res.get(k) or {}).get("status") == "completed"
+                    and str((res.get(k) or {}).get("at") or "")[:19] >= tmark) for k in want):
+                done = True
+                break
+        if not done:
+            raise RuntimeError("云端任务等了 15 分钟还没跑完（去 GitHub Actions 页面看看）")
+        for k, label in (("kd", "表格"), ("yy", "库存")):
+            if k not in want_local(wf):
+                continue
+            r = res.get(k) or {}
+            if (r.get("conclusion") or "") != "success":
+                msg = "云端%s任务失败（%s）" % (label, r.get("conclusion") or "未知")
+                errs.append(msg)
+                parts.append("云端%s：❌ %s" % (label, r.get("conclusion") or "未知"))
+                continue
+            if k == "kd":
+                st = sync_xlsx_cloud(log)
+                if st == "synced":
+                    parts.append("表格：云端已更新，本机已同步重建")
+                    _UPD_DETAIL[0] = "云端表格同步重建"
+                elif st == "unchanged":
+                    parts.append("表格：云端跑过，内容没变化")
+                    _UPD_DETAIL[0] = "云端表格无变化"
                 else:
-                    parts.append("库存：完成")
-        except Exception as e:
-            errs.append("库存：%s" % e)
-            parts.append("库存：❌ %s" % e)
+                    errs.append("表格：%s" % st)
+                    parts.append("表格：❌ %s" % st)
+            else:
+                before = (STOCK or {}).get("ts") or ""
+                stock_pull_cloud(log, force=False)
+                after = (STOCK or {}).get("ts") or ""
+                if after and after != before:
+                    parts.append("库存：云端已更新，本机已同步（%s）" % after)
+                    _STK_DETAIL[0] = "从云端同步 %s 行（云端定时共享）" % (STOCK.get("rows") or 0)
+                else:
+                    parts.append("库存：云端跑过，内容没变化")
+                    _STK_DETAIL[0] = "云端库存无变化"
+    except Exception as e:
+        errs.append(str(e))
+        parts.append("❌ %s" % e)
+        try:
+            set_state("error", str(e))
+        except Exception:
+            pass
     finally:
         _ALLRUN[0] = False
         _ALLRUN[1] = "；".join(errs)
         _ALLRUN[2] = "　|　".join(parts)
+        if not errs:
+            set_state("done", "云端更新完成", rev=STATE.get("rev", 0) + 1)
         log("全部更新结束 → %s" % _ALLRUN[2])
+
+
+def want_local(wf):
+    return {"all": ("kd", "yy"), "kd": ("kd",), "yy": ("yy",)}[wf if wf in ("all", "kd", "yy") else "all"]
 
 
 def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
@@ -2166,22 +2231,30 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/updateall":
-            # 全部更新：金山表格 → 用友库存 一条龙（2026-10-09）
+            # 全部更新（云端版，2026-10-09）：触发 GitHub Actions → 云端跑完自动同步
             # GET = 查进度（页面轮询用）；带 ok=true 的 GET?start=1 或 POST = 启动
             if u.query.startswith("start=1") or self.command == "POST":
+                wf = "all"
+                if self.command == "POST":
+                    try:
+                        n = int(self.headers.get("Content-Length") or 0)
+                        b = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+                        wf = b.get("wf") if b.get("wf") in ("all", "kd", "yy") else "all"
+                    except Exception:
+                        pass
                 if _ALLRUN[0] or read_state()["status"] in ("running", "login"):
                     self._send(200, json.dumps({"ok": False, "running": True,
                                                 "msg": "已有更新在进行中"}, ensure_ascii=False))
                     return
                 if PERM_STATE.get("role") not in (None, "admin"):
-                    self._send(200, json.dumps({"ok": False, "msg": "只有管理号能全部更新"},
+                    self._send(200, json.dumps({"ok": False, "msg": "只有管理号能触发云端更新（子账号的数据会自动跟着云端走）"},
                                                ensure_ascii=False))
                     return
                 _ALLRUN[0] = True
                 _ALLRUN[1] = ""
                 _ALLRUN[2] = ""
-                set_state("running", "正在全量更新（型号/价格/补贴 → 库存）…")
-                threading.Thread(target=_updateall_bg, args=(LOG.append,), daemon=True).start()
+                set_state("running", "正在触发云端更新（GitHub Actions）…")
+                threading.Thread(target=_updateall_bg, args=(LOG.append, wf), daemon=True).start()
                 self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
                 return
             self._send(200, json.dumps({"ok": True, "running": _ALLRUN[0],
@@ -2300,20 +2373,27 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             return
         if u.path == "/api/updateall":
-            # 全部更新（POST 启动）：金山表格 → 用友库存 一条龙（2026-10-09）
+            # 全部更新（POST 启动，云端版 2026-10-09）：触发 GitHub Actions → 云端跑完自动同步
+            wf = "all"
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                b = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}") if n else {}
+                wf = b.get("wf") if b.get("wf") in ("all", "kd", "yy") else "all"
+            except Exception:
+                pass
             if read_state()["status"] in ("running", "login") or _ALLRUN[0]:
-                self._send(200, json.dumps({"ok": False, "msg": "已有更新在进行中"},
-                                           ensure_ascii=False))
+                self._send(200, json.dumps({"ok": False, "running": True,
+                                            "msg": "已有更新在进行中"}, ensure_ascii=False))
                 return
             if PERM_STATE.get("role") not in (None, "admin"):
-                self._send(200, json.dumps({"ok": False, "msg": "只有管理号能全部更新"},
+                self._send(200, json.dumps({"ok": False, "msg": "只有管理号能触发云端更新（子账号的数据会自动跟着云端走）"},
                                            ensure_ascii=False))
                 return
             _ALLRUN[0] = True
             _ALLRUN[1] = ""
             _ALLRUN[2] = ""
-            set_state("running", "正在全量更新（型号/价格/补贴 → 库存）…")
-            threading.Thread(target=_updateall_bg, args=(LOG.append,), daemon=True).start()
+            set_state("running", "正在触发云端更新（GitHub Actions）…")
+            threading.Thread(target=_updateall_bg, args=(LOG.append, wf), daemon=True).start()
             self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
             return
         if u.path != "/api/upload":
@@ -2536,13 +2616,19 @@ def build_menu(sub=False):
     def upd():
         if not guarded("从金山文档更新", "upd_kdocs"):
             return
-        # 2026-10-09：菜单改成替点页面按钮（跟「软件更新…」同款）——
-        # 页面按钮才有转圈/完成提示，直接后台线程跑用户什么都看不见
-        js_click("updbtn")
+        # 2026-10-09 v2.8 全云端口径：菜单 = 触发云端（GitHub Actions 拉金山），
+        # 跑完本机自动同步重建；进度/结果都显示在侧栏底部（startCloud）
+        try:
+            webview.windows[0].evaluate_js("startCloud('kd')")
+        except Exception:
+            pass
 
     def upd_stock():
-        # 2026-10-09：同上，替点页面按钮，进度在页面上看得见
-        js_click("stkbtn")
+        # 2026-10-09 v2.8：同上 —— 触发云端（GitHub Actions 拉用友），跑完自动同步
+        try:
+            webview.windows[0].evaluate_js("startCloud('yy')")
+        except Exception:
+            pass
 
     def upd_app():
         """软件自更新：菜单点一下 = 页面里点「⬆ 软件更新」按钮（下载+静默覆盖装）。"""
@@ -2647,30 +2733,19 @@ def _built_desc():
 
 
 def auto_updater():
-    """定时自动更新（2026-10-08 按角色分流）：
-    · 管理号机器：每小时一轮（金山价格 + 用友库存 + 自动上传云端）——软件活着就在跑，
-      窗口收进托盘/最小化都不影响（后台线程）。开机自启（autostart）让它随系统常驻。
-    · 子账号机器：不碰用友。每 60 秒轻探一次云端库存时间戳（/stockmeta 只回几十字节），
-      发现管理号更新了 → 自动拉全量 → bump rev 页面无感刷新，用户什么都不用点。"""
+    """云端库存跟随线程（2026-10-09 v2.8 全云端口径）：
+    本机每小时直拉金山/用友的自动更新已全部取消 —— 定时更新全在云端
+    （GitHub Actions，北京时间 8:00-24:00 每小时，凌晨不跑）。
+    本机只做 60 秒轻探：云端有比本地新的库存就自动同步下来，所有角色统一走这条；
+    金山表格的跟随在 xlsx_follower（也是 60 秒）。软件活着就在跟，托盘/最小化不影响。"""
     time.sleep(180)                      # 启动头几分钟让位给首屏加载
-    if PERM_STATE.get("role") not in (None, "admin"):
-        while True:                      # ---- 子账号：云端跟随
-            try:
+    while True:
+        try:
+            if read_state()["status"] not in ("running", "login"):
                 stock_pull_cloud(LOG.append, force=False)
-            except Exception as e:
-                LOG.append("自动同步（云端库存）异常：%s" % e)
-            time.sleep(60)
-    while True:                          # ---- 管理号：用友 + 金山 全量更新
-        try:
-            LOG.append("⏰ 定时自动更新开始（每 1 小时）")
-            do_update(LOG.append, auto=True)
         except Exception as e:
-            LOG.append("自动更新（金山）异常：%s" % e)
-        try:
-            do_stock_update(LOG.append, auto=True)
-        except Exception as e:
-            LOG.append("自动更新（用友）异常：%s" % e)
-        time.sleep(3600)
+            LOG.append("自动同步（云端库存）异常：%s" % e)
+        time.sleep(60)
 
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -2997,6 +3072,7 @@ def main():
 
     bootstrap()
     _tick("骨架页写好")
+    price_load()
     stock_load()
     _tick("实时库存缓存：%s" % ("上次更新 " + str(STOCK.get("ts")) if STOCK.get("ts") else "还没有"))
     httpd, port = start_server()

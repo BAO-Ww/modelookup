@@ -68,7 +68,8 @@ body{
 .sidefoot .upnote b{color:var(--ink2)}
 .sidefoot .upnote .spin{display:inline-block;width:11px;height:11px;border:2px solid #cfdcf6;
   border-top-color:var(--brand);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:4px}
-.sidecount{font-size:11.5px;color:var(--ink3);margin-top:6px;line-height:1.6}
+.sidecount{font-size:11.5px;color:var(--ink3);margin-top:6px;line-height:1.7}
+.sidecount .mt{display:block}
 .sideall{display:block;width:100%;margin-top:10px;padding:9px 12px;border:0;border-radius:9px;
   background:var(--brand);color:#fff;font-size:13px;font-weight:600;cursor:pointer;text-align:center}
 .sideall:hover{background:var(--brand-d)}
@@ -2149,20 +2150,26 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
     }).catch(function(e){ msg.textContent = '请求失败：' + e; reset(); });
   });
 
-  /* ---- 全部更新：金山表格 + 用友库存 一条龙（2026-10-09） ---- */
+  /* ---- 全部更新：触发云端（GitHub Actions）→ 跑完自动同步（2026-10-09 v2.8）----
+     wf = all（表格+库存）/ kd（只表格）/ yy（只库存）；原生菜单的「从金山文档更新数据」
+     和「更新实时库存」也走这里（startCloud），只是 wf 不同。 */
+  function startCloud(wf){
+    if (all && all.disabled) return;
+    busy(true, '正在云端更新…');
+    msg.innerHTML = '<span class="spin"></span>正在触发云端更新（GitHub Actions）…';
+    fetch('/api/updateall', { method: 'POST', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wf: wf || 'all' })
+    }).then(function(r){ return r.json(); }).then(function(r){
+      if (!r.ok){
+        if (r.running){ pollAll(); return; }   // 已经在跑（比如定时跟随先动了）：直接接管显示进度
+        msg.textContent = '更新失败：' + (r.msg || ''); busy(false); return;
+      }
+      pollAll();
+    }).catch(function(e){ msg.textContent = '请求失败：' + e; busy(false); });
+  }
+  window.startCloud = startCloud;              // 原生菜单经 pywebview evaluate_js 调
   if (all){
-    all.addEventListener('click', function(){
-      if (all.disabled) return;
-      busy(true, '正在全部更新…');
-      msg.innerHTML = '<span class="spin"></span>正在全量更新（型号/价格/补贴 → 库存）…';
-      fetch('/api/updateall', { method: 'POST', cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
-        if (!r.ok){
-          if (r.running){ pollAll(); return; }   // 已经在跑（比如定时任务先动了）：直接接管显示进度
-          msg.textContent = '更新失败：' + (r.msg || ''); busy(false); return;
-        }
-        pollAll();
-      }).catch(function(e){ msg.textContent = '请求失败：' + e; busy(false); });
-    });
+    all.addEventListener('click', function(){ startCloud('all'); });
   }
   function pollAll(){
     fetch('/api/updateall', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(s){
@@ -2320,13 +2327,17 @@ function toggleMore(box, btn){
 function metaHTML(){
   var n = ALL.length.toLocaleString('zh-CN');
   if (location.protocol === 'http:' && (UPSTATE.price_at || UPSTATE.stock_at)){
-    /* 用户要求：型号数据（金山价格表重建）也要有更新时间 —— 「数据更新」就是型号增删+价格重建的时间 */
-    var t = '型号 <b>' + n + '</b> 个';
-    if (UPSTATE.price_at) t += ' · 数据更新 <b>' + esc(UPSTATE.price_at) + '</b>';
-    if (UPSTATE.stock_at) t += ' · 库存更新 <b>' + esc(UPSTATE.stock_at) + '</b>';
-    return t;
+    /* 2026-10-09 用户定稿：三行 —— 型号个数 / 数据：时间 / 库存：时间，
+       谁更新了显示谁的最近更新时间，没更新过的显示「—」 */
+    var pa = UPSTATE.price_at ? '<b>' + esc(UPSTATE.price_at) + '</b>' : '—';
+    var sa = UPSTATE.stock_at ? '<b>' + esc(UPSTATE.stock_at) + '</b>' : '—';
+    return '型号 <b>' + n + '</b> 个'
+         + '<span class="mt">数据：' + pa + '</span>'
+         + '<span class="mt">库存：' + sa + '</span>';
   }
-  return '型号 <b>' + n + '</b> 个 · 数据更新 <b>' + esc(META.built || '') + '</b>';
+  return '型号 <b>' + n + '</b> 个'
+       + '<span class="mt">数据：<b>' + esc(META.built || '—') + '</b></span>'
+       + '<span class="mt">库存：—</span>';
 }
 function initUI(){
   /* 无感重载会重跑 initUI：chips 重画前记住当前选中，重画后恢复（后台刷数据不能把筛选归零） */
