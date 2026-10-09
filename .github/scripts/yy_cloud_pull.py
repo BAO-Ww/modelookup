@@ -37,6 +37,7 @@ YY_LIST = ("https://c3.yonyoucloud.com/yonbip-scm-stock/report/list"
 GROUP_SCHEMA = "2118595716194503889"
 TPLID = "2159497746319933444"
 K_MODEL = "oid_userDefine_2159497746314166282"
+K_SKUNAME = "productsku_skuName"           # 物料SKU名称（含完整型号，带品类前缀）
 K_QTY = "currentqty"
 K_AVAIL = "availableqty"
 K_WHTYPE = "oid_userDefine_2169743811705569285"
@@ -46,18 +47,15 @@ PAGE_MAX = 15
 
 
 def norm_model(s):
-    """型号归一：与 app/main.py norm_model 语义一致（大写、去空白、去全角、截颜色/套机括号）。"""
+    """型号归一：与 app/main.py norm_model 语义一致（大写、去空白、去全角）。
+    ⚠ 2026-10-10 用户定稿「一字不差」：**不**截括号尾巴——(12T)星河U1 这类尾是型号本体，
+      截了就跟别的配置混键（旧版在这里截括号是截短键的直接根因之一）。"""
     if not s:
         return ""
     s = str(s).strip().upper()
-    s = s.replace("\u3000", "").replace(" ", "").replace("　", "")
+    s = s.replace("\u3000", " ").replace("　", " ")
     s = re.sub(r"[\uFF01-\uFF5E]", lambda c: chr(ord(c.group(0)) - 0xFEE0), s)
-    # 截掉颜色/套机后缀括号（中英文括号都算）
-    for ch in ("(", "（"):
-        i = s.find(ch)
-        if i > 0:
-            s = s[:i]
-    return s.rstrip("(-_/+.,、，-")
+    return re.sub(r"\s+", "", s)
 
 
 # ---------------------------------------------------------------- 浏览器登录
@@ -191,11 +189,20 @@ def login_and_fetch():
 # ---------------------------------------------------------------- 聚合 + 上传
 
 def aggregate(recs):
+    """聚合键（2026-10-10 与 app yy_finish 对齐的「一字不差」口径）：
+    型号字段常被录成截短值（JSQ25-13TE7），完整名（JSQ25-13TE7(12T)星河U1）在
+    物料SKU名称（productsku_skuName）里且带「海尔燃气热水器13升」前缀——
+    从名称里定位型号子串、把它后面的尾巴拼回型号：key = mo + 名称中 mo 之后的尾部。"""
     agg = {}
     for r0 in recs:
         mo = norm_model(r0.get(K_MODEL))
         if not mo:
             continue
+        sku = norm_model(r0.get(K_SKUNAME))
+        if sku and mo in sku:
+            tail = sku[sku.index(mo) + len(mo):]
+            if tail:
+                mo = mo + tail          # 完整名做键：型号字段截短时靠它一字不差对上
         a = agg.setdefault(mo, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
         try:
             a["q"] += float(r0.get(K_QTY) or 0)
@@ -243,6 +250,13 @@ def main():
     log("== 云端用友库存拉取 %s ==" % ts)
     recs = login_and_fetch()
     log("拉取完成：%d 行" % len(recs))
+    # 排查日志（2026-10-10）：把含「13TE7」的原始行打出来，核对接口字段真值
+    try:
+        for r in recs:
+            if "13TE7" in str(r.get(K_MODEL, "")).upper() or "13TE7" in str(r.get(K_SKUNAME, "")).upper():
+                log("样本行：" + json.dumps(r, ensure_ascii=False)[:1500])
+    except Exception as _e:
+        log("样本日志失败：" + str(_e))
     agg = aggregate(recs)
     log("聚合：%d 个型号" % len(agg))
     j, err = cloud_req("/stockcloud", "POST",

@@ -44,7 +44,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.13"
+APP_VERSION = "2.7.14"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1692,6 +1692,19 @@ def yy_pull_all(call_fn, log):
             return None, err
         rows = data.get("recordList") or []
         recs.extend(rows)
+        if page == 1:
+            # 第 1 页原始行立即落盘（排查接口字段用，不依赖后续聚合是否成功）
+            try:
+                with io.open(wp("yy_page1.json"), "w", encoding="utf-8") as f:
+                    json.dump({"ts": time.strftime("%m-%d %H:%M:%S"),
+                               "total": data.get("recordCount"),
+                               "nfields": list(rows[0].keys()) if rows else [],
+                               "rows": rows[:8]}, f, ensure_ascii=False, indent=1)
+            except Exception as _e:
+                try:
+                    log("第1页样本落盘失败：" + str(_e))
+                except Exception:
+                    pass
         total = data.get("recordCount")
         log("实时库存：已拉 %d / %s 行（第 %d 页）" % (len(recs), total, page))
         set_state("running", "实时库存：已拉 %d / %s 行…" % (len(recs), total if total else len(recs)))
@@ -1707,13 +1720,39 @@ def yy_pull_all(call_fn, log):
 def yy_finish(recs, log):
     """聚合 + 命中统计 + 落盘。"""
     global STOCK
+    # 原始行样本落盘（2026-10-10 排查字段用）：前 3 行 + 含「13TE7」的行，供核对接口字段真值
+    try:
+        samp = recs[:3] + [r for r in recs if "13TE7" in json.dumps(r, ensure_ascii=False).upper()][:3]
+        n_empty_sku = sum(1 for r in recs if not str(r.get(YY_K_SKUNAME) or "").strip())
+        n_splice = 0
+        for r in recs:
+            _mo = norm_model(r.get(YY_K_MODEL))
+            _sku = norm_model(r.get(YY_K_SKUNAME))
+            if _sku and _mo and _mo in _sku and _sku.index(_mo) + len(_mo) < len(_sku):
+                n_splice += 1
+        with io.open(wp("yy_last_rows.json"), "w", encoding="utf-8") as f:
+            json.dump({"ts": time.strftime("%m-%d %H:%M:%S"), "rows": len(recs),
+                       "empty_skuName": n_empty_sku, "spliceable": n_splice,
+                       "sample": samp}, f, ensure_ascii=False, indent=1)
+        log("已存原始行样本 %d 条（skuName 空 %d / 可拼接 %d）" % (len(samp), n_empty_sku, n_splice))
+    except Exception as e:
+        log("样本落盘失败：" + str(e))
     # 按型号聚合（norm_model 与前端 norm() 严格一致，全角/空格/大小写都归一）
+    # 聚合键（2026-10-10 用户定稿「一字不差」）：型号字段常被录成截短值（JSQ25-13TE7），
+    # 完整名（JSQ25-13TE7(12T)星河U1）在物料SKU名称里，但名称带「海尔…13升」前缀——
+    # 所以从名称里定位型号子串、把它后面的尾巴拼回型号：key = mo + 名称中 mo 之后的尾部。
+    # 同 mo 不同尾（星河U1/U2）各自成键，不再混加；名称里找不到型号就退回型号字段。
     # whs = 每个仓的明细（2026-10 二次改版：卡片只显示「什么仓有几个」，不再显示可用/现存总数）
     agg = {}
     for r0 in recs:
         mo = norm_model(r0.get(YY_K_MODEL))
         if not mo:
             continue
+        sku = norm_model(r0.get(YY_K_SKUNAME))
+        if sku and mo in sku:
+            tail = sku[sku.index(mo) + len(mo):]
+            if tail:
+                mo = mo + tail          # 完整名做键：型号字段截短时靠它一字不差对上
         a = agg.setdefault(mo, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
         try:
             a["q"] += float(r0.get(YY_K_QTY) or 0)
@@ -2022,8 +2061,7 @@ def _updateall_bg(log, wf="all"):
             time.sleep(15)
             # 云端一般 1-3 分钟跑完：按已等时长平滑推进 15%→68%（只进不退）
             waited = time.time() - _ALLRUN[5]
-            _all_stage("云端拉数据中（已等 %d 分 %02d 秒，一般 1-3 分钟）…"
-                       % (int(waited // 60), int(waited % 60)),
+            _all_stage("云端拉数据中（一般 1-3 分钟）…",
                        min(68, 15 + int(waited * 53 / 180.0)))
             js, err2 = cloud_req("/cistatus", "GET", timeout=30)
             if err2 or not js or not js.get("ok"):
@@ -2798,6 +2836,11 @@ def build_menu(sub=False):
     def logout():
         js_click("whoami")
 
+    def selfdisp():
+        # 我的显示开关（2026-10-09 用户要求：入口放顶部菜单栏，顶栏不放）
+        webview.windows[0].evaluate_js(
+            "if (typeof openSelfDisplay === 'function') openSelfDisplay();")
+
     def exp_img():
         if not guarded("导出我补的图", "addimg"):
             return
@@ -2835,6 +2878,9 @@ def build_menu(sub=False):
         Menu("账号(&A)", [
             MenuAction("账号管理", adm),
             MenuAction("退出登录", logout),
+        ]),
+        Menu("显示(&S)", [
+            MenuAction("我的显示开关", selfdisp),
         ]),
         Menu("帮助(&H)", [
             MenuAction("软件更新", upd_app),
