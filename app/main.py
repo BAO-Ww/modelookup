@@ -2849,6 +2849,11 @@ def run_app(httpd, port, startup_xlsx=None):
             do_update(LOG.append, xlsx_path=startup_xlsx)
 
     _tick("准备调 webview.start()")
+    # 运维口子：设 MODELLOOKUP_CDP_PORT=9333 再启动，可远程调试页面
+    # （_kdauth.py 抓金山登录态就靠它；pywebview 走 settings 传给 WebView2 —— 2026-10-09）
+    cdp_port = (os.environ.get("MODELLOOKUP_CDP_PORT") or "").strip()
+    if cdp_port.isdigit():
+        webview.settings["REMOTE_DEBUGGING_PORT"] = int(cdp_port)
     webview.start(after_start, gui="edgechromium", debug=False,
                   private_mode=False, storage_path=wp("webview"),
                   http_server=False)

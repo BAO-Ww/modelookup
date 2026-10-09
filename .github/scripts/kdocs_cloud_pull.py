@@ -77,11 +77,11 @@ def worker_req(path, method="GET", obj=None, timeout=120):
 
 
 def fetch_xlsx(page, ctx, tab):
-    """打开分享页 → 等匿名会话就绪 → 同源 XHR 拿直链 → 下载 xlsx 字节。"""
+    """打开分享页 → 等会话就绪 → 同源 XHR 拿直链 → 下载 xlsx 字节。"""
     name, share, fid = tab["name"], tab["share"], tab["fid"]
     page.goto(share, wait_until="domcontentloaded", timeout=90000)
     raw = b""
-    for attempt in range(6):          # app 也是先静默等十几秒，匿名会话往往就能拿直链
+    for attempt in range(6):          # 登录态注入后一般一次就过；多试几轮防页面慢
         page.wait_for_timeout(5000)
         r = page.evaluate(XHR_JS % fid)
         st, _, txt = str(r).partition("|")
@@ -102,7 +102,36 @@ def fetch_xlsx(page, ctx, tab):
         else:
             log("%s：第 %d 次还没拿到（status=%s，%s）"
                 % (name, attempt + 1, st, txt[:80].replace("\n", " ")))
-    raise RuntimeError("%s：多次尝试都拿不到直链（分享页可能改了权限）" % name)
+    raise RuntimeError("%s：多次尝试都拿不到直链（登录态可能过期，管理号机器重新上传一次）" % name)
+
+
+def load_kdocs_cookies():
+    """从 worker /kdauth 取管理号机器上传的金山登录态（CDP 抓的 WebView2 cookies）。
+    云端浏览器没有金山会话，匿名拉表实测被拒（userNotLogin），必须带这个。"""
+    j = worker_req("/kdauth", timeout=60)
+    cookies = j.get("cookies") or []
+    pw_cookies = []
+    for c in cookies:
+        if not any(d in (c.get("domain") or "") for d in ("kdocs.cn", "wps.cn")):
+            continue
+        item = {"name": c["name"], "value": c["value"],
+                "domain": c.get("domain"), "path": c.get("path") or "/"}
+        exp = c.get("expires")
+        if isinstance(exp, (int, float)) and exp > 0:
+            item["expires"] = exp
+        if c.get("httpOnly") is not None:
+            item["httpOnly"] = bool(c["httpOnly"])
+        if c.get("secure") is not None:
+            item["secure"] = bool(c["secure"])
+        ss = c.get("sameSite")
+        if ss in ("Lax", "Strict", "None"):
+            item["sameSite"] = ss
+        pw_cookies.append(item)
+    if not pw_cookies:
+        raise RuntimeError("云端没有可用的金山登录态（/kdauth 为空或域名不符）")
+    log("已取到金山登录态：%d 条 cookies（上传于 %s）"
+        % (len(pw_cookies), time.strftime("%m-%d %H:%M", time.gmtime(j.get("up", 0) / 1000))))
+    return pw_cookies
 
 
 def main():
@@ -123,6 +152,7 @@ def main():
             user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                         " (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
             locale="zh-CN", timezone_id="Asia/Shanghai")
+        ctx.add_cookies(load_kdocs_cookies())   # 注入管理号的金山登录态
         page = ctx.new_page()
         for tab in TABLES:
             raw = fetch_xlsx(page, ctx, tab)
