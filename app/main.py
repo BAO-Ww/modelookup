@@ -1309,6 +1309,7 @@ def stock_pull_cloud(log, force=True):
     stock_save()
     ts = j.get("ts") or ""
     log("云端库存同步完成：%s 行（%s）" % (j.get("rows") or 0, ts))
+    _STK_DETAIL[0] = "从云端同步 %s 行（管理号共享）" % (j.get("rows") or 0)
     if force:
         set_state("done", "库存已同步（云端共享 · %s）" % ts, stock_at=ts)
     else:
@@ -1700,6 +1701,7 @@ def yy_finish(recs, log):
         STOCK = {"ts": ts, "rows": len(recs), "stock": agg}
     stock_save()
     log("实时库存更新完成：%d 行 · %d 个型号 · 命中表中 %d 个型号" % (len(recs), len(agg), hit))
+    _STK_DETAIL[0] = "%d 行现存量 · %d 个型号有货 · 命中表中 %d 个，已共享云端" % (len(recs), len(agg), hit)
     set_state("done", "实时库存已更新：%d 行 · 命中表中 %d 个型号（%s）" % (len(recs), hit, ts),
               stock_at=ts)
     stock_push_cloud(log)          # 管理号拉完即上云，子账号全员自动跟进（2026-10-08）
@@ -1935,7 +1937,52 @@ def do_stock_update(log, auto=False):
         _update_lock.release()
 
 
+_ALLRUN = [False, "", ""]      # [是否在跑全部更新, 最后的错误信息, 更新摘要（2026-10-09 用户要求显示更新了哪些）]
+_UPD_DETAIL = [""]             # 最近一次金山表格更新的明细（do_update 填）
+_STK_DETAIL = [""]             # 最近一次用友库存更新的明细（do_stock_update 填）
+
+
+def _updateall_bg(log):
+    """全部更新一条龙：金山表格（型号/价格/补贴）→ 用友实时库存（2026-10-09）。"""
+    errs, parts = [], []
+    try:
+        _UPD_DETAIL[0] = ""
+        try:
+            ok, msg = do_update(log)
+            if ok:
+                parts.append("金山表格：%s" % msg)
+            elif msg != "跳过":
+                errs.append("金山：%s" % msg)
+                parts.append("金山表格：❌ %s" % msg)
+            else:
+                parts.append("金山表格：这轮跳过")
+        except Exception as e:
+            errs.append("金山：%s" % e)
+            parts.append("金山表格：❌ %s" % e)
+        _STK_DETAIL[0] = ""
+        try:
+            do_stock_update(log)
+            if _STK_DETAIL[0]:
+                parts.append("库存：%s" % _STK_DETAIL[0])
+            else:
+                st = read_state()
+                if st.get("status") == "error":
+                    parts.append("库存：❌ %s" % (st.get("msg") or "失败"))
+                    errs.append("库存：%s" % (st.get("msg") or "失败"))
+                else:
+                    parts.append("库存：完成")
+        except Exception as e:
+            errs.append("库存：%s" % e)
+            parts.append("库存：❌ %s" % e)
+    finally:
+        _ALLRUN[0] = False
+        _ALLRUN[1] = "；".join(errs)
+        _ALLRUN[2] = "　|　".join(parts)
+        log("全部更新结束 → %s" % _ALLRUN[2])
+
+
 def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
+    _upd_parts = None               # 非 None = 走了金山直拉，记每张表的结果（2026-10-09 摘要用）
     if not _update_lock.acquire(blocking=False):
         return False, "已有更新在进行中"
     try:
@@ -1973,6 +2020,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
             raw = fetch_xlsx_by_url(du, log)
             with open(wp(CLEAN_XLSX), "wb") as f:
                 f.write(raw)
+            _upd_parts = ["公布版✓"]
 
             # ---- ② 价格表（fileId 现场反查；拿不到就沿用上次的，不阻断整体更新）
             try:
@@ -1985,10 +2033,13 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
                     raw2 = fetch_xlsx_by_url(du2, log)
                     with open(wp(PRICE_XLSX), "wb") as f:
                         f.write(raw2)
+                    _upd_parts.append("价格表✓")
                 else:
                     log("价格表 fileId 没拿到，保留上一次的价格表数据")
+                    _upd_parts.append("价格表沿用上次")
             except Exception as e:
                 log("价格表这次没更新成功（%s），保留上一次的数据" % e)
+                _upd_parts.append("价格表沿用上次")
 
             # ---- ③ 补贴表（以旧换新 69码+售价；这张表要金山登录，没登录就沿用旧数据）
             try:
@@ -2001,15 +2052,22 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
                     raw3 = fetch_xlsx_by_url(du3, log)
                     with open(wp(SUBSIDY_XLSX), "wb") as f:
                         f.write(raw3)
+                    _upd_parts.append("补贴表✓")
                 else:
                     log("补贴表 fileId 没拿到，沿用上一次的补贴数据")
+                    _upd_parts.append("补贴表沿用上次")
             except Exception as e:
                 log("补贴表这次没更新成功（%s），沿用上一次的数据" % e)
+                _upd_parts.append("补贴表沿用上次")
 
         set_state("running", "正在重建数据…")
-        rebuild(log)
+        _pl = rebuild(log)
+        if _upd_parts is not None:
+            _UPD_DETAIL[0] = "%s，重建 %d 个型号" % ("、".join(_upd_parts), len(_pl["rows"]))
+        else:
+            _UPD_DETAIL[0] = "本地文件导入，重建 %d 个型号" % len(_pl["rows"])
         set_state("done", "更新完成", price_at=time.strftime("%m-%d %H:%M"))
-        return True, "更新完成"
+        return True, _UPD_DETAIL[0]
     except Exception as e:
         msg = str(e) or repr(e)
         log("更新失败：%s" % msg)
@@ -2105,6 +2163,31 @@ class Handler(BaseHTTPRequestHandler):
                 s["alert_ts"] = 0
                 s["alert_msg"] = ""
             self._send(200, json.dumps(s, ensure_ascii=False))
+            return
+
+        if path == "/api/updateall":
+            # 全部更新：金山表格 → 用友库存 一条龙（2026-10-09）
+            # GET = 查进度（页面轮询用）；带 ok=true 的 GET?start=1 或 POST = 启动
+            if u.query.startswith("start=1") or self.command == "POST":
+                if _ALLRUN[0] or read_state()["status"] in ("running", "login"):
+                    self._send(200, json.dumps({"ok": False, "running": True,
+                                                "msg": "已有更新在进行中"}, ensure_ascii=False))
+                    return
+                if PERM_STATE.get("role") not in (None, "admin"):
+                    self._send(200, json.dumps({"ok": False, "msg": "只有管理号能全部更新"},
+                                               ensure_ascii=False))
+                    return
+                _ALLRUN[0] = True
+                _ALLRUN[1] = ""
+                _ALLRUN[2] = ""
+                set_state("running", "正在全量更新（型号/价格/补贴 → 库存）…")
+                threading.Thread(target=_updateall_bg, args=(LOG.append,), daemon=True).start()
+                self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
+                return
+            self._send(200, json.dumps({"ok": True, "running": _ALLRUN[0],
+                                        "had_err": bool(_ALLRUN[1]), "msg": _ALLRUN[1],
+                                        "summary": _ALLRUN[2]},
+                                       ensure_ascii=False))
             return
 
         if path == "/api/update":
@@ -2215,6 +2298,23 @@ class Handler(BaseHTTPRequestHandler):
             set_state("running", "正在连接用友 YonSuite…")
             threading.Thread(target=do_stock_update, args=(LOG.append,), daemon=True).start()
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            return
+        if u.path == "/api/updateall":
+            # 全部更新（POST 启动）：金山表格 → 用友库存 一条龙（2026-10-09）
+            if read_state()["status"] in ("running", "login") or _ALLRUN[0]:
+                self._send(200, json.dumps({"ok": False, "msg": "已有更新在进行中"},
+                                           ensure_ascii=False))
+                return
+            if PERM_STATE.get("role") not in (None, "admin"):
+                self._send(200, json.dumps({"ok": False, "msg": "只有管理号能全部更新"},
+                                           ensure_ascii=False))
+                return
+            _ALLRUN[0] = True
+            _ALLRUN[1] = ""
+            _ALLRUN[2] = ""
+            set_state("running", "正在全量更新（型号/价格/补贴 → 库存）…")
+            threading.Thread(target=_updateall_bg, args=(LOG.append,), daemon=True).start()
+            self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
             return
         if u.path != "/api/upload":
             self._send(404, json.dumps({"ok": False, "msg": "not found"}, ensure_ascii=False))
@@ -2428,6 +2528,11 @@ def build_menu(sub=False):
             return False
         return True
 
+    def upd_all():
+        if not guarded("全部更新", "upd_kdocs"):
+            return
+        js_click("allbtn")
+
     def upd():
         if not guarded("从金山文档更新", "upd_kdocs"):
             return
@@ -2508,6 +2613,7 @@ def build_menu(sub=False):
     #   数据(D) = 页面/在线表/数据更新/补图导入导出；账号(A) = 账号管理/退出登录；帮助(H) = 软件更新/关于
     return [
         Menu("数据(&D)", [
+            MenuAction("全部更新", upd_all),
             MenuAction("重新加载页面", reload_page),
             MenuSeparator(),
             MenuAction("从金山文档更新数据", upd),
