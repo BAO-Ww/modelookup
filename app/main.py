@@ -5,12 +5,11 @@
 独立窗口的桌面软件（自带 WebView2 内核，无地址栏 / 无浏览器外壳）：
 
   · 双击 → 先亮骨架页（页面只有几十 KB），数据随后从本地服务取 → 窗口约 1.5 秒出现
-  · 页面上 / 菜单里「从金山文档更新」→ 自动拉两个在线表 → 重建 → 自动刷新
-      · 已登录：后台静默完成，窗口都不闪
-      · 未登录：弹出「登录金山文档」窗口，扫码后自动继续
-  · 「更新实时库存」→ 从用友 YonSuite 直接拉现存量（实时数据，非每月导表）
-      · 登录一次存进本机，之后点更新直接拉，不用再登录
-      · 未登录：弹出「用友登录」窗口，登录后自动继续
+  · 页面上 / 菜单里「从金山文档更新」→ 触发云端（GitHub Actions）拉两个在线表 → 跑完自动同步重建
+  · 「更新实时库存」→ 管理号：触发云端拉用友现存量，跑完自动共享给所有子账号；
+                        子账号：直接从云端同步管理号共享的库存
+      · 2026-10-10 全云端口径：本机不再直连金山/用友（本机拉取入口已删——
+        杜绝旧登录态失效、错密码撞锁号这类本机环境问题，所有人看到同一份云端数据）
   · 也支持把从金山文档下载的 xlsx 拖到 exe 图标上重建
 
 数据源（两个）：
@@ -65,7 +64,7 @@ _k = None
 del _k
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.19"
+APP_VERSION = "2.7.20"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1927,7 +1926,12 @@ def auto_yy_login(log):
 
 
 def do_stock_update(log, auto=False):
-    """拉用友实时库存：优先用存下的会话直拉（免登录）；失效才弹窗等人登录一次。
+    """【已退役 2026-10-10 · 全云端口径】本机直拉用友的入口已全部删除
+    （/api/stock 改走云端，定时跟随 auto_updater 本来就只同步云端）——
+    本函数不再有任何调用方，保留代码备查。别再接回去：本机 CAS 自动登录
+    会拿存的账密反复试错（有锁号风险），数据也会和云端 CI 拉的出现两套口径。
+    历史逻辑备忘：
+    拉用友实时库存：优先用存下的会话直拉（免登录）；失效才弹窗等人登录一次。
     auto=True（定时自动更新）时绝不弹窗：会话失效就这轮跳过，下小时再试。
     2026-10-08 两条新规：
     · 子账号（role != admin）不碰用友，直接取云端共享库存（管理号更新后全员跟进）；
@@ -2404,13 +2408,21 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/update":
-            if read_state()["status"] in ("running", "login"):
-                self._send(200, json.dumps({"ok": False, "msg": "正在更新中，请稍候"},
+            # 2026-10-10 全云端：本机直拉金山已退役 → 触发云端任务（同「全部更新」的 kd 分支）
+            if read_state()["status"] in ("running", "login") or _ALLRUN[0]:
+                self._send(200, json.dumps({"ok": False, "running": _ALLRUN[0],
+                                            "msg": "已有更新在进行中"}, ensure_ascii=False))
+                return
+            if PERM_STATE.get("role") not in (None, "admin"):
+                self._send(200, json.dumps({"ok": False, "msg": "只有管理号能触发云端更新（子账号的数据会自动跟着云端走）"},
                                            ensure_ascii=False))
                 return
-            set_state("running", "正在连接金山文档…")
-            threading.Thread(target=do_update, args=(LOG.append,), daemon=True).start()
-            self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            _ALLRUN[0] = True
+            _ALLRUN[1] = ""
+            _ALLRUN[2] = ""
+            set_state("running", "正在触发云端更新（GitHub Actions）…")
+            threading.Thread(target=_updateall_bg, args=(LOG.append, "kd"), daemon=True).start()
+            self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
             return
 
         if path == "/api/stock":
@@ -2508,17 +2520,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             return
         if u.path == "/api/stock":
-            if read_state()["status"] in ("running", "login"):
-                self._send(200, json.dumps({"ok": False, "msg": "正在更新中，请稍候"},
-                                           ensure_ascii=False))
+            # 2026-10-10 全云端：管理号→触发云端拉用友（同「全部更新」的 yy 分支）；
+            # 子账号→直接从云端同步。本机 CAS 直拉/自动登录已退役（错密码撞锁号风险）。
+            if read_state()["status"] in ("running", "login") or _ALLRUN[0]:
+                self._send(200, json.dumps({"ok": False, "running": _ALLRUN[0],
+                                            "msg": "已有更新在进行中"}, ensure_ascii=False))
                 return
-            if YY_WIN is None or YY_CLOSED.is_set():
-                self._send(200, json.dumps({"ok": False, "msg": "用友窗口不可用，重启软件再试"},
-                                           ensure_ascii=False))
+            if PERM_STATE.get("role") not in (None, "admin"):
+                set_state("running", "正在从云端同步库存…")
+                threading.Thread(target=stock_pull_cloud, args=(LOG.append,),
+                                 daemon=True).start()
+                self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
                 return
-            set_state("running", "正在连接用友 YonSuite…")
-            threading.Thread(target=do_stock_update, args=(LOG.append,), daemon=True).start()
-            self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            _ALLRUN[0] = True
+            _ALLRUN[1] = ""
+            _ALLRUN[2] = ""
+            set_state("running", "正在触发云端更新（GitHub Actions）…")
+            threading.Thread(target=_updateall_bg, args=(LOG.append, "yy"), daemon=True).start()
+            self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
             return
         if u.path == "/api/updateall":
             # 全部更新（POST 启动，云端版 2026-10-09）：触发 GitHub Actions → 云端跑完自动同步
