@@ -499,5 +499,47 @@ async function route(request, env, path) {
     return new Response(dr.body, { headers: h });       // 流式转发，不占 worker 内存
   }
 
+  // ---------- 云端更新中转（2026-10-09 v2.8 全云端口径）----------
+  // 「全部更新」= 软件让 worker 拿 GH_TOKEN 触发 GitHub Actions（金山拉表 / 用友拉库存），
+  // 跑完各机器软件从 /xlsxcloud /stockcloud 自动同步。GH_TOKEN 需带 workflow 权限。
+  const CI_WF = { yy: "yonyou-cloud-stock.yml", kd: "kdocs-cloud-data.yml" };
+  async function ghDispatch(wf) {
+    const r = await fetch(
+      "https://api.github.com/repos/BAO-Ww/modelookup/actions/workflows/" + wf + "/dispatches",
+      { method: "POST",
+        headers: { "Authorization": "Bearer " + (env.GH_TOKEN || ""),
+                   "User-Agent": "modelookup-worker", "Accept": "application/vnd.github+json",
+                   "Content-Type": "application/json" },
+        body: JSON.stringify({ ref: "main" }) });
+    return r.status === 204;
+  }
+  async function ghLastRun(wf) {
+    const r = await fetch(
+      "https://api.github.com/repos/BAO-Ww/modelookup/actions/workflows/" + wf + "/runs?per_page=1",
+      { headers: { "Authorization": "Bearer " + (env.GH_TOKEN || ""),
+                   "User-Agent": "modelookup-worker", "Accept": "application/vnd.github+json" } });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const run = (d.workflow_runs || [])[0];
+    return run ? { id: run.id, num: run.run_number, status: run.status,
+                   con: run.conclusion, at: run.created_at } : null;
+  }
+  if (path === "/citrigger" && request.method === "POST") {
+    const b = await request.json().catch(() => ({}));
+    const want = String((b && b.wf) || "all");            // all | yy | kd
+    const out = {};
+    if (want === "all" || want === "yy") out.yy = await ghDispatch(CI_WF.yy);
+    if (want === "all" || want === "kd") out.kd = await ghDispatch(CI_WF.kd);
+    if (!Object.keys(out).length || !Object.values(out).every(Boolean))
+      return jerr("触发云端任务失败（检查 GH_TOKEN 是否有 workflow 权限）", 502);
+    return J({ ok: true, triggered: out, at: new Date().toISOString() });
+  }
+  if (path === "/cistatus" && request.method === "GET") {
+    const yy = await ghLastRun(CI_WF.yy);
+    const kd = await ghLastRun(CI_WF.kd);
+    if (!yy || !kd) return jerr("GitHub 查询失败（检查 GH_TOKEN）", 502);
+    return J({ ok: true, yy, kd });
+  }
+
   return jerr("接口不存在", 404);
 }
