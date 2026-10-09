@@ -1,0 +1,40 @@
+name: kdocs-cloud-data
+
+# 云端自行更新金山表格（2026-10-09，管理号电脑不用开机）：
+# Playwright 真浏览器打开两个金山分享页（公布版 + 价格表，公开分享匿名可读）→
+# 同源 XHR 拿直链下载 xlsx（与 app/main.py 同一招）→ 内容哈希没变就跳过 →
+# worker /xlsxcloud 上传（所有机器的软件 60 秒内自动跟随重建）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: "备注（可选）"
+        required: false
+  schedule:
+    - cron: "0 */2 * * *"   # UTC 每 2 小时（xx:00，错开库存链的 xx:30）= 北京时间每 2 小时
+
+permissions:
+  contents: read
+
+jobs:
+  pull-kdocs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright + Chromium
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+
+      - name: Pull KDocs tables and upload
+        env:
+          CLOUD_TOKEN: ${{ secrets.CLOUD_TOKEN }}
+          KX_SECRET: ${{ secrets.KX_SECRET }}
+        run: python .github/scripts/kdocs_cloud_pull.py

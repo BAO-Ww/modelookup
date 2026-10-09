@@ -44,7 +44,7 @@ import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.5"
+APP_VERSION = "2.7.6"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1327,6 +1327,74 @@ def _ver_gt(a, b):
         return False
 
 
+def xlsx_follower():
+    """云端表格跟随（2026-10-09，跟库存云同步同思路）：
+    GitHub Actions 定时任务（云端浏览器）从金山拉「公布版 + 价格表」传到云端
+    （ts = 两个文件内容的哈希，表格没改就不会变）；本机每 60 秒轻探一次
+    /xlsxmeta，有变才拉全量重建，rev bump 页面无感刷新。
+    管理号/子账号都跑——管理号自己直连金山的那条链照旧，两条互不影响；
+    这样金山表一更新，哪怕所有软件都关着，云端也会先拿到、开机 90 秒内跟上。"""
+    time.sleep(90)                       # 启动头一会儿让位给首屏
+    while True:
+        try:
+            if read_state()["status"] in ("running", "login"):
+                time.sleep(60)
+                continue
+            j, err = cloud_req("/xlsxmeta", "GET", timeout=30)
+            ts = str((j or {}).get("ts") or "") if (j and j.get("ok")) else ""
+            if not ts:
+                time.sleep(60)
+                continue
+            local = ""
+            try:
+                local = io.open(wp("xlsx_ts.txt"), encoding="utf-8").read().strip()
+            except Exception:
+                pass
+            if ts == local:
+                time.sleep(60)
+                continue
+            LOG.append("☁ 云端表格有更新（%s…），自动同步…" % ts[:8])
+            set_state("running", "正在从云端同步表格数据…")
+            j2, err2 = cloud_req("/xlsxcloud", "GET", timeout=300)
+            if err2 or not j2 or not j2.get("ok"):
+                set_state("error", "云端表格同步失败：%s" % (err2 or (j2 or {}).get("msg")))
+                time.sleep(300)
+                continue
+            files = j2.get("files") or {}
+            if not _update_lock.acquire(blocking=False):
+                time.sleep(60)
+                continue                 # 别的更新正在跑，下轮再看
+            try:
+                saved = []
+                for name in ("data.xlsx", "price.xlsx"):
+                    b64 = files.get(name)
+                    if not b64:
+                        continue
+                    raw = base64.b64decode(b64)
+                    if raw[:2] != b"PK":
+                        raise RuntimeError("%s 不是有效的表格文件" % name)
+                    with open(wp(name), "wb") as f:
+                        f.write(raw)
+                    saved.append(name)
+                if saved:
+                    set_state("running", "正在重建数据（云端表格）…")
+                    rebuild(LOG.append)
+                    with io.open(wp("xlsx_ts.txt"), "w", encoding="utf-8") as f:
+                        f.write(ts)
+                    set_state("done", "数据已自动同步（云端表格 · %s…）" % ts[:8],
+                              price_at=time.strftime("%m-%d %H:%M"))
+                    LOG.append("云端表格同步完成：%s" % ", ".join(saved))
+            finally:
+                _update_lock.release()
+        except Exception as e:
+            try:
+                LOG.append("云端表格跟随异常：%s" % e)
+                set_state("error", "云端表格同步异常：%s" % e)
+            except Exception:
+                pass
+        time.sleep(60)
+
+
 def _app_install_bg(log):
     """软件自更新：从云端下安装包 → 静默覆盖安装 → 本进程退出让位（2026-10-08）。
     走 worker 中转（/appdl），客户端不用碰 GitHub。"""
@@ -2363,14 +2431,13 @@ def build_menu(sub=False):
     def upd():
         if not guarded("从金山文档更新", "upd_kdocs"):
             return
-        threading.Thread(target=do_update, args=(LOG.append,), daemon=True).start()
+        # 2026-10-09：菜单改成替点页面按钮（跟「软件更新…」同款）——
+        # 页面按钮才有转圈/完成提示，直接后台线程跑用户什么都看不见
+        js_click("updbtn")
 
     def upd_stock():
-        if read_state()["status"] in ("running", "login"):
-            return
-        # 2026-10-08：库存更新不再卡权限——子账号走云端同步（不碰用友），
-        # 管理号走用友（自动登录 + 拉完共享云端）。人人都能点。
-        threading.Thread(target=do_stock_update, args=(LOG.append,), daemon=True).start()
+        # 2026-10-09：同上，替点页面按钮，进度在页面上看得见
+        js_click("stkbtn")
 
     def upd_app():
         """软件自更新：菜单点一下 = 页面里点「⬆ 软件更新」按钮（下载+静默覆盖装）。"""
@@ -2597,6 +2664,8 @@ def run_app(httpd, port, startup_xlsx=None):
     _tick("登录窗口对象建好（%.0f ms）" % ((time.time() - t_cw) * 1000))
     # 定时自动更新（金山价格 + 用友库存，每小时一轮，静默）
     threading.Thread(target=auto_updater, daemon=True).start()
+    # 云端表格跟随（GitHub Actions 定时拉金山传云端 → 本机 60 秒轻探自动重建）
+    threading.Thread(target=xlsx_follower, daemon=True).start()
     threading.Thread(target=yy_alert_loop, daemon=True).start()   # 管理号轮询用友告警
 
     def on_login_closed():
