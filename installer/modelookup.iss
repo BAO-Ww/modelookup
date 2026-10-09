@@ -80,12 +80,11 @@ Name: "{userdesktop}\型号查询"; Filename: "{app}\{#ExeName}"; Tasks: desktop
 Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; \
     StatusMsg: "正在安装 Microsoft Edge WebView2 运行时（第一次装需要，约 1 分钟）…"; \
     Flags: waituntilterminated runhidden; Check: not WebView2Installed
-; 2026-10-10：postinstall 不能直接拉起 exe——PyInstaller 6.22.2 的父进程校验会把
-; 环境里继承来的 _PYI_* 引导变量当成「onefile 子进程」特征，若父进程不是同一个 exe
-; 就弹 Security validation failure 起不来（旧版 2.7.14 自更新链传下来的环境是脏的）。
-; 括号分组：先 for 删光 _PYI_* 再 start（不分组的话 start 会绑进 do 体，
-; 每个变量拉起一次；实测验证清理后 set _PYI 无残留、start 只跑一次）。
-Filename: "{cmd}"; Parameters: "/d /c (for /f \"tokens=1 delims==\" %v in ('set _PYI 2^>nul') do set \"%v=\") & start \"\" \"{app}\{#ExeName}\""; Description: "立即打开 型号查询"; \
+; 2026-10-10：postinstall 直接拉起 exe——不能在 Parameters 里塞 cmd 清理命令
+; （Inno 的 Parameters 不认 \" 转义，引号嵌套会报 Mismatched or misplaced quotes，
+; CI #65 实锤）。改为在 InitializeSetup 里删光 _PYI_* 引导变量（见 [Code]），
+; Setup 的子进程一律继承干净环境，这里保持最简单的直接拉起。
+Filename: "{app}\{#ExeName}"; Description: "立即打开 型号查询"; \
     Flags: nowait postinstall
 
 [UninstallRun]
@@ -112,11 +111,36 @@ begin
   Result := HasPv(HKLM32) or HasPv(HKLM64) or HasPv(HKCU32) or HasPv(HKCU64);
 end;
 
+; 2026-10-10：PyInstaller 6.22.2 父进程安全校验（GHSA-9fxf-4qw3-ghmr）——Setup 环境里
+; 若带着 _PYI_* 引导变量（旧版 2.7.14 自更新链用脏环境拉起 Setup 时会传入），postinstall
+; 拉起的新版 exe 引导器会误判自己是 onefile 子进程，弹 Security validation failure 起不来。
+; 在 InitializeSetup 里把这些变量从 Setup 自己的环境删光（SetEnvironmentVariable 传空值
+; 即删除该变量），子进程一律继承干净环境。变量清单对齐 PyInstaller 6.22.x bootloader。
+function SetEnvironmentVariable(lpName: string; lpValue: string): BOOL;
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall';
+
+procedure ScrubPyiEnv();
+var
+  Names: array[0..6] of string;
+  I: Integer;
+begin
+  Names[0] := '_MEIPASS2';
+  Names[1] := '_PYI_ARCHIVE_FILE';
+  Names[2] := '_PYI_APPLICATION_HOME_DIR';
+  Names[3] := '_PYI_ONESHOT_PARENT_PID';
+  Names[4] := '_PYI_PARENT_PROCESS_LEVEL';
+  Names[5] := '_PYI_SPLASH_IPC';
+  Names[6] := '_PYI_MODULE_COFFEE';
+  for I := 0 to 6 do
+    SetEnvironmentVariable(Names[I], '');
+end;
+
 function InitializeSetup(): Boolean;
 var
   Res: Integer;
 begin
   Result := True;
+  ScrubPyiEnv();
   // 2026-10-09 修复静默更新失败：旧实例没退干净就去覆盖 ModelLookup.exe 会文件占用，
   // /SILENT + /SUPPRESSMSGBOXES 下报错被吞 → 安装悄悄什么都不装。
   // 装前先强杀旧实例（软件端自更新流程里也有一层，这里是双保险，手动双击安装也吃这层）。
