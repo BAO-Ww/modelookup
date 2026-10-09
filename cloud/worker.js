@@ -378,6 +378,33 @@ async function route(request, env, path) {
     return J({ ok: true, ts: obj.ts || "", rows: obj.rows || 0, by: obj.by || "" });
   }
 
+  // ---------- 金山表格云端中转（2026-10-09 跟库存同款）----------
+  // GitHub Actions 定时（云端浏览器）匿名拉「公布版 + 价格表」→ 这里中转；
+  // 每台机器的软件每 60 秒轻探 /xlsxmeta，内容有变（ts=两个文件内容的哈希）就拉全量重建。
+  // ts 是内容哈希：表格没改就不会变，机器不会被无谓打扰。
+  if (path === "/xlsxcloud" && request.method === "POST") {
+    const users = await getUsers(env);
+    const isCloud = (request.headers.get("X-Cloud-Key") || "") === (env.SECRET || "");
+    if ((users[who] || {}).role !== "admin" && !isCloud) return jerr("没有上传权限", 403);
+    const b = await request.json().catch(() => ({}));
+    if (!b || !b.ts || !b.files || !b.files["data.xlsx"]) return jerr("表格数据为空，拒收");
+    const obj = { ts: String(b.ts), files: b.files, by: isCloud ? "云端定时" : who, up: Date.now() };
+    await env.KV.put("xlsxlive", JSON.stringify(obj));
+    return J({ ok: true, mb: Math.round(JSON.stringify(obj).length / 1048576 * 10) / 10 });
+  }
+  if (path === "/xlsxcloud" && request.method === "GET") {
+    const raw = await env.KV.get("xlsxlive");
+    if (!raw) return jerr("云端还没有共享表格（等云端定时任务跑一次）", 404);
+    const obj = JSON.parse(raw);
+    return J({ ok: true, ts: obj.ts, files: obj.files, by: obj.by });
+  }
+  if (path === "/xlsxmeta" && request.method === "GET") {
+    const raw = await env.KV.get("xlsxlive");
+    if (!raw) return J({ ok: true, ts: "" });
+    const obj = JSON.parse(raw);
+    return J({ ok: true, ts: obj.ts || "", by: obj.by || "" });
+  }
+
   // ---------- 用友账密（云端存，跟管理号走）----------
   // 2026-10-08 用户口径：不管在哪台电脑登录管理号，都要能自动担起用友更新 →
   // 账密存 KV（yyauth），任何一台登着管理号的机器都能取到并自动登录用友。
