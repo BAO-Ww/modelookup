@@ -389,6 +389,10 @@ footer a:hover{text-decoration:underline}
 .pr.prpick.on{border-color:var(--ok);background:#f2fbf6;box-shadow:inset 0 0 0 1px var(--ok)}
 .pr.prpick.on::after{background:var(--ok)}
 .pr.prpick.on b{color:#15803d}
+/* 看子用户发布（只读）：价格格整体变摆设——无指针、无悬停、无「点击填价」暗示 */
+.card.svro .pr.prpick{cursor:default;pointer-events:none}
+.card.svro .pr.prpick::after{display:none}
+.card.svro .pr.prpick:hover{border-color:inherit;box-shadow:none}
 .tag.np{background:#eef6ff;color:#1d4ed8;border-color:#d8e7fd;font-weight:600}
 /* ---- 新字段的标签 ---- */
 .row .vs{display:flex;flex-wrap:wrap;gap:6px}
@@ -583,6 +587,16 @@ var MARKED = load(MARK_KEY, {});
 })();
 var PRICES = load(PRICE_KEY, {});
 var MYIMGS = load(IMG_KEY, {});
+/* 2026-10-10 新规矩（用户拍板）：定价只属于「已标记发布」的型号——
+   没点标记已发布的，点价格格/手输的价都只是当场算账，离开界面就不留。
+   prunePrices 把历史遗留（泄漏/串号/以前「未发布也存价」）一次性清出去。 */
+function prunePrices(){
+  var ch = false;
+  Object.keys(PRICES).forEach(function(k){ if (!MARKED[k]){ delete PRICES[k]; ch = true; } });
+  if (ch){ save(PRICE_KEY, PRICES); priceSyncSoon(); }
+  return ch;
+}
+prunePrices();   // 开机先清一遍：没点标记已发布的价一律不留（2026-10-10 新规矩）
 /* 换数据源（本地价格表 → 金山文档在线表）之前的旧记录也认：新版 key 还空着就搬过来 */
 (function(){
   var pairs = [[MARK_KEY, 'xy-published-v1', function(v){ MARKED = v; save(MARK_KEY, v); }],
@@ -620,14 +634,15 @@ function syncMarks(){
       if (j && j.ok && j.marks){
         var changed = JSON.stringify(MARKED) !== JSON.stringify(j.marks);
         MARKED = j.marks; saveMarks();
-        /* 云端定价拉回来补缺（2026-10-08 用户要求：没点标记发布的价格也要保存）——
-           本机没有的型号用云上的（换电脑/清缓存场景）；本机已有的不动，以本地为准 */
+        /* 2026-10-10 新规矩：定价只属于已发布的型号——云端拉的价只补「已发布」的；
+           本地没发布的价（泄漏/串号/以前「未发布也存价」时期的遗留）一律清掉 */
         var pr = j.prices || {}, filled = false;
         Object.keys(pr).forEach(function(c){
-          if (!(c in PRICES) && isFinite(+pr[c])){ PRICES[c] = +pr[c]; filled = true; }
+          if (MARKED[c] && !(c in PRICES) && isFinite(+pr[c])){ PRICES[c] = +pr[c]; filled = true; }
         });
-        if (filled) savePrices();
-        if (changed || filled){ run(); pubStockWarn(); }   /* 2026-10-10：横幅也要重算——页面加载时横幅先用本地旧 MARKED 算了一遍，同步把 MARKED 清空/更新后没人重算，旧横幅就一直挂着（实测踩坑） */
+        var pruned = prunePrices();
+        if (filled || pruned) savePrices();
+        if (changed || filled || pruned){ run(); pubStockWarn(); }
       }
     });
 }
@@ -1880,7 +1895,7 @@ function renderItem(it){
            + '</span>';
   }
 
-  return '<article class="card' + (marked ? ' marked' : '') + '" data-key="' + esc(it.c) + '">'
+  return '<article class="card' + (marked ? ' marked' : '') + (svRO ? ' svro' : '') + '" data-key="' + esc(it.c) + '">'
     + '<div class="chead" style="position:relative">'
     + (img ? '<img class="pimg" loading="lazy" src="' + img + '" alt="">'
            : '<div class="pimg ph">' + PH_SVG + (pok('addimg') ? '<button class="addimg" data-addimg="' + esc(it.c) + '">＋ 补图</button>' : '') + '</div>')
@@ -2317,6 +2332,17 @@ function openPickKind(k){
     if (b.getAttribute('data-kk') === 'x'){ m.remove(); return; }
     MARKED[k] = { t: Date.now(), k: b.getAttribute('data-kk') };
     saveMarks();
+    /* 2026-10-10 新规矩：标记发布这一刻才把定价落库——把卡片定价框里输的价收进 PRICES，
+       这样 pubPush 带的 p 和定价表都是这个价；没输就保持没价 */
+    var _cards = document.querySelectorAll('.card');
+    for (var _i = 0; _i < _cards.length; _i++){
+      if (_cards[_i].getAttribute('data-key') === k){
+        var _inp = _cards[_i].querySelector('.calc input[type=number]');
+        if (_inp){ var _v = parseFloat(_inp.value); if (isFinite(_v) && _v > 0) PRICES[k] = _v; }
+        break;
+      }
+    }
+    savePrices();
     pubPush(k, true);
     m.remove();
     run();
@@ -2330,6 +2356,7 @@ listEl.addEventListener('click', function(e){
     var k = mb.dataset.mark;
     if (MARKED[k]){
       delete MARKED[k]; saveMarks();
+      delete PRICES[k]; savePrices();   // 2026-10-10 新规矩：取消发布，定价一并清掉
       pubPush(k, false);
       var card = mb.closest('.card');
       if (card){
@@ -2369,6 +2396,8 @@ listEl.addEventListener('input', function(e){
   var k = box.dataset.key;
   if (!k) return;
   var v = parseFloat(e.target.value);
+  /* 2026-10-10 新规矩：没点「标记已发布」的型号，定价不落库（框里随便算，走了就不留） */
+  if (!MARKED[k]) return;
   if (isFinite(v) && v > 0) PRICES[k] = v; else delete PRICES[k];
   savePrices();
 });
@@ -2414,8 +2443,10 @@ function pickCell(cell){
 }
 /* 看子用户发布 = 只读（2026-10-10 用户补刀）：点价格格会把价填进定价框并
    dispatch input → PRICES 存进全局定价表——readonly 挡得住键盘挡不住这个，
-   查看模式下 prpick 点格（填价/切口径/奖励开关）一律不响应。 */
-function svRONow(){ return !!(window.SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0'); }
+   查看模式下 prpick 点格（填价/切口径/奖励开关）一律不响应。
+   ⚠ 整个脚本在 IIFE 闭包里，SUBVIEW 是闭包局部变量——绝不能写 window.SUBVIEW
+   （2.7.18 就是栽在这上面：window.SUBVIEW 恒 undefined，守卫从未生效）。 */
+function svRONow(){ return !!(SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0'); }
 listEl.addEventListener('click', function(e){
   var cell = e.target.closest ? e.target.closest('.pr.prpick') : null;
   if (!cell || svRONow()) return;
