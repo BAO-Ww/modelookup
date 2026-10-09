@@ -43,8 +43,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
+# 2026-10-10 修「Security validation failure: parent process has different
+# executable!」：PyInstaller 6.22.1 起引导器给 onefile 加了父进程安全校验
+# （GHSA-9fxf-4qw3-ghmr）——进程环境里若带着 _PYI_* 引导变量，引导器就认定
+# 自己是「onefile 子进程」，要求父进程必须跟自己是同一个 exe，否则弹
+# Security validation failure 直接退出（父进程拿不到路径时弹
+# "failed to obtain executable path for parent process"）。
+# 坑点：本程序就是 onefile exe，运行环境里正带着 _PYI_*；自更新链
+# cmd 帮助进程 → Setup 安装器 → 拉起新版会把这些变量一路继承下去，
+# 新版引导器因此误判 → 更新完新版永远弹错起不来（2.7.13→2.7.14 实测中招）。
+# 处理：启动最前面把 _PYI_*/_MEIPASS2 从本进程环境删掉（老版 PyInstaller
+# 时代防 _MEIPASS2 污染子进程的标准做法），此后所有子进程拿到的都是干净环境。
+for _k in [k for k in os.environ if k.startswith("_PYI") or k == "_MEIPASS2"]:
+    try:
+        del os.environ[_k]
+    except Exception:
+        pass
+del _k
+
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.14"
+APP_VERSION = "2.7.15"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -1265,15 +1283,22 @@ def yy_alert_push(msg, log=None):
 
 def yy_alert_poll():
     """管理号轮询云端告警：有新告警（ts 比已知的大）→ 存进 STATE，
-    页面 30 秒轮询 /api/state 时读 alert_ts/alert_msg 亮横幅。只管 admin。"""
+    页面 30 秒轮询 /api/state 时读 alert_ts/alert_msg 亮横幅。只管 admin。
+    2026-10-10 两条规定（用户反馈：自己机器的告警弹回自己、重启后陈年告警又亮）：
+    · 本机账号自己推的告警不收（自己推的自己必然知道，弹回纯打扰）；
+    · 超过 30 分钟的陈旧告警不收（KV 里那条一直躺着，重启 STATE 归零就会重亮）。"""
     if PERM_STATE.get("role") != "admin":
         return
     j, err = cloud_req("/yyalert", "GET", timeout=30)
     if j and j.get("ok"):
         ts = int(j.get("ts") or 0)
+        who = str(j.get("by") or "")
+        if who and who == PERM_STATE.get("u"):
+            return                       # 自己机器产生的，自己不用被提醒
+        if ts and ts < time.time() - 1800:
+            return                       # 超过 30 分钟的陈年告警不再亮牌
         if ts and ts > int(STATE.get("alert_ts") or 0):
             msg = str(j.get("msg") or "")
-            who = str(j.get("by") or "")
             set_state(alert_ts=ts, alert_msg=msg + ("（来自 %s）" % who if who else ""))
             LOG.append("🔔 用友告警：%s" % msg)
 
@@ -1497,8 +1522,15 @@ def _app_install_bg(log):
         # 2026-10-09 修「更新时弹黑色 ping 窗口」：CREATE_NO_WINDOW 让 cmd 带一个
         # 隐藏控制台，所有子程序继承它，全程无窗口。（父进程 os._exit 后帮助进程
         # 照样存活，不依赖父子关系。）
+        # 2026-10-10 修 PyInstaller 6.22.2 父进程校验误伤：环境里的 _PYI_* 会让
+        # 新版 exe 引导器误判自己是「onefile 子进程」→ 弹 Security validation
+        # failure 起不来。这里必须显式传干净 env——只在程序启动时清理不够，
+        # 因为校验发生在新版引导器里、比新版的 Python 清理代码更早执行。
+        _clean_env = {k: v for k, v in os.environ.items()
+                      if not (k.startswith("_PYI") or k == "_MEIPASS2")}
         subprocess.Popen(["cmd", "/d", "/c", bat],
-                         creationflags=0x08000000)       # CREATE_NO_WINDOW
+                         creationflags=0x08000000,        # CREATE_NO_WINDOW
+                         env=_clean_env)
         time.sleep(1.5)                      # 帮助进程先起来，页面此时已收到 ok 回应
         try:
             if MAIN_WIN is not None:

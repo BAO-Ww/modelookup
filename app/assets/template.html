@@ -515,21 +515,13 @@ function showYyAlert(msg){
 /* 实时库存（exe 版从用友 YonSuite 拉的现存量，点「更新实时库存」刷新）：
    STOCK = { 型号norm: { q:现存量, a:可用量, wt:{仓库类型:可用量} } }，键与 norm() 同一套归一 */
 var STOCKDATA = null;
-/* 库存匹配（2026-10-10 用户定稿「一字不差」）：发布型号必须在用友型号里逐字开头出现——
-   发布 JSQ25-13TE7(12T) ↔ 用友 JSQ25-13TE7(12T)星河U1 ✓（用友多「星河U1」描述尾，有货）；
-   发布 JSQ25-13TE7(12T) ↔ 用友 JSQ25-13TE7 ✗（用友缺 (12T)，不算——发布多出来的字符
-   必须一字不差在用友里出现）。主型号差异（258/358、E/F）天然挡在前缀比较里，绝不互配 */
+/* 库存匹配（2026-10-10 用户二次定稿，**只认一字不差**）：发布型号必须和用友型号
+   完全一致才算有货——用友里多一个字（星河U1 这类描述尾）也= 不是同一个型号 = 没货。
+   （归一只归写法：全半角/空格/大小写；内容多一个字少一个字都不算） */
 function stockOf(mo){
   var s = STOCKDATA && STOCKDATA.stock;
   if (!s) return null;
-  var n = norm(mo);
-  if (s[n]) return s[n];                      // 一字不差精确
-  var keys = Object.keys(s);
-  for (var i = 0; i < keys.length; i++){
-    var k = keys[i];
-    if (k.length > n.length && k.indexOf(n) === 0) return s[k];   // 用友 = 发布 + 描述尾
-  }
-  return null;
+  return s[norm(mo)] || null;                 // 一字不差精确，没有其他宽容
 }
 /* 已发布型号按发布类型的剩余可售（2026-10-09 从 pubStockWarn 抽出来，筛选「没库存」也要用）：
    正品发布看非样机/非次品仓的可用量，样机发布看样机仓；库存里查不到返回 -1（也当没库存提醒） */
@@ -618,8 +610,12 @@ function pubPush(c, on){
 }
 function syncMarks(){
   if (!AUTH || !AUTH.token) return;
+  /* 2026-10-10 修「串号阴魂不散」：登录合并原来是本地整包推 + 云端按时间戳只增不删，
+     串号时代推进 pub_B 的 TB 记录躺在本地 MARK_KEY 里，每次登录都会被原样推回去，
+     云端清了也白清。改定：**云端为准**——登录只上推定价（全量收价不变），
+     发布标记一律以云端返回覆盖本地（标记/取消本来就是即时单条推 /pub，本地只是缓存） */
   authFetch('/pubsync', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ marks: MARKED, prices: PRICES }) }, true)
+                          body: JSON.stringify({ prices: PRICES }) }, true)
     .then(function(j){
       if (j && j.ok && j.marks){
         var changed = JSON.stringify(MARKED) !== JSON.stringify(j.marks);
@@ -644,7 +640,7 @@ function priceSyncSoon(){
   clearTimeout(_priceSyncT);
   _priceSyncT = setTimeout(function(){
     authFetch('/pubsync', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ marks: MARKED, prices: PRICES }) }, true);
+                            body: JSON.stringify({ prices: PRICES }) }, true);
   }, 2500);
 }
 function saveMyImgs(){ save(IMG_KEY, MYIMGS); }
