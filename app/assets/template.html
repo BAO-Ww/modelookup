@@ -627,7 +627,7 @@ function syncMarks(){
           if (!(c in PRICES) && isFinite(+pr[c])){ PRICES[c] = +pr[c]; filled = true; }
         });
         if (filled) savePrices();
-        if (changed || filled) run();
+        if (changed || filled){ run(); pubStockWarn(); }   /* 2026-10-10：横幅也要重算——页面加载时横幅先用本地旧 MARKED 算了一遍，同步把 MARKED 清空/更新后没人重算，旧横幅就一直挂着（实测踩坑） */
       }
     });
 }
@@ -899,6 +899,8 @@ function calcHTML(it){
   /* 看子用户发布时：他自己填过价就直接填进输入框（改了会存成自己的，不影响 TA） */
   var _sv = (SUBVIEW && SUBVIEW.info && SUBVIEW.info[it.c]) ? SUBVIEW.info[it.c] : null;
   if (!isNum(saved) && _sv && isNum(_sv.p)) saved = _sv.p;
+  /* 2026-10-10：看子用户发布 = 只读——TA 填的价照显示，但改不了（改价会存进全局定价表） */
+  var svRO = !!(SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0');
   var pick = opts.length ? opts[0] : { v: '', l: '无成本价' };
   var sel;
   if (opts.length > 1){
@@ -913,6 +915,7 @@ function calcHTML(it){
   return '<div class="calc" data-key="' + esc(it.c) + '">'
     + '<span class="cl">闲鱼定价</span>'
     + '<input type="number" min="0" step="1" inputmode="decimal" placeholder="输入你的定价"'
+    + (svRO ? ' readonly title="看子用户发布时只读——定价是 TA 填的，要改回主列表或让 TA 自己改"' : '')
     + (isNum(saved) ? ' value="' + saved + '"' : '') + '>'
     + sel
     /* 发全国要加 100 运费（卖家出），默认算上；只卖深惠广莞就把勾去掉。
@@ -1859,6 +1862,9 @@ function renderItem(it){
      闲鱼定价/发布时间小字（2026-10-09 定稿）：管理号默认看（头部「定价/时间」胶囊自己开关），
      子账号默认不给，管理号在「账号管理」勾 pubmeta 才给开 */
   var svInfo = (SUBVIEW && SUBVIEW.info && SUBVIEW.info[it.c]) ? SUBVIEW.info[it.c] : null;
+  /* 2026-10-10 用户要求：看子用户发布时管理号只有查看权限——标记/取消发布按钮不给、
+     闲鱼定价输入框只读（TA 的发布记录不是你的，别改坏；改自己的价回主列表改） */
+  var svRO = !!(SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0');
   var svKind = svInfo ? (svInfo.k || (it.k === 'l' ? 'l' : (it.k === 's' ? 's' : ''))) : '';
   function pmMoney(v){
     var n = Math.round(+v || 0);
@@ -1887,7 +1893,7 @@ function renderItem(it){
     + '</span>'
     + pmHTML
     + '<span class="acts">'
-    + (pok('calc') ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + (marked ? '取消发布' : '标记已发布') + '</button>' : '')
+    + (pok('calc') && !svRO ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + (marked ? '取消发布' : '标记已发布') + '</button>' : '')
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
     + (webUrl ? '<a class="markbtn web" href="' + esc(webUrl) + '" target="_blank" rel="noopener" title="打开品牌官网（对应型号）">官网</a>' : '')
     + '</span></div>'
