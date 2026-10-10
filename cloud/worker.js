@@ -244,18 +244,8 @@ async function route(request, env, path, ctx) {
   if (!usersGate[who]) return jerr("账号不存在或已删除，请重新登录", 403);
   if (usersGate[who].disabled) return jerr("账号已停用", 403);
 
-  // 在线心跳（2026-10-10 深夜复活：用户要求保留在线标记，按省额度口径重做）：
-  // KV 写 60 分钟节流——每台机器每天 ~16 次，几台机器合计 ~60 写/天，1000 额度内无压力
-  // （当初爆表是 5 分钟一写 ≈ 900+/天）。「在线」口径 = 最近 2 小时内有过请求，
-  // 窗口必须盖过 60 分钟的节流间隔，否则活跃机器会被误判离线。
-  try {
-    const pv = JSON.parse((await env.KV.get("presence")) || "{}");
-    const now = Date.now();
-    if (!pv[who] || now - (pv[who].t || 0) > 3600000) {
-      pv[who] = { t: now };
-      await env.KV.put("presence", JSON.stringify(pv));
-    }
-  } catch (e) {}
+  // 在线心跳已彻底下线（2026-10-10 深夜，用户最终拍板不要了）：
+  // KV 免费额度 1000 写/天，心跳哪怕 60 分钟节流也是纯开销，砍掉写入口零成本。
 
   // ---------- 启动校验 / 权限拉取 ----------
   if (path === "/perm" && request.method === "GET") {
@@ -287,17 +277,8 @@ async function route(request, env, path, ctx) {
     return J({ ok: true });
   }
 
-  // 在线状态（管理号看子账号下拉用）：只读 presence，零额外写入
-  if (path === "/presence" && request.method === "GET") {
-    const users = await getUsers(env);
-    const me = users[who];
-    if (!me || me.role !== "admin") return jerr("只有管理号能看在线状态", 403);
-    let pv = {};
-    try { pv = JSON.parse((await env.KV.get("presence")) || "{}"); } catch (e) {}
-    const out = {};
-    for (const [u, v] of Object.entries(pv)) out[u] = v.t || 0;
-    return J({ ok: true, presence: out });
-  }
+  // /presence 接口已随心跳一起下线（2026-10-10 深夜）：
+  // 没有写入口了，读出来也全是死数据。旧客户端模板对 404 有 .catch + 空值兜底，不会崩。
 
   if (path === "/changepw" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
