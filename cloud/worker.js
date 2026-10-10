@@ -63,7 +63,8 @@ const PERM_MIGRATE = {
   meidi_cost:  ["p_mh", "p_m2", "p_mr"],
 };
 function migratePerm(perm) {
-  const p = Object.assign({}, perm || {});
+  // 2026-10-10 审计修复（静态4）：perm 传字符串/数字会被 Object.assign 拆成下标键，非对象一律归 {}
+  const p = Object.assign({}, perm && typeof perm === "object" ? perm : {});
   for (const [oldK, newKeys] of Object.entries(PERM_MIGRATE)) {
     if (oldK in p) {
       const on = !!p[oldK];
@@ -81,6 +82,42 @@ const CORS = {
 };
 
 const enc = new TextEncoder();
+// 2026-10-10 审计修复（S3）：SECRET 缺失时不再退回 ADMIN_PASS 签名（那个组合能被猜出 SECRET 的人伪造）
+function hmacKey(env) {
+  if (!env.SECRET) throw new Error("SECRET 未配置，拒绝签发/校验 token");
+  return env.SECRET;
+}
+// 2026-10-10 审计修复（静态3）：签名比较改恒时，消计时侧信道
+function ctEq(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+// 2026-10-10 审计修复（S4）：对象键名黑名单（__proto__/constructor/prototype 写进对象会原型污染）
+const BAD_KEY = /^(__proto__|constructor|prototype)$/;
+function safeKey(s, max) {
+  s = String(s == null ? "" : s).trim().slice(0, max || 100);
+  return BAD_KEY.test(s) ? "" : s;
+}
+// 2026-10-10 审计修复（G6-G14）：KV 读 JSON 统一兜底——损坏当 fallback + console.error，不再 500 卡死功能
+async function getJSON(env, key, fallback) {
+  try {
+    const raw = await env.KV.get(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (e) {
+    console.error("KV 键 " + key + " JSON 损坏：" + e.message);
+    return fallback;
+  }
+}
+// 2026-10-10 审计修复（G15/并发）：进程内 async 锁——同 isolate 的读改写操作串行化，消并发丢更新。
+// Cloudflare Worker 同一 isolate 串行处理请求，但 fetch 是异步交错执行的，全路由套一把锁最稳。
+let _lock = Promise.resolve();
+function withLock(fn) {
+  const run = _lock.then(fn, fn);
+  _lock = run.then(function () {}, function () {});
+  return run;
+}
 async function sha256hex(s) {
   const h = await crypto.subtle.digest("SHA-256", enc.encode(s));
   return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, "0")).join("");
@@ -94,30 +131,36 @@ const J = (obj, status = 200) => new Response(JSON.stringify(obj), { status, hea
 const jerr = (msg, status = 400) => J({ ok: false, msg }, status);
 
 // ---------------- token ----------------
-async function makeToken(env, u) {
+// 2026-10-10 审计修复（静态2）：token 里烤进密码版本号 pv——改密码后旧 token（含被偷的）全部作废。
+// 旧格式 3 段（u|exp|sig，无 pv）兼容读取：视为 pv="0"，等价于用户从未改过密。
+async function makeToken(env, u, pv) {
   const exp = Date.now() + 30 * 86400 * 1000;
-  const payload = u + "|" + exp;
-  const sig = await hmac(env.SECRET || (env.ADMIN_PASS + "|ml"), payload);
+  const payload = u + "|" + exp + "|" + String(pv || 0);
+  const sig = await hmac(hmacKey(env), payload);
   return btoa(unescape(encodeURIComponent(payload + "|" + sig)));
 }
-async function checkToken(env, token) {
+async function checkToken(env, token, users) {
   try {
     const raw = decodeURIComponent(escape(atob(token)));
     const parts = raw.split("|");
-    if (parts.length !== 3) return null;
-    const [u, exp, sig] = parts;
+    if (parts.length !== 3 && parts.length !== 4) return null;
+    const u = parts[0], exp = parts[1];
+    const pv = parts.length === 4 ? parts[2] : "0";
+    const sig = parts[parts.length - 1];
     if (parseInt(exp) < Date.now()) return null;
-    const want = await hmac(env.SECRET || (env.ADMIN_PASS + "|ml"), u + "|" + exp);
-    if (sig !== want) return null;
+    const want = await hmac(hmacKey(env),
+      u + "|" + exp + (parts.length === 4 ? "|" + pv : ""));
+    if (!ctEq(sig, want)) return null;
+    const user = users ? users[u] : null;
+    if (user && String(user.pv || 0) !== pv) return null;   // 改密后旧 token 作废
     return u;
   } catch (e) { return null; }
 }
 
 // ---------------- KV helpers ----------------
-const K_USERS = "users";     // { [u]: {ph, salt, role, note, disabled, perm} }
+const K_USERS = "users";     // { [u]: {ph, salt, role, note, disabled, perm, pv} }
 async function getUsers(env) {
-  const raw = await env.KV.get(K_USERS);
-  return raw ? JSON.parse(raw) : {};
+  return getJSON(env, K_USERS, {});
 }
 async function putUsers(env, users) {
   await env.KV.put(K_USERS, JSON.stringify(users));
@@ -128,28 +171,39 @@ async function verifyPw(user, p) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
     const url = new URL(request.url);
     const path = url.pathname;
-    try { return await route(request, env, path); }
+    try {
+      // 全路由串行化（审计 G15）：读改写型操作（pub/pubsync/admin/save/myimgs…）不再有并发丢更新
+      return await withLock(() => route(request, env, path, ctx));
+    }
     catch (e) { return jerr("服务异常：" + e.message, 500); }
   }
 };
 
-async function route(request, env, path) {
+async function route(request, env, path, ctx) {
   // ---------- 首次初始化 ----------
   if (path === "/init" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     if (!env.SETUP_CODE || b.code !== env.SETUP_CODE) return jerr("初始化码不对", 403);
+    // 审计（静态8）：init 成功后记 inited，之后拒绝再次 init——就算 users KV 被清空，
+    // 持有 SETUP_CODE 的人也不能用 env.ADMIN_PASS 重建设同样密码的管理号。
+    // 万一真要重置：到 CF 控制台把 KV 键 inited 删掉再 init。
+    if ((await env.KV.get("inited")) === "1") return jerr("已初始化过，如确需重置请到 CF 控制台删 KV 键 inited", 403);
     const users = await getUsers(env);
-    if (users[env.ADMIN_USER]) return J({ ok: true, msg: "已有管理号，跳过" });
+    if (users[env.ADMIN_USER]) {
+      await env.KV.put("inited", "1");
+      return J({ ok: true, msg: "已有管理号，跳过" });
+    }
     const salt = crypto.randomUUID().replaceAll("-", "");
     users[env.ADMIN_USER] = {
       ph: await sha256hex(salt + env.ADMIN_PASS), salt, role: "admin",
-      note: "管理号", disabled: false, perm: {},
+      note: "管理号", disabled: false, perm: {}, pv: 0,
     };
     await putUsers(env, users);
+    await env.KV.put("inited", "1");
     return J({ ok: true });
   }
 
@@ -158,18 +212,37 @@ async function route(request, env, path) {
     const b = await request.json().catch(() => ({}));
     const u = String(b.u || "").trim(), p = String(b.p || "");
     if (!u || !p) return jerr("账号和密码都要填");
+    // 审计（静态1）防爆破：按「账号+天」计失败次数，一天错 10 次锁 1 小时（KV 尽力而为）
+    const day = new Date().toISOString().slice(0, 10);
+    const fk = "faillog_" + u;
+    const fl = await getJSON(env, fk, { d: "", n: 0, lock: 0 });
+    if (fl.d === day && fl.n >= 10) {
+      if (Date.now() < (fl.lock || 0))
+        return jerr("失败次数过多，请 " + Math.ceil((fl.lock - Date.now()) / 60000) + " 分钟后再试", 429);
+      fl.n = 0; fl.lock = 0;                     // 锁期满，重新计数
+    }
     const users = await getUsers(env);
     const user = users[u];
     if (!user || user.disabled) return jerr("账号不存在或已停用", 403);
-    if (!(await verifyPw(user, p))) return jerr("密码不对", 403);
-    const token = await makeToken(env, u);
+    if (!(await verifyPw(user, p))) {
+      if (fl.d !== day) { fl.d = day; fl.n = 0; }
+      fl.n++;
+      if (fl.n >= 10) fl.lock = Date.now() + 3600000;
+      try { await env.KV.put(fk, JSON.stringify(fl)); } catch (e) {}
+      return jerr("密码不对", 403);
+    }
+    try { await env.KV.delete(fk); } catch (e) {}   // 登录成功清失败计数
+    const token = await makeToken(env, u, user.pv);
     return J({ ok: true, token, u, role: user.role || "sub",
                perm: user.role === "admin" ? {} : migratePerm(user.perm) });
   }
 
   const token = request.headers.get("X-Token") || "";
-  const who = await checkToken(env, token);
+  const usersGate = await getUsers(env);       // 审计（G2/G3）：所有带 token 接口统一校验账号还在、没停用
+  const who = await checkToken(env, token, usersGate);
   if (!who) return jerr("登录已过期，请重新登录", 401);
+  if (!usersGate[who]) return jerr("账号不存在或已删除，请重新登录", 403);
+  if (usersGate[who].disabled) return jerr("账号已停用", 403);
 
   // 在线心跳（2026-10-09）：任何带 token 的请求都算活跃；KV 写 5 分钟节流（省额度）
   try {
@@ -231,6 +304,7 @@ async function route(request, env, path) {
     const np = String(b.new || "");
     if (np.length < 4) return jerr("新密码至少 4 位");
     user.ph = await sha256hex(user.salt + np);
+    user.pv = (user.pv || 0) + 1;      // 审计（静态2）：密码版本号 +1，旧 token 全部作废，客户端自动重新登录
     await putUsers(env, users);
     return J({ ok: true });
   }
@@ -248,6 +322,8 @@ async function route(request, env, path) {
     for (const it of list) {
       const u = String(it.u || "").trim();
       if (!u || u === who) continue;
+      // 审计（S4）：__proto__/constructor/prototype 当用户名会原型污染整个 users 对象
+      if (BAD_KEY.test(u)) return jerr("用户名「" + u + "」不合法");
       if (!/^[A-Za-z0-9_\-\u4e00-\u9fa5]{2,20}$/.test(u)) return jerr("用户名「" + u + "」不合法（2-20位字母数字中文）");
       const cur = users[u] || {
         salt: crypto.randomUUID().replaceAll("-", ""), role: "sub",
@@ -267,17 +343,19 @@ async function route(request, env, path) {
       users[u] = cur;
     }
     // 删除：列表里消失的旧子账号 → 移除并清掉 TA 的发布记录/定价/补图残留
+    // 审计（S5）防误删补齐：原来只拦「list 全空」，list=[自己] 这类「面板少渲染」场景会把
+    // 全部子账号连 pub_/pubp_ 删光。现在只要删名单非空就要求 confirm:true 明确确认。
     const keep = new Set(list.map((it) => String(it.u || "").trim()));
-    for (const u of Object.keys(users)) {
-      if (users[u].role === "admin" || u === who) continue;
-      if (!keep.has(u)) {
-        delete users[u];
-        await env.KV.delete("pub_" + u);
-        await env.KV.delete("pubp_" + u);
-      }
+    const doomed = Object.keys(users).filter((u) => users[u].role !== "admin" && u !== who && !keep.has(u));
+    if (doomed.length && b.confirm !== true)
+      return jerr("本次保存将删除子账号：" + doomed.join(", ") + "。如果是误操作请检查面板；确认要删请带 confirm:true", 400);
+    for (const u of doomed) {
+      delete users[u];
+      await env.KV.delete("pub_" + u);
+      await env.KV.delete("pubp_" + u);
     }
     await putUsers(env, users);
-    return J({ ok: true });
+    return J({ ok: true, deleted: doomed });
   }
 
   if (path === "/admin/list" && request.method === "GET") {
@@ -295,12 +373,10 @@ async function route(request, env, path) {
   //     pubp_<u> = { 型号: 当时的闲鱼定价 }
   const pubTs = (v) => (typeof v === "object" && v ? (+v.t || 0) : (+v || 0));
   async function getPub(u) {
-    const r = await env.KV.get("pub_" + u);
-    return r ? JSON.parse(r) : {};
+    return getJSON(env, "pub_" + u, {});
   }
   async function getPubP(u) {
-    const r = await env.KV.get("pubp_" + u);
-    return r ? JSON.parse(r) : {};
+    return getJSON(env, "pubp_" + u, {});
   }
 
   // 自己的发布记录（带各自的闲鱼定价）
@@ -310,7 +386,7 @@ async function route(request, env, path) {
   // 标记/取消一条：{c: 型号, on: true/false, k: 'l'|'s', p: 闲鱼定价(可选)}
   if (path === "/pub" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
-    const c = String(b.c || "").trim();
+    const c = safeKey(b.c, 100);                       // 审计（G1/S4）：长度上限 + 键名黑名单
     if (!c) return jerr("型号不能为空");
     const marks = await getPub(who);
     if (b.on === false) {
@@ -332,17 +408,22 @@ async function route(request, env, path) {
   // 整包合并（登录后把本机旧记录并上云端）：{marks: {c: {t,k} | t}, prices: {c: 价}}
   if (path === "/pubsync" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
+    if (Array.isArray(b.prices)) return jerr("prices 格式错误（应为对象）");   // 审计：数组下标会被当型号
     const marks = await getPub(who);
-    const inc = b.marks || {};
-    for (const [c, v] of Object.entries(inc)) {
+    const inc = b.marks && typeof b.marks === "object" && !Array.isArray(b.marks) ? b.marks : {};
+    for (const [c0, v] of Object.entries(inc)) {
+      const c = safeKey(c0, 100);
+      if (!c) continue;                                // 审计（S4）：脏键直接丢
       const t = pubTs(v) || Date.now();
       const k = typeof v === "object" && v ? (v.k === "s" ? "s" : "l") : "l";
       if (!(c in marks) || pubTs(marks[c]) < t) marks[c] = { t, k };
     }
     await env.KV.put("pub_" + who, JSON.stringify(marks));
-    if (b.prices && typeof b.prices === "object") {
+    if (b.prices && typeof b.prices === "object" && !Array.isArray(b.prices)) {
       const pp = await getPubP(who);
-      for (const [c, p] of Object.entries(b.prices)) {
+      for (const [c0, p] of Object.entries(b.prices)) {
+        const c = safeKey(c0, 100);
+        if (!c) continue;
         // 2026-10-08：全量收价 —— 没点「标记发布」的型号定价也要存（用户要求）
         if (isFinite(+p)) pp[c] = +p;
       }
@@ -373,7 +454,7 @@ async function route(request, env, path) {
     const b = await request.json().catch(() => ({}));
     const u = String(b.u || who);
     if (!users[u]) return jerr("没有这个账号", 404);
-    const keys = Array.isArray(b.keys) ? b.keys.map(String) : [];
+    const keys = Array.isArray(b.keys) ? b.keys.map((k) => safeKey(k, 100)).filter(Boolean) : [];
     const pp = await getPubP(u);
     const removed = [];
     for (const k of keys) { if (k in pp) { delete pp[k]; removed.push(k); } }
@@ -384,15 +465,14 @@ async function route(request, env, path) {
   // ---------- 补图上云（所有人共享：谁补的大家都能看到） ----------
   // KV: myimgs = { 卡片key: dataURL }；单图压到 220px JPEG（~20KB），总量超 18MB 拒收
   async function getMyImgs(env) {
-    const r = await env.KV.get("myimgs");
-    return r ? JSON.parse(r) : {};
+    return getJSON(env, "myimgs", {});
   }
   if (path === "/myimgs" && request.method === "GET") {
     return J({ ok: true, imgs: await getMyImgs(env) });
   }
   if (path === "/myimg" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
-    const c = String(b.c || "").trim();
+    const c = safeKey(b.c, 100);                       // 审计（S4）：键名黑名单
     if (!c || !b.b64) return jerr("参数不全");
     if (String(b.b64).length > 400000) return jerr("图太大，压一压再传");
     const imgs = await getMyImgs(env);
@@ -404,7 +484,7 @@ async function route(request, env, path) {
   }
   if (path === "/myimg" && request.method === "DELETE") {
     const b = await request.json().catch(() => ({}));
-    const c = String(b.c || "").trim();
+    const c = safeKey(b.c, 100);
     if (!c) return jerr("型号不能为空");
     const imgs = await getMyImgs(env);
     delete imgs[c];
@@ -421,23 +501,42 @@ async function route(request, env, path) {
     const b = await request.json().catch(() => ({}));
     if (!b || typeof b.stock !== "object" || !b.stock || !Object.keys(b.stock).length)
       return jerr("库存数据为空，拒收");
-    const obj = { ts: String(b.ts || ""), rows: +b.rows || 0, stock: b.stock,
+    const obj = { ts: String(b.ts || "").slice(0, 64), rows: +b.rows || 0, stock: b.stock,
                   by: who, up: Date.now() };
-    await env.KV.put("stocklive", JSON.stringify(obj));
-    return J({ ok: true, mb: Math.round(JSON.stringify(obj).length / 1048576 * 10) / 10,
+    const payload = JSON.stringify(obj);
+    if (payload.length > 3000000) return jerr("库存数据过大（" + (payload.length / 1048576).toFixed(1) + "MB），拒收", 413);
+    await env.KV.put("stocklive", payload);
+    return J({ ok: true, mb: Math.round(payload.length / 1048576 * 10) / 10,
                n: Object.keys(b.stock).length });
   }
   if (path === "/stockcloud" && request.method === "GET") {
-    const raw = await env.KV.get("stocklive");
-    if (!raw) return jerr("云端还没有共享库存（管理号更新一次后这里就有了）", 404);
-    const obj = JSON.parse(raw);
+    const obj = await getJSON(env, "stocklive", null);
+    if (!obj) return jerr("云端还没有共享库存（管理号更新一次后这里就有了）", 404);
     return J({ ok: true, ts: obj.ts, rows: obj.rows, stock: obj.stock, by: obj.by });
   }
   // 轻量探测：只回时间戳/行数/谁更新的（子账号后台轮询用，不用每次拉 ~0.4MB 全量）
+  // 数据过期自动触发（2026-10-10）：软件开着时每 60~90 秒探一次 meta，
+  // 发现数据超过 30 分钟没更新就自动让 GitHub 拉一轮（30 分钟节流，凌晨 0-8 点不跑）。
+  // 没人开软件就永远不会触发——定时 cron 每小时一次照旧兜底。
+  async function autoKick(kind, ageMs) {
+    // 检查+登记（在 withLock 串行区里跑，两个客户端同时探测也只会登记一次）。
+    // 返回 true = 本轮由我触发，调用方拿 waitUntil 去真正 dispatch。
+    try {
+      const bjHour = new Date(Date.now() + 8 * 3600 * 1000).getUTCHours();
+      if (bjHour < 8) return false;                  // 0-8 点不拉（用户口径）
+      if (ageMs < 30 * 60000) return false;          // 数据还新鲜，不动
+      const key = "ci_auto_" + kind;
+      const la = +(await env.KV.get(key)) || 0;
+      if (Date.now() - la < 30 * 60000) return false; // 刚自动触发过，节流
+      await env.KV.put(key, String(Date.now()));
+      return true;
+    } catch (e) { return false; }
+  }
   if (path === "/stockmeta" && request.method === "GET") {
-    const raw = await env.KV.get("stocklive");
-    if (!raw) return J({ ok: true, ts: "", rows: 0 });
-    const obj = JSON.parse(raw);
+    const obj = await getJSON(env, "stocklive", null);
+    if (!obj) return J({ ok: true, ts: "", rows: 0 });
+    if (ctx && ctx.waitUntil && await autoKick("yy", Date.now() - (+obj.up || 0)))
+      ctx.waitUntil(ghDispatch("yonyou-cloud-stock.yml"));
     return J({ ok: true, ts: obj.ts || "", rows: obj.rows || 0, by: obj.by || "" });
   }
 
@@ -447,24 +546,26 @@ async function route(request, env, path) {
   // ts 是内容哈希：表格没改就不会变，机器不会被无谓打扰。
   if (path === "/xlsxcloud" && request.method === "POST") {
     const users = await getUsers(env);
-    const isCloud = (request.headers.get("X-Cloud-Key") || "") === (env.SECRET || "");
+    // 审计（优化2）：X-Cloud-Key 建议配独立 CLOUD_KEY；没配时兼容沿用 SECRET（CI 在用，不弄断）
+    const ck = env.CLOUD_KEY || env.SECRET;
+    const isCloud = !!ck && (request.headers.get("X-Cloud-Key") || "") === ck;
     if ((users[who] || {}).role !== "admin" && !isCloud) return jerr("没有上传权限", 403);
     const b = await request.json().catch(() => ({}));
     if (!b || !b.ts || !b.files || !b.files["data.xlsx"]) return jerr("表格数据为空，拒收");
-    const obj = { ts: String(b.ts), files: b.files, by: isCloud ? "云端定时" : who, up: Date.now() };
+    const obj = { ts: String(b.ts).slice(0, 64), files: b.files, by: isCloud ? "云端定时" : who, up: Date.now() };
     await env.KV.put("xlsxlive", JSON.stringify(obj));
     return J({ ok: true, mb: Math.round(JSON.stringify(obj).length / 1048576 * 10) / 10 });
   }
   if (path === "/xlsxcloud" && request.method === "GET") {
-    const raw = await env.KV.get("xlsxlive");
-    if (!raw) return jerr("云端还没有共享表格（等云端定时任务跑一次）", 404);
-    const obj = JSON.parse(raw);
+    const obj = await getJSON(env, "xlsxlive", null);
+    if (!obj) return jerr("云端还没有共享表格（等云端定时任务跑一次）", 404);
     return J({ ok: true, ts: obj.ts, files: obj.files, by: obj.by });
   }
   if (path === "/xlsxmeta" && request.method === "GET") {
-    const raw = await env.KV.get("xlsxlive");
-    if (!raw) return J({ ok: true, ts: "" });
-    const obj = JSON.parse(raw);
+    const obj = await getJSON(env, "xlsxlive", null);
+    if (!obj) return J({ ok: true, ts: "" });
+    if (ctx && ctx.waitUntil && await autoKick("kd", Date.now() - (+obj.up || 0)))
+      ctx.waitUntil(ghDispatch("kdocs-cloud-data.yml"));
     return J({ ok: true, ts: obj.ts || "", by: obj.by || "" });
   }
 
@@ -481,9 +582,15 @@ async function route(request, env, path) {
     return J({ ok: true, n: b.cookies.length });
   }
   if (path === "/kdauth" && request.method === "GET") {
-    const raw = await env.KV.get("kdauth");
-    if (!raw) return jerr("云端还没有金山登录态（管理号机器上传一次）", 404);
-    const obj = JSON.parse(raw);
+    // 审计（S1）严重越权修复：GET 原来只验 token 不验角色，子账号能拿到金山完整 cookies。
+    // 云端定时任务（GitHub Actions）也走这个口——它用管理号 token，401 时退 X-Cloud-Key，
+    // 所以两条通道都要放行，否则云端拉表会断。
+    const users = await getUsers(env);
+    const ck = env.CLOUD_KEY || env.SECRET;
+    const isCloud = !!ck && (request.headers.get("X-Cloud-Key") || "") === ck;
+    if ((users[who] || {}).role !== "admin" && !isCloud) return jerr("只有管理号能读金山登录态", 403);
+    const obj = await getJSON(env, "kdauth", null);
+    if (!obj) return jerr("云端还没有金山登录态（管理号机器上传一次）", 404);
     return J({ ok: true, cookies: obj.cookies || [], up: obj.up || 0 });
   }
 
@@ -494,8 +601,7 @@ async function route(request, env, path) {
   if (path === "/yyauth" && request.method === "GET") {
     const users = await getUsers(env);
     if ((users[who] || {}).role !== "admin") return jerr("只有管理号能读", 403);
-    const raw = await env.KV.get("yyauth");
-    const d = raw ? JSON.parse(raw) : null;
+    const d = await getJSON(env, "yyauth", null);
     return J({ ok: true, u: (d && d.u) || "", p: (d && d.p) || "" });
   }
   if (path === "/yyauth" && request.method === "POST") {
@@ -520,20 +626,24 @@ async function route(request, env, path) {
     return J({ ok: true });
   }
   if (path === "/yyalert" && request.method === "GET") {
-    const raw = await env.KV.get("yyalert");
-    const d = raw ? JSON.parse(raw) : null;
+    const d = await getJSON(env, "yyalert", null);
     return J({ ok: true, ts: (d && d.ts) || 0, msg: (d && d.msg) || "", by: (d && d.by) || "" });
   }
 
   // ---------- 软件自更新中转（2026-10-08）：软件内一键升级，客户端不碰 GitHub ----------
   // 私有仓库 → worker 拿 GH_TOKEN 代查/代下。KV 不用；GH_TOKEN 是 secret_text binding。
   const GH_API = "https://api.github.com/repos/BAO-Ww/modelookup/releases/latest";
+  // 审计（G4/优化）：GH 429 单独提示；200 但坏 JSON 不再裸抛 500
   async function ghLatest() {
-    const r = await fetch(GH_API, { headers: {
-      "Authorization": "Bearer " + (env.GH_TOKEN || ""),
-      "User-Agent": "modelookup-worker", "Accept": "application/vnd.github+json" } });
-    if (!r.ok) return null;
-    return r.json();
+    let r;
+    try {
+      r = await fetch(GH_API, { headers: {
+        "Authorization": "Bearer " + (env.GH_TOKEN || ""),
+        "User-Agent": "modelookup-worker", "Accept": "application/vnd.github+json" } });
+    } catch (e) { return { __fail: "GitHub 网络不通（" + e.message + "）" }; }
+    if (r.status === 429) return { __fail: "GitHub 限流中，稍后再试" };
+    if (!r.ok) return { __fail: "GitHub 查询失败 HTTP " + r.status + "（检查 GH_TOKEN 配置）" };
+    try { return await r.json(); } catch (e) { return { __fail: "GitHub 返回了异常数据（坏 JSON）" }; }
   }
   function setupAsset(rel) {
     const a = (rel.assets || []).find((x) => /^ModelLookup-Setup-\d[\w.]*\.exe$/i.test(x.name))
@@ -542,14 +652,16 @@ async function route(request, env, path) {
   }
   if (path === "/appcheck" && request.method === "GET") {
     const rel = await ghLatest();
-    if (!rel || !rel.tag_name) return jerr("GitHub 查询失败（检查 GH_TOKEN 配置）", 502);
+    if (rel.__fail) return jerr(rel.__fail, 502);
+    if (!rel.tag_name) return jerr("GitHub 上没有 Release（检查 GH_TOKEN 配置）", 502);
     const a = setupAsset(rel);
     return J({ ok: true, tag: rel.tag_name, ver: String(rel.tag_name).replace(/^v/i, ""),
                name: a ? a.name : "", size: a ? a.size : 0 });
   }
   if (path === "/appdl" && request.method === "GET") {
     const rel = await ghLatest();
-    if (!rel || !rel.tag_name) return jerr("GitHub 查询失败", 502);
+    if (rel.__fail) return jerr(rel.__fail, 502);
+    if (!rel.tag_name) return jerr("GitHub 查询失败", 502);
     const a = setupAsset(rel);
     if (!a) return jerr("Release 里没有安装包", 404);
     const dr = await fetch(a.url, { headers: {          // API asset URL + octet-stream = 原始下载
@@ -588,8 +700,18 @@ async function route(request, env, path) {
                    con: run.conclusion, at: run.created_at } : null;
   }
   if (path === "/citrigger" && request.method === "POST") {
+    // 审计（S2）：原来任何登录者都能触发 GitHub Actions。现在限管理号，
+    // 或被明确勾了「更新面板」权限的子账号（面板上有更新按钮的人）；外加 60 秒节流。
+    const users = await getUsers(env);
+    const me = users[who] || {};
+    if (me.role !== "admin" && !(me.perm && me.perm.updpanel))
+      return jerr("没有触发云端更新的权限（要管理号，或勾了更新面板权限）", 403);
+    const lt = +(await env.KV.get("ci_last")) || 0;
+    if (Date.now() - lt < 60000)
+      return jerr("刚触发过，1 分钟内不用重复点（云端任务跑完各机器会自动同步）", 429);
     const b = await request.json().catch(() => ({}));
     const want = String((b && b.wf) || "all");            // all | yy | kd
+    if (want !== "all" && want !== "yy" && want !== "kd") return jerr("wf 参数不合法（all / yy / kd）", 400);
     const prev = {};
     for (const k of Object.keys(CI_WF)) prev[k] = (await ghLastRun(CI_WF[k]) || {}).id || 0;
     const out = {};
@@ -597,6 +719,7 @@ async function route(request, env, path) {
     if (want === "all" || want === "kd") out.kd = await ghDispatch(CI_WF.kd);
     if (!Object.keys(out).length || !Object.values(out).every(Boolean))
       return jerr("触发云端任务失败（检查 GH_TOKEN 是否有 workflow 权限）", 502);
+    await env.KV.put("ci_last", String(Date.now()));      // 触发成功才计时，失败可立即重试
     return J({ ok: true, triggered: out, at: new Date().toISOString(), prev });
   }
   if (path === "/cistatus" && request.method === "GET") {
