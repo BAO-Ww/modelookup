@@ -94,6 +94,10 @@ main{padding:22px 0 60px}
      · 「全部」不再重复挂总数；
      · 价格区间并进「清理方式」那一行；chip 也整体压小了一号。 */
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin:11px 0 0;align-items:center}
+/* 吸顶筛选头（2026-10-10 晚同 exe 版）：方式/价格类型行 + 筛选结果条钉在顶部不跟走；
+   hint 的 top 由 JS 按 tools 实际高度设（这行会折行，高度不定） */
+.stickhead{position:sticky;top:0;z-index:26;background:var(--card);box-shadow:0 8px 10px -12px rgba(16,24,40,.28);padding-bottom:6px}
+.stickhint{position:sticky;z-index:25;background:var(--card)}
 .chips+.chips{margin-top:7px}
 .chips .lbl{font-size:11.5px;color:var(--ink3);flex:none;margin-right:3px;letter-spacing:.2px}
 .chip{
@@ -275,9 +279,10 @@ a.markbtn.web:hover{border-color:var(--brand);background:#dde9ff}
   font-variant-numeric:tabular-nums;outline:0;font-family:inherit;background:#fff;
 }
 .calc input:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(46,107,230,.12)}
+/* 多货源口径名长（同 exe 版）：260px 保住整句不截字 */
 .calc select{
   border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;
-  font-family:inherit;background:#fff;color:var(--ink2);outline:0;max-width:190px;
+  font-family:inherit;background:#fff;color:var(--ink2);outline:0;max-width:min(260px,100%);
 }
 .calc .ci{font-size:12px;color:var(--ink3)}
 .calc .ci b{color:var(--ink2);font-weight:600;font-variant-numeric:tabular-nums}
@@ -332,6 +337,7 @@ footer a:hover{text-decoration:underline}
 /* 「外区加100运费」的两种口径 */
 .pill.ship-y{background:var(--brand-l);color:var(--brand-d);border-color:#d9e4ff}
 .pill.ship-q{background:var(--warn-l);color:#a16207;border-color:#f0dcbb}
+.pill.ship-f{background:#e7f7ec;color:#0f7a45;border-color:#bfe6cd;font-weight:700}
 .pill.src{background:#f7f8fb;color:var(--ink2)}
 .pill.s69{background:#fff8ec;color:#a16207;border-color:#f6e3bd}
 .pill.sub{background:#fff3f3;color:#c2410c;border-color:#fbd9cf}
@@ -353,9 +359,10 @@ footer a:hover{text-decoration:underline}
       </div>
       <div class="chips" id="chips"></div>
       <div class="chips" id="catchips"></div>
-      <div class="chips" id="tools">
+      <div class="chips stickhead" id="tools">
         <span class="lbl">方式</span>
         <button class="chip" data-kind="">全部</button>
+        <button class="chip" data-kind="z" title="非滞销/样机的全新机型号">正品<i id="kc-z">0</i></button>
         <button class="chip" data-kind="l">滞销清理<i id="kc-l">0</i></button>
         <button class="chip" data-kind="s">样机清理<i id="kc-s">0</i></button>
         <span class="vsep"></span>
@@ -403,7 +410,7 @@ footer a:hover{text-decoration:underline}
 
     <div class="mains">
       <div class="pubwarn" id="pubwarn" hidden></div>
-      <div class="hint" id="hint"></div>
+      <div class="hint stickhint" id="hint"></div>
       <div class="boot" id="boot" hidden><div class="spin"></div><p>正在读取数据…</p></div>
       <div class="list" id="list"></div>
       <div class="more" id="more" hidden></div>
@@ -458,6 +465,14 @@ function stockOf(mo, name, code){
     }
   }
   return hit;
+}
+/* 库存豁免名单（2026-10-10 用户定稿，同 exe 版）：这些货不走用友库存——
+   货源 HM夏 / 美的 / 容声 / 科沃斯。用友里有没有都当「有货」。 */
+function extStockFree(it){
+  if (!it) return false;
+  if (it._md) return true;                               // 美的 / 容声（LYDF 那套）
+  if (it.b === '美的' || it.b === '容声' || it.b === '科沃斯') return true;
+  return String(it.sfrom || '').trim() === 'HM夏';        // 货源 HM夏
 }
 
 /* ================= 本地存储 ================= */
@@ -691,6 +706,8 @@ function brandOf(it){ return it.b || ''; }
 function nameOf(it){ return it.n || ''; }
 
 var curBrand = '', curCat = '', curKind = '', curPtype = '', flagStock = false, flagSend = false, flagPub = false;
+/* 「全部」浏览模式（同 exe 版）：点品牌/品类/方式的「全部」= 全部显示（不藏三无、不设上限） */
+var curBrowseAll = false;
 /* 子用户发布查看模式（管理号）：点侧栏子用户名 → 主区直接列出 TA 发布的商品卡片；
    再点一次同名 chip 退出。set = 该用户已发布的型号 key 集合 */
 var SUBVIEW = null;
@@ -715,7 +732,8 @@ function prCell(label, v, cls){
 /* 该型号最低清理价（用于价格区间筛选与计算器默认成本）
    美的 / 容声没有「清理价」，用「拿货价 · 慧买卖」当基准，别让它们被价格区间筛掉 */
 function lowPrice(it){
-  var a = isNum(it.lpz) ? it.lpz : null, b = isNum(it.spz) ? it.spz : null;
+  /* 「送」= 白送，按 0 元参与最低价（同 exe 版） */
+  var a = isNum(it.lpz) ? it.lpz : (it.lpz === '送' ? 0 : null), b = isNum(it.spz) ? it.spz : (it.spz === '送' ? 0 : null);
   if (a != null && b != null) return Math.min(a, b);
   var v = (a != null ? a : b);
   if (v != null) return v;
@@ -740,9 +758,13 @@ function costOptions(it){
   // 奖励只在**有奖励列权限**（p_lb/p_sb）时参与，子账号没开就按清理价本身算。
   var lbOk = pok('p_lb') && isNum(it.lb) && it.lb > 0;
   var sbOk = pok('p_sb') && isNum(it.sb) && it.sb > 0;
-  if (pok('p_lpz') && isNum(it.lpz)) o.push({ v: it.lpz, l: '滞销清理价', bn: lbOk ? it.lb : 0 });
-  if (pok('p_spz') && isNum(it.spz)) o.push({ v: it.spz, l: '样机清理价', bn: sbOk ? it.sb : 0 });
+  if (pok('p_lpz') && (isNum(it.lpz) || it.lpz === '送')) o.push({ v: isNum(it.lpz) ? it.lpz : 0, l: '滞销清理价', bn: lbOk ? it.lb : 0 });
+  if (pok('p_spz') && (isNum(it.spz) || it.spz === '送')) o.push({ v: isNum(it.spz) ? it.spz : 0, l: '样机清理价', bn: sbOk ? it.sb : 0 });
   if (pok('p_pt')  && isNum(it.pt))  o.push({ v: it.pt,  l: '价格含税' });
+  /* 多货源合并卡：每个货源的含税价各一个成本口径（同 exe 版） */
+  (it.srcs || []).forEach(function(sc){
+    if (it.srcs.length > 1 && pok('p_pt') && isNum(sc.pt) && sc.pt > 0) o.push({ v: sc.pt, l: '价格含税（' + (sc.sfrom || '未标货源') + '）' });
+  });
   return o;
 }
 function calcHTML(it){
@@ -767,7 +789,8 @@ function calcHTML(it){
     + (isNum(saved) ? ' value="' + saved + '"' : '') + '>'
     + sel
     /* 发全国要加 100 运费（卖家出），默认算上；只卖深惠广莞就把勾去掉。
-       ⚠ 只有发往是「可发全国」的型号才渲染这个勾选框（canNationwide），别的一律不出 */
+       ⚠ 「可发全国」和「问过才能发全国」的型号都渲染（canNationwide），
+         铁定只发深惠广莞的不出 */
     + (canNationwide(it)
        ? '<label class="cfr" title="发深惠广莞以外要加 100 运费，勾上就在利润里扣掉；本地卖可以取消勾选">'
          + '<input type="checkbox" class="cfrbox" checked> 发全国 −100运费</label>'
@@ -1334,6 +1357,7 @@ var NAT_LOCAL = ['不可以', '不可', '否', 'N', 'n', '0', '0.0', '不', '×'
    「外区能发，但要加 100 运费」，而包邮的只有深圳/惠州/广州/东莞。
    其它写法照显原文。 */
 var SHIP_EXTRA = {
+  '全国，含运费':              { t: '全国 · 含运费', k: 'f' },
   '可发全国加运费100':        { t: '可发全国 · 加100运费', k: 'y' },
   '报备可发全国加运费100':     { t: '报备可发全国 · 加100运费', k: 'y' },
   '询问是否可发全国加运费100':  { t: '加100运费可发全国', k: 'q' }
@@ -1347,14 +1371,25 @@ function shipTextOf(it){
   return m ? m.t : raw;
 }
 
-/* 这台能不能「发全国」——决定计算器要不要出「−100运费」勾选框（2026-10-08 用户口径：
-   只有发往里明确是「可发全国」的型号才该有这个选项，只发深惠广莞的不出）。
-   命中条件：全国可发列写「可以 / 报备可发全国」，或发货区域是「可发全国加运费100」这一族。 */
+/* 这台能不能「发全国」——决定计算器要不要出「−100运费」勾选框（2026-10-10 用户口径扩大：
+   明确可发全国的和「要问过才能发全国」的都出勾选框——反正外区都要加 100 运费，
+   勾上就按保守算；只有铁定只发深惠广莞的不出。
+   命中条件：全国可发列「可以 / 报备可发全国（y）」或「找品类报备确认 / 一单一询（q）」，
+   或发货区域是「可发全国加运费100 / 询问是否可发全国加运费100」这一族。 */
 function canNationwide(it){
   var natRaw = String(it.nat == null ? '' : it.nat).replace(/^[\s\-—－–]+/, '').trim();
-  if (natRaw && NAT_EXTRA[natRaw] === 'y') return true;
+  if (natRaw && (NAT_EXTRA[natRaw] === 'y' || NAT_EXTRA[natRaw] === 'q')) return true;
   var ship = it.ship == null ? '' : String(it.ship).trim();
-  return !!(ship && SHIP_EXTRA[ship] && SHIP_EXTRA[ship].k === 'y');
+  return !!(ship && SHIP_EXTRA[ship] && (SHIP_EXTRA[ship].k === 'y' || SHIP_EXTRA[ship].k === 'q'));
+}
+/* 「发全国」筛选用（同 exe 版）：natk=1/2、发货写「全国」、可发全国加运费100 族都算。
+   全国·含运费的运费卖家已包，不出「−100运费」勾选框，所以只进筛选不进勾选框。 */
+function canSendNationwide(it){
+  if (it.natk === 1 || it.natk === 2) return true;
+  var _sship = String(it.ship == null ? '' : it.ship).trim();
+  if (_sship.indexOf('全国') >= 0) return true;
+  var _sm = SHIP_EXTRA[_sship];
+  return !!(_sm && (_sm.k === 'y' || _sm.k === 'q'));
 }
 
 function renderItem(it){
@@ -1382,14 +1417,19 @@ function renderItem(it){
     // 官方参考价（用来定价）：京东价 / 国补后（零售指导价、官网价在上一行里已有）
     if (pok('p_jd') && isNum(it.jd)) pg.push(prCell('京东价 / 国补后', it.jd));
   } else {
-    if (pok('p_pt') && isNum(it.pt)) g.push(prCell('价格含税', it.pt, 'tax'));
-    if (pok('p_lpz') && isNum(it.lpz)) { g.push(prCell('滞销清理价', it.lpz, 'hot')); hot = it.lpz; }
-    if (pok('p_spz') && isNum(it.spz)) { g.push(prCell('样机清理价', it.spz, hot == null ? 'hot' : '')); if (hot == null) hot = it.spz; }
+    if (pok('p_pt') && isNum(it.pt) && it.pt > 0) g.push(prCell('价格含税', it.pt, 'tax'));
+    /* 多货源合并卡：价格含税每个货源各一格（同 exe 版） */
+    (it.srcs || []).forEach(function(sc){
+      if (it.srcs.length > 1 && pok('p_pt') && isNum(sc.pt) && sc.pt > 0) g.push(prCell('价格含税·' + (sc.sfrom || '未标货源'), sc.pt, 'tax'));
+    });
+    if (pok('p_lpz') && ((isNum(it.lpz) && it.lpz > 0) || it.lpz === '送')) { g.push(prCell('滞销清理价', it.lpz, 'hot')); hot = isNum(it.lpz) ? it.lpz : 0; }
+    if (pok('p_spz') && ((isNum(it.spz) && it.spz > 0) || it.spz === '送')) { g.push(prCell('样机清理价', it.spz, hot == null ? 'hot' : '')); if (hot == null) hot = isNum(it.spz) ? it.spz : 0; }
     if (pok('p_lp') && isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
     if (pok('p_lb') && isNum(it.lb)) g.push(prCell('滞销出库奖励', it.lb, 'bonus'));
     if (pok('p_sb') && isNum(it.sb)) g.push(prCell('样机出库奖励', it.sb, 'bonus'));
-    /* 清理数量（2026-10 三次改版）：= 用友实时库存各仓数量加总；没拉过实时时退回金山表列 */
-    var qn = (live && isNum(live.a)) ? Math.round(live.a)
+    /* 清理数量（2026-10 三次改版）：= 用友实时库存各仓数量加总；没拉过实时时退回金山表列。
+       豁免名单（HM夏/美的/容声/科沃斯）不走用友，永远按表里的计划清理量显示 */
+    var qn = !extStockFree(it) && live && isNum(live.a) ? Math.round(live.a)
            : (isNum(it.lq) ? it.lq : (isNum(it.sq) ? it.sq : null));
     if (pok('p_qty') && qn != null) g.push('<div class="pr qty"><span>清理数量</span><b>' + qn + '</b></div>');
   }
@@ -1444,17 +1484,32 @@ function renderItem(it){
     }
   }
 
+  /* 豁免名单（HM夏/美的/容声/科沃斯）：用友数据一律不看（避免型号撞名误绑）——库存行恒显「有货」 */
+  if (extStockFree(it)){
+    liveHTML = '<span class="pill ok" title="这台不走用友库存（外供货源/外品牌），始终按有货处理">有货</span>';
+  }
+
   /* ---------- 发货 ----------
      表里这三种写法说的其实是「外区要加 100 运费」，归一下更好读（用户要求）：
         可发全国加运费100 / 报备可发全国加运费100 / 询问是否可发全国加运费100
      其它写法（深圳/惠州/广州/东莞、全国，含运费、广东全省…）照显原文，title 里也留着原话。 */
   var shipHTML = '';
-  if (it.ship){
-    var sm = SHIP_EXTRA[String(it.ship).trim()];
-    shipHTML += '<span class="pill ship' + (sm ? ' ship-' + sm.k : '') + '" title="表里写：' + esc(it.ship) + '">'
-              + esc(sm ? sm.t : it.ship) + '</span> ';
+  if (it.srcs && it.srcs.length > 1){
+    /* 多货源合并卡：每个货源各显各的发货方式，胶囊尾缀货源名（同 exe 版） */
+    it.srcs.forEach(function(sc){
+      if (!sc.ship) return;
+      var sm2 = SHIP_EXTRA[String(sc.ship).trim()];
+      shipHTML += '<span class="pill ship' + (sm2 ? ' ship-' + sm2.k : '') + '" title="表里写：' + esc(sc.ship) + (sc.sfrom ? '（' + esc(sc.sfrom) + '）' : '') + '">'
+                + esc(sm2 ? sm2.t : sc.ship) + (sc.sfrom ? ' · ' + esc(sc.sfrom) : '') + '</span> ';
+    });
+  } else {
+    if (it.ship){
+      var sm = SHIP_EXTRA[String(it.ship).trim()];
+      shipHTML += '<span class="pill ship' + (sm ? ' ship-' + sm.k : '') + '" title="表里写：' + esc(it.ship) + '">'
+                + esc(sm ? sm.t : it.ship) + '</span> ';
+    }
+    if (it.sfrom) shipHTML += '<span class="pill src">货源 ' + esc(it.sfrom) + '</span> ';
   }
-  if (it.sfrom) shipHTML += '<span class="pill src">货源 ' + esc(it.sfrom) + '</span> ';
 
   /* ---------- 补贴 ----------
      2026-10 三次改版：补贴数据换源 —— 「深圳以旧换新集团商品中心」在线表按型号搜出
@@ -1479,7 +1534,7 @@ function renderItem(it){
   /* ---------- 汇总（2026-10 三次改版）：正品仓几台 / 样机仓几台 / 次品仓几台 ----------
      四次改版：跟库存行一样拆开 —— 一个仓类型一个 pill，别全挤在一个里。 */
   var sumHTML = '';
-  if (live && live.wt && Object.keys(live.wt).length){
+  if (live && live.wt && Object.keys(live.wt).length && !extStockFree(it)){
     var SORD = ['正品仓', '样机仓', '次品仓'];
     var LIVE_CLS2 = { '正品仓': 'ok', '样机仓': 'sky', '次品仓': 'bad',
                       '机壳仓': 'mute', '特价仓': 'warn', '待送仓': 'warn' };
@@ -1646,9 +1701,13 @@ function pricePass(it){
   if (pmaxV != null && bp > pmaxV) return false;
   return true;
 }
-/* 价格类型（2026-10-10 用户定稿，同 exe 版）：按卡片实际有哪几个价精确归型 */
+/* 价格类型（2026-10-10 用户定稿，同 exe 版）：按卡片实际有哪几个价精确归型
+   （有 = 真数字且 >0——表里有含税价填 0 的行，按 0 归型会错进组合） */
 function ptypeOf(it){
-  var pt = isNum(it.pt), lz = isNum(it.lpz), sj = isNum(it.spz);
+  /* 「送」= 清理价写「送」（白送），算有价（同 exe 版 2026-10-10） */
+  var pt = isNum(it.pt) && it.pt > 0,
+      lz = (isNum(it.lpz) && it.lpz > 0) || it.lpz === '送',
+      sj = (isNum(it.spz) && it.spz > 0) || it.spz === '送';
   if (pt && !lz && !sj) return 'tax';
   if (pt &&  lz &&  sj) return 'tax_l_s';
   if (pt &&  lz && !sj) return 'tax_l';
@@ -1660,7 +1719,9 @@ function ptypeOf(it){
 function pass(it){
   if (curBrand && brandOf(it) !== curBrand) return false;
   if (curCat && it._cg !== curCat) return false;
-  if (curKind && it.k.indexOf(curKind) < 0) return false;
+  if (curKind === 'z'){        // 正品：k 里既无 l 也无 s（含美的系，非清理机）
+    if (it.k && (it.k.indexOf('l') >= 0 || it.k.indexOf('s') >= 0)) return false;
+  } else if (curKind && it.k.indexOf(curKind) < 0) return false;
   if (curPtype && ptypeOf(it) !== curPtype) return false;
   // 「只看有货」：优先用用友实时库存（2026-10 改版后唯一库存口径）；
   // 还没拉取过实时数据时，退回公布版清理明细里的「可用量 / 现存量」列，免得筛出空列表
@@ -1674,8 +1735,8 @@ function pass(it){
       if (!(_gp > 0) && !(_sp > 0)) return false;
     }
   }
-  // 「只看能发外区」：排除掉 3 = 只发深惠广莞的（含空值 / 不可以 / 进货年限那两条）
-  if (flagSend && (it.natk === 3 || it.natk == null)) return false;
+  // 「只看能发外区」（同 exe 版 2026-10-10 晚修正）：natk=1/2、发货写「全国」、可发全国加运费100 族都算
+  if (flagSend && !canSendNationwide(it)) return false;
   if (hideMarked && MARKED[it.c]) return false;
   if (flagPub && !MARKED[it.c]) return false;   // 只看已发布（跟 hide 互斥）
   if (SUBVIEW && !SUBVIEW.set[it.c]) return false;   // 只看某子用户发布的
@@ -1683,7 +1744,7 @@ function pass(it){
 }
 
 /* ================= 检索 ================= */
-var QCAP = 500;
+/* 2026-10-10 用户定稿（同 exe 版）：不再设「前 500 条」上限——渲染是分批的 */
 function search(qRaw){
   var q = norm(qRaw);
   if (!q) return null;
@@ -1709,12 +1770,12 @@ function search(qRaw){
     if (qCJK && a.ix !== b.ix) return a.ix - b.ix;
     return a.it.c.length - b.it.c.length || (a.it._n < b.it._n ? -1 : a.it._n > b.it._n ? 1 : 0);
   });
-  return hit.length > QCAP ? hit.slice(0, QCAP) : hit;
+  return hit;
 }
 /* 三无卡片（2026-10-10 用户定稿，同 exe 版）：没库存 + 三个价一个都没有 → 浏览不显示；
    搜索不碰、已发布的永不隐藏 */
 function isBlankCard(it){
-  if (it._md) return false;
+  if (it._md || extStockFree(it)) return false;
   if (MARKED[it.c]) return false;
   if (SUBVIEW && SUBVIEW.set && SUBVIEW.set[it.c]) return false;
   var live = stockOf(it.mo, nameOf(it), it.code);
@@ -1723,17 +1784,18 @@ function isBlankCard(it){
     var _gp = isNum(it.lav) ? it.lav : 0, _sp = isNum(it.sav) ? it.sav : 0;
     if (_gp > 0 || _sp > 0) return false;
   }
-  if (isNum(it.pt) || isNum(it.lpz) || isNum(it.spz)) return false;
+  if (ptypeOf(it)) return false;   // 三个价一个都没有（0 元不算，同价格类型口径）
   return true;
 }
 function allFiltered(){
   var hit = [], i;
   for (i = 0; i < ALL.length; i++){
     var it = ALL[i];
-    if (pass(it) && !isBlankCard(it)) hit.push({ sc: 0, it: it, ix: -1 });
+    /* 「全部」浏览模式（点了品牌/品类/方式的「全部」）：一张不藏、条数不设上限（同 exe 版） */
+    if (pass(it) && (curBrowseAll || !isBlankCard(it))) hit.push({ sc: 0, it: it, ix: -1 });
   }
   hit.sort(function(a,b){ return a.it.c.length - b.it.c.length || (a.it._n < b.it._n ? -1 : a.it._n > b.it._n ? 1 : 0); });
-  return hit.length > QCAP ? hit.slice(0, QCAP) : hit;
+  return hit;
 }
 
 /* ================= 渲染 ================= */
@@ -1804,7 +1866,7 @@ function run(){
   listEl.innerHTML = '';
   moreEl.hidden = true;
   shown = 0;
-  var hasFilter = !!(curBrand || curCat || curKind || curPtype || flagStock || flagSend || flagPub || pminV != null || pmaxV != null || SUBVIEW);
+  var hasFilter = !!(curBrand || curCat || curKind || curPtype || curBrowseAll || flagStock || flagSend || flagPub || pminV != null || pmaxV != null || SUBVIEW);
   // 空搜索框 + 没点任何筛选 = 什么都不列。
   // （上一版是「打开就铺全部」，用户反馈又慢又没用 —— 这是查找工具，不是浏览工具）
   if (!q && !hasFilter){ cur = []; hintEl.innerHTML = ''; listEl.innerHTML = idleHTML(); return; }
@@ -1826,8 +1888,7 @@ function run(){
   hintEl.innerHTML = (SUBVIEW ? '<b>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（' + Object.keys(SUBVIEW.set).length + ' 个型号）</b>'
                     + '<a href="javascript:void 0" id="subexit" title="退出查看" style="display:inline-block;margin-left:8px;padding:1px 9px;border-radius:9px;font-size:12px;cursor:pointer;background:#eef1f6;color:#475467;">退出</a> <span class="dot"></span> ' : '')
     + bits
-    + (ph ? ' <span class="dot"></span> ' + esc(ph) : '')
-    + (res.length >= QCAP ? ' <span class="dot"></span> 仅显示前 ' + QCAP + ' 条，请多输入几个字符' : '');
+    + (ph ? ' <span class="dot"></span> ' + esc(ph) : '');
   renderBatch();
 }
 
@@ -1841,6 +1902,7 @@ chipsEl.addEventListener('click', function(e){
   if (!b) return;
   if (b.dataset.more){ toggleMore(chipsEl, b); return; }   // 「更多 ▾」只是展开，不筛选
   curBrand = b.dataset.brand || '';
+  curBrowseAll = !curBrand;                // 点「全部」= 浏览全部
   Array.prototype.forEach.call(chipsEl.querySelectorAll('.chip[data-brand]'), function(c){ c.classList.toggle('on', c === b); });
   run();
 });
@@ -1849,6 +1911,7 @@ catchipsEl.addEventListener('click', function(e){
   if (!b) return;
   if (b.dataset.more){ toggleMore(catchipsEl, b); return; }
   curCat = b.dataset.cat || '';
+  curBrowseAll = !curCat;                  // 点「全部」= 浏览全部
   Array.prototype.forEach.call(catchipsEl.querySelectorAll('.chip[data-cat]'), function(c){ c.classList.toggle('on', c === b); });
   run();
 });
@@ -1857,6 +1920,7 @@ toolsEl.addEventListener('click', function(e){
   if (!b) return;
   if (b.dataset.kind != null && b.dataset.flag == null){
     curKind = b.dataset.kind || '';
+    curBrowseAll = !curKind;             // 点「全部」= 浏览全部
     Array.prototype.forEach.call(toolsEl.querySelectorAll('.chip[data-kind]'), function(c){ c.classList.toggle('on', c === b); });
   } else if (b.dataset.pt != null){
     /* 价格类型：单选，再点同一个取消 */
@@ -2131,10 +2195,31 @@ document.addEventListener('keydown', function(e){
   }
 });
 
+if (window.IntersectionObserver){
+  var _moreIO = new IntersectionObserver(function(es){
+    for (var _mi = 0; _mi < es.length; _mi++){
+      if (es[_mi].isIntersecting && !moreEl.hidden) renderBatch();
+    }
+  }, { rootMargin: '320px' });
+  _moreIO.observe(moreEl);
+}
 window.addEventListener('scroll', function(){
   if (moreEl.hidden) return;
   if (window.innerHeight + window.scrollY > document.body.offsetHeight - 320) renderBatch();
 }, { passive: true });
+moreEl.addEventListener('click', function(){ if (!moreEl.hidden) renderBatch(); });
+moreEl.style.cursor = 'pointer';
+moreEl.title = '点击加载更多';
+
+/* 吸顶偏移（2026-10-10 晚同 exe 版）：筛选结果条钉在方式/价格类型行正下方——
+   tools 这行会折行高度不定，用实际 offsetHeight 设 top，窗口缩放跟着重算 */
+(function(){
+  var _t = document.getElementById('tools'), _h = document.getElementById('hint');
+  if (!_t || !_h) return;
+  function _sh(){ _h.style.top = _t.offsetHeight + 'px'; }
+  _sh();
+  window.addEventListener('resize', _sh);
+})();
 
 /* ================= 初始化（数据到位后才跑） ================= */
 
@@ -2199,10 +2284,18 @@ function initUI(){
     if (keepC.indexOf(c.getAttribute('data-cat')) >= 0) c.classList.add('on');
   });
   (function(){
-    var nl = 0, ns = 0;
-    ALL.forEach(function(it){ if (it.k.indexOf('l') >= 0) nl++; if (it.k.indexOf('s') >= 0) ns++; });
+    /* 胶囊上的数量和列表同口径：剔除三无隐藏卡（2026-10-10 同 exe 版修正） */
+    var nl = 0, ns = 0, nz = 0;
+    ALL.forEach(function(it){
+      var blank = isBlankCard(it);
+      if (it.k.indexOf('l') >= 0){ if (!blank) nl++; }
+      if (it.k.indexOf('s') >= 0){ if (!blank) ns++; }
+      if (!(it.k && (it.k.indexOf('l') >= 0 || it.k.indexOf('s') >= 0)) && !blank) nz++;
+    });
     document.getElementById('kc-l').textContent = nl;
     document.getElementById('kc-s').textContent = ns;
+    var kzc = document.getElementById('kc-z');
+    if (kzc) kzc.textContent = nz;
     toolsEl.querySelector('.chip[data-kind=""]').classList.add('on');
     var hb = toolsEl.querySelector('.chip[data-flag="hide"]');
     if (hideMarked) hb.classList.add('on');
