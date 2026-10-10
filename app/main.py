@@ -64,7 +64,7 @@ _k = None
 del _k
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.20"
+APP_VERSION = "2.7.21"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -2896,6 +2896,11 @@ def build_menu(sub=False):
         # 改走与 adm() 相同的 js_click 链路（点页面里的隐藏按钮 selfdispbtn）
         js_click("selfdispbtn")
 
+    def fontsize():
+        # 字体大小（2026-10-10）：每个用户每台电脑自己设置，跟账号无关不上云。
+        # 走 js_click 隐藏按钮 fontbtn（同 selfdispbtn 的可靠链路）
+        js_click("fontbtn")
+
     def exp_img():
         if not guarded("导出我补的图", "addimg"):
             return
@@ -2906,10 +2911,14 @@ def build_menu(sub=False):
             return
         js_click("impimg")
 
-    # 子账号（2026-10-08 十次改版）：菜单 = 账号管理 / 重新加载页面 / 软件更新 / 退出登录
+    # 子账号（2026-10-08 十次改版）：菜单 = 账号管理 / 显示 / 重新加载页面 / 软件更新 / 退出登录
+    # 2026-10-10 加「显示(S)」：字体大小每个用户每台电脑自己调（跟账号无关、不上云）
     if sub:
         return [
             MenuAction("账号管理", adm),
+            Menu("显示(&S)", [
+                MenuAction("字体大小", fontsize),
+            ]),
             MenuAction("重新加载页面", reload_page),
             MenuAction("软件更新", upd_app),
             MenuAction("退出登录", logout),
@@ -2936,6 +2945,8 @@ def build_menu(sub=False):
         ]),
         Menu("显示(&S)", [
             MenuAction("我的显示开关", selfdisp),
+            MenuSeparator(),
+            MenuAction("字体大小", fontsize),
         ]),
         Menu("帮助(&H)", [
             MenuAction("软件更新", upd_app),
