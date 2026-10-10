@@ -38,6 +38,8 @@ GROUP_SCHEMA = "2118595716194503889"
 TPLID = "2159497746319933444"
 K_MODEL = "oid_userDefine_2159497746314166282"
 K_SKUNAME = "productsku_skuName"           # 物料SKU名称（含完整型号，带品类前缀）
+K_CODE = "productsku_cCode"                # 物料编码（A08HR01163）——SKU 唯一码，
+                                           # 软件表 YS物料编码 就是它：编码一对一硬核对的主键
 K_QTY = "currentqty"
 K_AVAIL = "availableqty"
 K_WHTYPE = "oid_userDefine_2169743811705569285"
@@ -216,8 +218,15 @@ def aggregate(recs, t_mo=None):
       ① 拼接键（型号字段 + skuName 里型号之后的尾巴）——截短补全靠它；
       ② 型号字段原样——skuName 带描述尾缀（…大富豪系列）时靠它；
       ③ 型号字段剥中文尾——型号字段自身带描述尾（…小富豪）时靠它。
-    都不在表里 → 维持①（宁可键脏也别丢数量，前端还有尾缀兜底匹配）。"""
+    都不在表里 → 维持①（宁可键脏也别丢数量，前端还有尾缀兜底匹配）。
+
+    同时按**物料编码**多聚一份 agg_code（2026-10-10 深夜用户定稿「编码优先」）：
+    productsku_cCode 是 SKU 唯一码、软件表 YS物料编码 就是它——编码一对一硬核对，
+    没有任何启发式解释空间。型号键原封不动保留（编码没覆盖的 41% 行走型号兜底）。
+    返回 (agg, agg_code)。"""
     agg = {}
+    agg_code = {}
+
     for r0 in recs:
         mo = norm_model(r0.get(K_MODEL))
         if not mo:
@@ -253,11 +262,26 @@ def aggregate(recs, t_mo=None):
         wname = str(r0.get(K_WH) or "").strip() or "未知仓"
         k2 = (wname, wt)
         a["whs"][k2] = round(a["whs"].get(k2, 0.0) + av, 2)
+        # 编码维度并行聚一份（同一行既进型号桶也进编码桶）
+        code = norm_model(r0.get(K_CODE))
+        if code and not code.startswith("#"):          # 排除 #N/A 脏值
+            ac = agg_code.setdefault(code, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
+            try:
+                ac["q"] += float(r0.get(K_QTY) or 0)
+            except (TypeError, ValueError):
+                pass
+            ac["a"] += av
+            ac["wt"][wt] = round(ac["wt"].get(wt, 0.0) + av, 2)
+            ac["whs"][k2] = round(ac["whs"].get(k2, 0.0) + av, 2)
     for a in agg.values():
         lst = [{"w": k[0], "t": k[1], "n": v} for k, v in a["whs"].items()]
         lst.sort(key=lambda x: (-x["n"], x["w"]))
         a["whs"] = lst
-    return agg
+    for a in agg_code.values():
+        lst = [{"w": k[0], "t": k[1], "n": v} for k, v in a["whs"].items()]
+        lst.sort(key=lambda x: (-x["n"], x["w"]))
+        a["whs"] = lst
+    return agg, agg_code
 
 
 def cloud_req(path, method="GET", obj=None, timeout=180):
@@ -282,23 +306,27 @@ def cloud_req(path, method="GET", obj=None, timeout=180):
 
 def fetch_model_set():
     """从 worker /xlsxcloud 拉 data.xlsx（金山清理明细）+ price.xlsx（LYDF 价格表），
-    解析「型号」列 → 归一化集合。这是聚合键的裁判表：ERP 干净型号在表里就用干净键
-    （剥掉「…大富豪系列」这类描述尾缀）。
+    解析「型号」列 → 归一化集合；顺带收「YS物料编码/商品编码」列（编码匹配率统计用）。
+    这是聚合键的裁判表：ERP 干净型号在表里就用干净键（剥掉「…大富豪系列」这类描述尾缀）。
     ⚠ 两张表都要：小富豪×3/全空间×2 这几个型号只在 LYDF 价格表里、清理明细没有，
       只扫 data.xlsx 会让它们的 ERP 键残留脏尾缀。
-    拉不到 / 解析不了 → 返回已有部分（或 None），聚合退回旧拼接口径（不影响出数）。"""
+    拉不到 / 解析不了 → 返回已有部分（或 None），聚合退回旧拼接口径（不影响出数）。
+    返回 (型号集合或 None, 卡片编码集合)。"""
+    card_codes = set()
     try:
         import base64
         import openpyxl
         j, err = cloud_req("/xlsxcloud", "GET", timeout=300)
         if err or not (j or {}).get("ok"):
             log("⚠ 型号表拉取失败（%s），聚合退回拼接口径" % (err or (j or {}).get("msg")))
-            return None
+            return None, card_codes
         files = j.get("files") or {}
         out = set()
+        CODE_HEADERS = ("YS物料编码", "商品编码", "编码")
 
         def harvest(b64, sheet_filter=None, header_scan=4, need_all=("型号",)):
-            """通用收型号：在 header_scan 行内找含 need_all 的表头行，收型号列。"""
+            """通用收型号：在 header_scan 行内找含 need_all 的表头行，收型号列；
+            同 sheet 里见到编码列（YS物料编码/商品编码/编码）也顺手收进 card_codes。"""
             if not b64:
                 return
             wb = openpyxl.load_workbook(io.BytesIO(base64.b64decode(b64)),
@@ -310,10 +338,15 @@ def fetch_model_set():
                     continue
                 rows = list(ws.iter_rows(values_only=True))
                 hi = i_mo = None
+                i_code = None
                 for ri in range(min(header_scan, len(rows))):
                     names = [str(x).strip() if x is not None else "" for x in (rows[ri] or [])]
                     if all(n in names for n in need_all):
                         hi, i_mo = ri, names.index("型号")
+                        for ch in CODE_HEADERS:
+                            if ch in names:
+                                i_code = names.index(ch)
+                                break
                         break
                 if hi is None:
                     continue
@@ -322,6 +355,10 @@ def fetch_model_set():
                     m = norm_model(v)
                     if m and m != "型号":
                         out.add(m)
+                    if i_code is not None and i_code < len(r):
+                        cc = norm_model(r[i_code])
+                        if cc and not cc.startswith("#"):
+                            card_codes.add(cc)
             wb.close()
 
         # 清理明细（滞销/样机）：软件型号表的主来源
@@ -330,11 +367,11 @@ def fetch_model_set():
         # 表头「型号+品牌」在 r2（美的在 r1）；用「型号+品牌」判据正好跳过现存量10.6 旧 sheet
         harvest(files.get("price.xlsx"), header_scan=15,
                 need_all=("型号", "品牌"))
-        log("型号表裁判集：%d 个型号" % len(out))
-        return out or None
+        log("型号表裁判集：%d 个型号 · 卡片编码 %d 个" % (len(out), len(card_codes)))
+        return (out or None), card_codes
     except Exception as e:
         log("⚠ 型号表解析失败（%s），聚合退回拼接口径" % e)
-        return None
+        return None, card_codes
 
 
 def main():
@@ -349,10 +386,15 @@ def main():
                 log("样本行：" + json.dumps(r, ensure_ascii=False)[:1500])
     except Exception as _e:
         log("样本日志失败：" + str(_e))
-    agg = aggregate(recs, fetch_model_set())
-    log("聚合：%d 个型号" % len(agg))
+    t_mo, card_codes = fetch_model_set()
+    agg, agg_code = aggregate(recs, t_mo)
+    log("聚合：%d 个型号 · %d 个编码" % (len(agg), len(agg_code)))
+    # 编码直连率：卡片编码能在库存编码桶里直接找到的（前端编码优先路径的实际命中率）
+    if card_codes:
+        hitc = sum(1 for c in card_codes if c in agg_code)
+        log("编码直连：%d / %d 个卡片编码命中（%.0f%%）" % (hitc, len(card_codes), 100.0 * hitc / len(card_codes)))
     j, err = cloud_req("/stockcloud", "POST",
-                       {"ts": ts, "rows": len(recs), "stock": agg}, timeout=300)
+                       {"ts": ts, "rows": len(recs), "stock": agg, "sbc": agg_code}, timeout=300)
     if err or not j or not j.get("ok"):
         log("❌ 上传云端失败：", err or (j or {}).get("msg"))
         sys.exit(6)

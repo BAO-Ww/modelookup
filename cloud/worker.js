@@ -501,8 +501,11 @@ async function route(request, env, path, ctx) {
     const b = await request.json().catch(() => ({}));
     if (!b || typeof b.stock !== "object" || !b.stock || !Object.keys(b.stock).length)
       return jerr("库存数据为空，拒收");
+    // sbc = 按物料编码聚合的库存桶（2026-10-10「编码优先」）：编码是 SKU 唯一码，
+    // 前端有编码的卡片走它做一对一硬核对。可选字段，旧客户端不带也能传。
+    const sbc = (b.sbc && typeof b.sbc === "object" && !Array.isArray(b.sbc)) ? b.sbc : null;
     const obj = { ts: String(b.ts || "").slice(0, 64), rows: +b.rows || 0, stock: b.stock,
-                  by: who, up: Date.now() };
+                  sbc: sbc || undefined, by: who, up: Date.now() };
     const payload = JSON.stringify(obj);
     if (payload.length > 3000000) return jerr("库存数据过大（" + (payload.length / 1048576).toFixed(1) + "MB），拒收", 413);
     await env.KV.put("stocklive", payload);
@@ -512,7 +515,7 @@ async function route(request, env, path, ctx) {
   if (path === "/stockcloud" && request.method === "GET") {
     const obj = await getJSON(env, "stocklive", null);
     if (!obj) return jerr("云端还没有共享库存（管理号更新一次后这里就有了）", 404);
-    return J({ ok: true, ts: obj.ts, rows: obj.rows, stock: obj.stock, by: obj.by });
+    return J({ ok: true, ts: obj.ts, rows: obj.rows, stock: obj.stock, sbc: obj.sbc || null, by: obj.by });
   }
   // 轻量探测：只回时间戳/行数/谁更新的（子账号后台轮询用，不用每次拉 ~0.4MB 全量）
   // 数据过期自动触发（2026-10-10）：软件开着时每 60~90 秒探一次 meta，
