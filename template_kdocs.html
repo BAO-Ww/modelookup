@@ -359,6 +359,14 @@ footer a:hover{text-decoration:underline}
         <button class="chip" data-kind="l">滞销清理<i id="kc-l">0</i></button>
         <button class="chip" data-kind="s">样机清理<i id="kc-s">0</i></button>
         <span class="vsep"></span>
+        <!-- 价格类型（2026-10-10 用户定稿）：按卡片实际有哪几个价精确归型，单选，再点取消 -->
+        <button class="chip" data-pt="tax"     title="只有价格含税">含税</button>
+        <button class="chip" data-pt="tax_l_s" title="价格含税+滞销清理价+样机清理价 都有">含税+滞销+样机</button>
+        <button class="chip" data-pt="tax_l"   title="价格含税+滞销清理价">含税+滞销</button>
+        <button class="chip" data-pt="tax_s"   title="价格含税+样机清理价">含税+样机</button>
+        <button class="chip" data-pt="s"       title="只有样机清理价">样机价</button>
+        <button class="chip" data-pt="l"       title="只有滞销清理价">滞销价</button>
+        <span class="vsep"></span>
         <button class="chip g" data-flag="stock">只看有货</button>
         <button class="chip w" data-flag="send">只看能发外区</button>
         <button class="chip g" data-flag="hide">只看未发布</button>
@@ -428,9 +436,21 @@ var UPSTATE = { price_at: "", stock_at: "", rev: null, fetching: false };
 /* 实时库存（exe 版从用友 YonSuite 拉的现存量，点「更新实时库存」刷新）：
    STOCK = { 型号norm: { q:现存量, a:可用量, wt:{仓库类型:可用量} } }，键与 norm() 同一套归一 */
 var STOCKDATA = null;
-function stockOf(mo){
+function stockOf(mo, name){
   var s = STOCKDATA && STOCKDATA.stock;
-  return s ? (s[norm(mo)] || null) : null;
+  if (!s) return null;
+  var k = norm(mo);
+  if (s[k]) return s[k];                      // 一字不差精确
+  /* 系列尾缀例外（2026-10-10，同 exe 版）：用友键以型号开头 + 整串在全名里 + 唯一命中 */
+  if (!name) return null;
+  var n = norm(name), hit = null;
+  for (var key in s){
+    if (key.length > k.length && key.lastIndexOf(k, 0) === 0 && n.indexOf(key) >= 0){
+      if (hit) return null;
+      hit = s[key];
+    }
+  }
+  return hit;
 }
 
 /* ================= 本地存储 ================= */
@@ -663,7 +683,7 @@ function buildIndex(){
 function brandOf(it){ return it.b || ''; }
 function nameOf(it){ return it.n || ''; }
 
-var curBrand = '', curCat = '', curKind = '', flagStock = false, flagSend = false, flagPub = false;
+var curBrand = '', curCat = '', curKind = '', curPtype = '', flagStock = false, flagSend = false, flagPub = false;
 /* 子用户发布查看模式（管理号）：点侧栏子用户名 → 主区直接列出 TA 发布的商品卡片；
    再点一次同名 chip 退出。set = 该用户已发布的型号 key 集合 */
 var SUBVIEW = null;
@@ -715,8 +735,6 @@ function costOptions(it){
   var sbOk = pok('p_sb') && isNum(it.sb) && it.sb > 0;
   if (pok('p_lpz') && isNum(it.lpz)) o.push({ v: it.lpz, l: '滞销清理价', bn: lbOk ? it.lb : 0 });
   if (pok('p_spz') && isNum(it.spz)) o.push({ v: it.spz, l: '样机清理价', bn: sbOk ? it.sb : 0 });
-  if (pok('p_np')  && isNum(it.npz)) o.push({ v: it.npz, l: '滞销价格' });
-  if (pok('p_ny')  && isNum(it.nyz)) o.push({ v: it.nyz, l: '样机价格' });
   if (pok('p_pt')  && isNum(it.pt))  o.push({ v: it.pt,  l: '价格含税' });
   return o;
 }
@@ -1311,7 +1329,7 @@ var NAT_LOCAL = ['不可以', '不可', '否', 'N', 'n', '0', '0.0', '不', '×'
 var SHIP_EXTRA = {
   '可发全国加运费100':        { t: '可发全国 · 加100运费', k: 'y' },
   '报备可发全国加运费100':     { t: '报备可发全国 · 加100运费', k: 'y' },
-  '询问是否可发全国加运费100':  { t: '想问 · 加100运费可发全国', k: 'q' }
+  '询问是否可发全国加运费100':  { t: '加100运费可发全国', k: 'q' }
 };
 
 // 发货区域的展示文案（归一的用归一后的，其余照原文）
@@ -1343,7 +1361,7 @@ function renderItem(it){
        · 美的 / 容声（「美的」页）：拿货价·慧买卖 / 给二批 / 取整，下面接京东价 + 参考闲鱼价 */
   var g = [], pg = [];
   var hot = null;
-  var live = stockOf(it.mo);   // 用友实时库存（提前取：清理数量和库存行都要用）
+  var live = stockOf(it.mo, nameOf(it));   // 用友实时库存（提前取：清理数量和库存行都要用）
   if (it._md){
     if (pok('p_mh') && isNum(it.mh)) { g.push(prCell('拿货价 · 慧买卖', it.mh, 'hot')); hot = it.mh; }
     if (pok('p_m2') && isNum(it.m2)) g.push(prCell('价格 · 给二批', it.m2));
@@ -1357,6 +1375,7 @@ function renderItem(it){
     // 官方参考价（用来定价）：京东价 / 国补后（零售指导价、官网价在上一行里已有）
     if (pok('p_jd') && isNum(it.jd)) pg.push(prCell('京东价 / 国补后', it.jd));
   } else {
+    if (pok('p_pt') && isNum(it.pt)) g.push(prCell('价格含税', it.pt, 'tax'));
     if (pok('p_lpz') && isNum(it.lpz)) { g.push(prCell('滞销清理价', it.lpz, 'hot')); hot = it.lpz; }
     if (pok('p_spz') && isNum(it.spz)) { g.push(prCell('样机清理价', it.spz, hot == null ? 'hot' : '')); if (hot == null) hot = it.spz; }
     if (pok('p_lp') && isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
@@ -1366,9 +1385,6 @@ function renderItem(it){
     var qn = (live && isNum(live.a)) ? Math.round(live.a)
            : (isNum(it.lq) ? it.lq : (isNum(it.sq) ? it.sq : null));
     if (pok('p_qty') && qn != null) g.push('<div class="pr qty"><span>清理数量</span><b>' + qn + '</b></div>');
-    if (pok('p_pt') && isNum(it.pt)) pg.push(prCell('价格含税', it.pt, 'tax'));
-    if (pok('p_np') && isNum(it.npz)) pg.push(prCell('滞销价格', it.npz, 'hot2'));
-    if (pok('p_ny') && isNum(it.nyz)) pg.push(prCell('样机价格', it.nyz, 'hot2'));
   }
 
   /* ---------- 发往范围（原「全国可发」列） ---------- */
@@ -1548,7 +1564,7 @@ function copyText(it){
     ['滞销清理价', money(it.lpz)], ['滞销出库奖励', money(it.lb)], ['滞销清理数量', it.lq],
     ['样机清理价', money(it.spz)], ['样机出库奖励', money(it.sb)], ['样机清理数量', it.sq],
     ['发货区域', shipTextOf(it)], ['货来源', it.sfrom],
-    ['价格含税', money(it.pt)], ['滞销价格', money(it.npz)], ['样机价格', money(it.nyz)],
+    ['价格含税', money(it.pt)],
     ['补贴69码', (it.sub2 && it.sub2.c) ? it.sub2.c : it.s69],
     ['补贴售价', it.sub2 && isNum(it.sub2.p) ? money(it.sub2.p) : null],
     ['闲鱼商品ID', it.xyid], ['闲鱼价格', money(it.xyp)],
@@ -1564,7 +1580,7 @@ function copyText(it){
     if (p[1] != null && p[1] !== '' && p[1] !== 0) L.push(p[0] + '：' + p[1]);
   });
   // 实时库存（用友 YonSuite，唯一库存来源）—— 只写「什么仓有几个」
-  var lv = stockOf(it.mo);
+  var lv = stockOf(it.mo, nameOf(it));
   if (lv && ((lv.whs && lv.whs.length) || (lv.wt && Object.keys(lv.wt).length))){
     if (lv.whs && lv.whs.length){
       L.push('库存（' + ((STOCKDATA && STOCKDATA.ts) || '') + '）：' + lv.whs.map(function(x){
@@ -1623,14 +1639,26 @@ function pricePass(it){
   if (pmaxV != null && bp > pmaxV) return false;
   return true;
 }
+/* 价格类型（2026-10-10 用户定稿，同 exe 版）：按卡片实际有哪几个价精确归型 */
+function ptypeOf(it){
+  var pt = isNum(it.pt), lz = isNum(it.lpz), sj = isNum(it.spz);
+  if (pt && !lz && !sj) return 'tax';
+  if (pt &&  lz &&  sj) return 'tax_l_s';
+  if (pt &&  lz && !sj) return 'tax_l';
+  if (pt && !lz &&  sj) return 'tax_s';
+  if (!pt && lz && !sj) return 'l';
+  if (!pt && sj && !lz) return 's';
+  return '';
+}
 function pass(it){
   if (curBrand && brandOf(it) !== curBrand) return false;
   if (curCat && it._cg !== curCat) return false;
   if (curKind && it.k.indexOf(curKind) < 0) return false;
+  if (curPtype && ptypeOf(it) !== curPtype) return false;
   // 「只看有货」：优先用用友实时库存（2026-10 改版后唯一库存口径）；
   // 还没拉取过实时数据时，退回公布版清理明细里的「可用量 / 现存量」列，免得筛出空列表
   if (flagStock){
-    var _lv = stockOf(it.mo);
+    var _lv = stockOf(it.mo, nameOf(it));
     if (_lv){
       if (!((_lv.a || 0) > 0 || (_lv.q || 0) > 0)) return false;
     } else {
@@ -1676,9 +1704,27 @@ function search(qRaw){
   });
   return hit.length > QCAP ? hit.slice(0, QCAP) : hit;
 }
+/* 三无卡片（2026-10-10 用户定稿，同 exe 版）：没库存 + 三个价一个都没有 → 浏览不显示；
+   搜索不碰、已发布的永不隐藏 */
+function isBlankCard(it){
+  if (it._md) return false;
+  if (MARKED[it.c]) return false;
+  if (SUBVIEW && SUBVIEW.set && SUBVIEW.set[it.c]) return false;
+  var live = stockOf(it.mo, nameOf(it));
+  if (live && ((live.a || 0) > 0 || (live.q || 0) > 0)) return false;
+  if (!(STOCKDATA && STOCKDATA.stock && Object.keys(STOCKDATA.stock).length)){
+    var _gp = isNum(it.lav) ? it.lav : 0, _sp = isNum(it.sav) ? it.sav : 0;
+    if (_gp > 0 || _sp > 0) return false;
+  }
+  if (isNum(it.pt) || isNum(it.lpz) || isNum(it.spz)) return false;
+  return true;
+}
 function allFiltered(){
   var hit = [], i;
-  for (i = 0; i < ALL.length; i++) if (pass(ALL[i])) hit.push({ sc: 0, it: ALL[i], ix: -1 });
+  for (i = 0; i < ALL.length; i++){
+    var it = ALL[i];
+    if (pass(it) && !isBlankCard(it)) hit.push({ sc: 0, it: it, ix: -1 });
+  }
   hit.sort(function(a,b){ return a.it.c.length - b.it.c.length || (a.it._n < b.it._n ? -1 : a.it._n > b.it._n ? 1 : 0); });
   return hit.length > QCAP ? hit.slice(0, QCAP) : hit;
 }
@@ -1751,7 +1797,7 @@ function run(){
   listEl.innerHTML = '';
   moreEl.hidden = true;
   shown = 0;
-  var hasFilter = !!(curBrand || curCat || curKind || flagStock || flagSend || flagPub || pminV != null || pmaxV != null || SUBVIEW);
+  var hasFilter = !!(curBrand || curCat || curKind || curPtype || flagStock || flagSend || flagPub || pminV != null || pmaxV != null || SUBVIEW);
   // 空搜索框 + 没点任何筛选 = 什么都不列。
   // （上一版是「打开就铺全部」，用户反馈又慢又没用 —— 这是查找工具，不是浏览工具）
   if (!q && !hasFilter){ cur = []; hintEl.innerHTML = ''; listEl.innerHTML = idleHTML(); return; }
@@ -1771,7 +1817,7 @@ function run(){
     bits = '筛选到 <b>' + res.length + '</b> 条';
   }
   hintEl.innerHTML = (SUBVIEW ? '<b>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（' + Object.keys(SUBVIEW.set).length + ' 个型号）</b>'
-                    + '<a href="javascript:void 0" id="subexit" style="margin-left:8px;font-size:12.5px">✕ 退出</a> <span class="dot"></span> ' : '')
+                    + '<a href="javascript:void 0" id="subexit" title="退出查看" style="display:inline-block;margin-left:8px;padding:1px 9px;border-radius:9px;font-size:12px;cursor:pointer;background:#eef1f6;color:#475467;">退出</a> <span class="dot"></span> ' : '')
     + bits
     + (ph ? ' <span class="dot"></span> ' + esc(ph) : '')
     + (res.length >= QCAP ? ' <span class="dot"></span> 仅显示前 ' + QCAP + ' 条，请多输入几个字符' : '');
@@ -1805,6 +1851,12 @@ toolsEl.addEventListener('click', function(e){
   if (b.dataset.kind != null && b.dataset.flag == null){
     curKind = b.dataset.kind || '';
     Array.prototype.forEach.call(toolsEl.querySelectorAll('.chip[data-kind]'), function(c){ c.classList.toggle('on', c === b); });
+  } else if (b.dataset.pt != null){
+    /* 价格类型：单选，再点同一个取消 */
+    curPtype = (curPtype === b.dataset.pt) ? '' : b.dataset.pt;
+    Array.prototype.forEach.call(toolsEl.querySelectorAll('.chip[data-pt]'), function(c){
+      c.classList.toggle('on', curPtype !== '' && c.dataset.pt === curPtype);
+    });
   } else if (b.dataset.flag === 'stock'){
     flagStock = !flagStock; b.classList.toggle('on', flagStock);
   } else if (b.dataset.flag === 'send'){
@@ -2179,7 +2231,9 @@ function pubStockWarn(){
   Object.keys(MARKED).forEach(function(c){
     var m = MARKED[c]; if (!m) return;
     var kind = m.k || 'l';
-    var st = stockOf(c);
+    var _it = null;                                       // 用型号查库存，别用记录键（变体码查不到）
+    for (var _i = 0; _i < ALL.length; _i++){ if (ALL[_i].c === c){ _it = ALL[_i]; break; } }
+    var st = stockOf((_it && _it.mo) || c, _it ? nameOf(_it) : '');
     if (!st){ lost.push(c + '（库存里查不到）'); return; }
     var good = 0, samp = 0;
     Object.keys(st.wt || {}).forEach(function(t){

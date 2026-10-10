@@ -344,9 +344,9 @@ def parse_price(ws):
             "code": sc(col_of(col, "编码"), r), "n": sc(col_of(col, "名称"), r),
             "lp": nc(col_of(col, "零售指导价"), r),
             # 价格（⚠ 是价格不是数量）
+            # 2026-10-10 用户拍板：价格表只读「价格含税」；滞销价格/样机价格不要了
+            # （滞销/样机一律只认「公布版-滞销样机清理明细」的清理价 lpz/spz）
             "pt": nc(col_of(col, "价格含税"), r),
-            "npz": nc(col_of(col, "滞销价格"), r),
-            "nyz": nc(col_of(col, "样机价格"), r),
             # 库存不再从金山取（2026-10 改版：全部走用友实时接口）
             # 发货
             "ship": sc(col_of(col, "发货区域"), r),
@@ -364,7 +364,7 @@ def parse_price(ws):
             "t2": sc(col_of(col, "产品状态"), r),
         }
         if not any(rec.get(k) not in (None, "") for k in
-                   ("pt", "npz", "nyz", "s69", "xyp")):
+                   ("pt", "s69", "xyp")):
             continue          # 这一行什么都没，跳过
         out.append(rec)
     return out
@@ -547,7 +547,7 @@ def merge_records(allrecs):
         for k in ("b", "cat", "code", "n", "lp"):
             if r.get(k) in (None, "") and rec.get(k) not in (None, ""):
                 r[k] = rec[k]
-        r.update(pt=rec["pt"], npz=rec["npz"], nyz=rec["nyz"],
+        r.update(pt=rec["pt"],
                  ship=rec["ship"], sfrom=rec["from_src"],
                  xyid=rec["xyid"], xyp=rec["xyp"], profit=rec["profit"],
                  s69=rec["s69"], smax=rec["smax"], searn=rec["searn"], suser=rec["suser"],
@@ -1772,21 +1772,36 @@ def yy_finish(recs, log):
     except Exception as e:
         log("样本落盘失败：" + str(e))
     # 按型号聚合（norm_model 与前端 norm() 严格一致，全角/空格/大小写都归一）
-    # 聚合键（2026-10-10 用户定稿「一字不差」）：型号字段常被录成截短值（JSQ25-13TE7），
-    # 完整名（JSQ25-13TE7(12T)星河U1）在物料SKU名称里，但名称带「海尔…13升」前缀——
-    # 所以从名称里定位型号子串、把它后面的尾巴拼回型号：key = mo + 名称中 mo 之后的尾部。
-    # 同 mo 不同尾（星河U1/U2）各自成键，不再混加；名称里找不到型号就退回型号字段。
+    # 聚合键（2026-10-10 晚二次定稿「型号表当裁判」）：ERP「型号」字段本身是干净的
+    # （BC/BD-629GHEP），脏尾缀全在物料SKU名称里（…大富豪系列）。但也不能无脑不拼——
+    #   · 型号字段常被录成截短值（JSQ25-13TE7，完整 JSQ25-13TE7(12T)星河U1 在名称里）；
+    #   · 还有的型号中文尾就是本体（BCD-267WKR3NPGA星光棕 / XX套机），全靠拼接才对得上。
+    # 所以：拼接键在型号表里 → 用拼接键；干净型号在表里、拼接键不在 → 剥掉描述尾缀用
+    # 干净键；都不在 → 维持拼接（宁可键脏也别丢数量，前端还有尾缀兜底匹配）。
     # whs = 每个仓的明细（2026-10 二次改版：卡片只显示「什么仓有几个」，不再显示可用/现存总数）
+    T_MO = set()
+    try:
+        for _r in (get_payload().get("rows") or []):
+            _m = norm_model(_r.get("mo"))
+            if _m:
+                T_MO.add(_m)
+    except Exception:
+        pass                              # 表拿不到就退回纯拼接口径，不影响出数
     agg = {}
     for r0 in recs:
         mo = norm_model(r0.get(YY_K_MODEL))
         if not mo:
             continue
         sku = norm_model(r0.get(YY_K_SKUNAME))
+        full = mo
         if sku and mo in sku:
             tail = sku[sku.index(mo) + len(mo):]
             if tail:
-                mo = mo + tail          # 完整名做键：型号字段截短时靠它一字不差对上
+                full = mo + tail          # 完整名候选：型号字段截短时靠它一字不差对上
+        if full != mo and T_MO and mo in T_MO and full not in T_MO:
+            pass                          # SKU名称尾缀是描述（…大富豪系列），剥掉用干净型号键
+        else:
+            mo = full
         a = agg.setdefault(mo, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
         try:
             a["q"] += float(r0.get(YY_K_QTY) or 0)
@@ -1811,13 +1826,9 @@ def yy_finish(recs, log):
 
     # 命中统计：跟当前表里的型号对一下
     hit = 0
-    try:
-        rows_now = get_payload().get("rows") or []
-        for r1 in rows_now:
-            if norm_model(r1.get("mo")) in agg:
-                hit += 1
-    except Exception:
-        pass
+    for _m in T_MO:
+        if _m in agg:
+            hit += 1
 
     ts = time.strftime("%m-%d %H:%M")
     with STOCK_LOCK:
@@ -2647,12 +2658,32 @@ def activate_existing(port):
     return False
 
 
+def any_live_instance():
+    """逐个端口找**活着的**实例（/api/ping 有应答才算活）。
+    2026-10-10 实锤：实例会僵死（互斥量被占、端口在 LISTEN 但不 accept、
+    taskkill/Stop-Process 都杀不动，只能等重启）——这种不能算「已在运行」。"""
+    for p in PORTS:
+        try:
+            urllib.request.urlopen("http://%s:%d/api/ping" % (HOST, p), timeout=0.6).read()
+            return p
+        except Exception:
+            continue
+    return 0
+
+
+class MLServer(ThreadingHTTPServer):
+    # Windows 下 HTTPServer 默认开 SO_REUSEADDR：新实例能跟一个僵死实例**同时绑上
+    # 同一个端口**，连接却流进僵尸的尸体 socket → 软件看起来起了、页面永远打不开
+    # （2026-10-10 僵尸 4804 实锤）。关掉它：端口被占就干净地落到下一个。
+    allow_reuse_address = 0
+
+
 def start_server():
     httpd = None
     port = 0
     for p in PORTS:
         try:
-            httpd = ThreadingHTTPServer((HOST, p), Handler)
+            httpd = MLServer((HOST, p), Handler)
             port = p
             break
         except OSError:
@@ -2662,7 +2693,7 @@ def start_server():
         s.bind((HOST, 0))
         port = s.getsockname()[1]
         s.close()
-        httpd = ThreadingHTTPServer((HOST, port), Handler)
+        httpd = MLServer((HOST, port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     save_port(port)
     return httpd, port
@@ -3300,20 +3331,19 @@ def main():
 
     # 已经在跑 → 把那个窗口叫到前面来，绝不开第二个
     # （开第二个的话端口/存储路径会分家，用户标的「已发布」「我的定价」就看不见了）
+    # 例外（2026-10-10）：占着互斥量的实例**叫不活**（登记端口没应答、逐个端口探一遍
+    # 也没一个活的）= 僵尸实例 —— 强杀都杀不掉，只能等重启。这种必须绕过互斥量
+    # 继续起（自动落到下一个空闲端口），否则软件直接锁死到重启（4804 实锤）。
     if already_running():
         p = read_port()
-        if not (p and activate_existing(p)):
-            try:
-                import ctypes
-                ctypes.windll.user32.MessageBoxW(
-                    None,
-                    "型号查询已经在运行了。\n\n"
-                    "如果找不到窗口：看一眼任务栏，\n"
-                    "或者在任务管理器里结束 ModelLookup.exe 再重新打开。",
-                    APP_NAME, 0x40)
-            except Exception:
-                pass
-        return
+        if p and activate_existing(p):
+            return
+        z = any_live_instance()
+        if z:
+            save_port(z)                       # 活实例在别的端口 → 记下来，下次直接叫它
+            activate_existing(z)
+            return
+        _tick("互斥量被僵尸实例占用（无任何应答），绕过单实例继续启动")
     _tick("单实例检查通过")
 
     arg = None
@@ -3407,7 +3437,7 @@ def _check():
         if n_src < 2:
             ok = False
         # 价格表字段抽查
-        has_p = sum(1 for r in p["rows"] if r.get("pt") is not None or r.get("npz") is not None)
+        has_p = sum(1 for r in p["rows"] if r.get("pt") is not None)
         out.append("带价格表数据的型号 = %d 个 %s" % (has_p, "✅" if has_p else "❌"))
         if not has_p:
             ok = False
