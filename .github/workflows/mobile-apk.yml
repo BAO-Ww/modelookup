@@ -102,9 +102,10 @@ jobs:
 
       - name: 首次签名提醒（无固定 keystore 时上传 jks，记得存成 secret）
         if: env.ML_KS_B64 == ''
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: generated-keystore-保存到Secrets
+          name: generated-keystore-save-as-secret
           path: mobile/app/android/ml.keystore
           if-no-files-found: ignore
           retention-days: 7
