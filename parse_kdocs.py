@@ -217,10 +217,10 @@ def parse_price(ws):
             "code": sc(rows, col_of(col, "编码"), r),
             "n": sc(rows, col_of(col, "名称"), r),
             "lp": nc(rows, col_of(col, "零售指导价"), r),
-            # 价格：含税价 / 滞销价 / 样机价（⚠ 是价格不是数量）
+            # 价格（⚠ 是价格不是数量）
+            # 2026-10-10 用户拍板：价格表只读「价格含税」；滞销价格/样机价格不要了
+            # （滞销/样机一律只认「公布版-滞销样机清理明细」的清理价 lpz/spz）
             "pt": nc(rows, col_of(col, "价格含税"), r),
-            "npz": nc(rows, col_of(col, "滞销价格"), r),
-            "nyz": nc(rows, col_of(col, "样机价格"), r),
             # 库存不再从金山取（2026-10 改版：全部走用友实时接口）
             # 发货
             "ship": sc(rows, col_of(col, "发货区域"), r),
@@ -238,7 +238,7 @@ def parse_price(ws):
             "t2": sc(rows, col_of(col, "产品状态"), r),
         }
         if not any(rec.get(k) not in (None, "") for k in
-                   ("pt", "npz", "nyz", "s69", "xyp")):
+                   ("pt", "s69", "xyp")):
             continue          # 这一行什么都没，跳过
         out.append(rec)
     return out
@@ -417,7 +417,7 @@ def merge(allrecs):
         for k in ("b", "cat", "code", "n", "lp"):
             if r.get(k) in (None, "") and rec.get(k) not in (None, ""):
                 r[k] = rec[k]
-        r.update(pt=rec["pt"], npz=rec["npz"], nyz=rec["nyz"],
+        r.update(pt=rec["pt"],
                  ship=rec["ship"], sfrom=rec["from_src"],
                  xyid=rec["xyid"], xyp=rec["xyp"], profit=rec["profit"],
                  s69=rec["s69"], smax=rec["smax"], searn=rec["searn"], suser=rec["suser"],
@@ -560,7 +560,7 @@ def main():
     for label, key in (("滞销可用量", "lav"), ("样机现存量", "sav")):
         n = sum(1 for r in rows.values() if isinstance(r.get(key), (int, float)))
         print("  %s 有值 %d 个" % (label, n))
-    for label, key in (("价格含税", "pt"), ("滞销价格", "npz"), ("样机价格", "nyz"),
+    for label, key in (("价格含税", "pt"),
                        ("闲鱼价格", "xyp"), ("利润", "profit"),
                        ("补贴最高价格", "smax"), ("补贴可赚", "searn"), ("用户补贴", "suser")):
         vs = [r.get(key) for r in rows.values() if isinstance(r.get(key), (int, float))]

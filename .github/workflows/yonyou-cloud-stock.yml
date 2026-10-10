@@ -30,7 +30,7 @@ jobs:
 
       - name: Install Playwright + Chromium
         run: |
-          pip install playwright==1.48.0
+          pip install playwright==1.48.0 openpyxl==3.1.5
           python -m playwright install --with-deps chromium
 
       - name: Pull Yonyou stock and upload

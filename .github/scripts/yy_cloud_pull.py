@@ -199,21 +199,29 @@ def login_and_fetch():
 
 # ---------------------------------------------------------------- 聚合 + 上传
 
-def aggregate(recs):
-    """聚合键（2026-10-10 与 app yy_finish 对齐的「一字不差」口径）：
-    型号字段常被录成截短值（JSQ25-13TE7），完整名（JSQ25-13TE7(12T)星河U1）在
-    物料SKU名称（productsku_skuName）里且带「海尔燃气热水器13升」前缀——
-    从名称里定位型号子串、把它后面的尾巴拼回型号：key = mo + 名称中 mo 之后的尾部。"""
+def aggregate(recs, t_mo=None):
+    """聚合键（2026-10-10 晚「型号表当裁判」口径，与 app yy_finish 对齐）：
+    ERP「型号」字段本身是干净的（BC/BD-629GHEP），脏尾缀全在物料SKU名称里
+    （…大富豪系列）。但不能无脑不拼——型号字段会截短（JSQ25-13TE7）、有的中文尾
+    是型号本体（星光棕/套机/星河U1）。规则：
+      · 拼接键在型号表里 → 用拼接键；
+      · 干净型号在表里、拼接键不在 → 剥掉描述尾缀用干净键；
+      · 都不在（或没拉到型号表）→ 维持拼接（旧口径兜底）。"""
     agg = {}
     for r0 in recs:
         mo = norm_model(r0.get(K_MODEL))
         if not mo:
             continue
         sku = norm_model(r0.get(K_SKUNAME))
+        full = mo
         if sku and mo in sku:
             tail = sku[sku.index(mo) + len(mo):]
             if tail:
-                mo = mo + tail          # 完整名做键：型号字段截短时靠它一字不差对上
+                full = mo + tail          # 完整名候选：型号字段截短时靠它一字不差对上
+        if full != mo and t_mo and mo in t_mo and full not in t_mo:
+            pass                          # SKU名称尾缀是描述（…大富豪系列），剥掉用干净型号键
+        else:
+            mo = full
         a = agg.setdefault(mo, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
         try:
             a["q"] += float(r0.get(K_QTY) or 0)
@@ -256,6 +264,53 @@ def cloud_req(path, method="GET", obj=None, timeout=180):
         return None, str(e)
 
 
+def fetch_model_set():
+    """从 worker /xlsxcloud 拉 data.xlsx（金山清理明细），解析「型号」列 → 归一化集合。
+    这是聚合键的裁判表：ERP 干净型号在表里就用干净键（剥掉「…大富豪系列」这类描述尾缀）。
+    拉不到 / 解析不了 → 返回 None，聚合退回旧拼接口径（不影响出数）。"""
+    try:
+        import base64
+        import openpyxl
+        j, err = cloud_req("/xlsxcloud", "GET", timeout=300)
+        if err or not (j or {}).get("ok"):
+            log("⚠ 型号表拉取失败（%s），聚合退回拼接口径" % (err or (j or {}).get("msg")))
+            return None
+        b64 = (j.get("files") or {}).get("data.xlsx")
+        if not b64:
+            log("⚠ 云端表格里没有 data.xlsx，聚合退回拼接口径")
+            return None
+        wb = openpyxl.load_workbook(io.BytesIO(base64.b64decode(b64)),
+                                    read_only=True, data_only=True)
+        out = set()
+        for ws in wb.worksheets:
+            # 只扫「清理明细」sheet（滞销/样机）= 软件型号表的真来源。
+            # ⚠ 千万别全簿遍历：这表里有 Sheet9 这种 104 万行的空壳 sheet，
+            #   read_only 模式逐行迭代会跑几十分钟把整个 job 拖死（本机实测 SIGTERM）。
+            if "清理" not in (ws.title or ""):
+                continue
+            rows = list(ws.iter_rows(values_only=True))
+            hi = None
+            i_mo = None
+            for ri in range(min(4, len(rows))):        # 与 app header_map 同款：前 4 行找表头
+                names = [str(x).strip() if x is not None else "" for x in (rows[ri] or [])]
+                if "型号" in names:
+                    hi, i_mo = ri, names.index("型号")
+                    break
+            if hi is None:
+                continue
+            for r in rows[hi + 1:]:
+                v = r[i_mo] if i_mo is not None and i_mo < len(r) else None
+                m = norm_model(v)
+                if m and m != "型号":
+                    out.add(m)
+        wb.close()
+        log("型号表裁判集：%d 个型号" % len(out))
+        return out or None
+    except Exception as e:
+        log("⚠ 型号表解析失败（%s），聚合退回拼接口径" % e)
+        return None
+
+
 def main():
     ts = time.strftime("%m-%d %H:%M", time.localtime(time.time() + 8 * 3600))
     log("== 云端用友库存拉取 %s ==" % ts)
@@ -268,7 +323,7 @@ def main():
                 log("样本行：" + json.dumps(r, ensure_ascii=False)[:1500])
     except Exception as _e:
         log("样本日志失败：" + str(_e))
-    agg = aggregate(recs)
+    agg = aggregate(recs, fetch_model_set())
     log("聚合：%d 个型号" % len(agg))
     j, err = cloud_req("/stockcloud", "POST",
                        {"ts": ts, "rows": len(recs), "stock": agg}, timeout=300)
