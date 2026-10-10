@@ -72,7 +72,12 @@ from payload import bootstrap, get_payload                                # noqa
 from server import start_server                                           # noqa: E402
 from instance import (activate_existing, already_running,                 # noqa: E402
                       any_live_instance, read_port, save_port)            # noqa: E402
-from appwin import _webview2_pv, run_app, warn_no_webview2                # noqa: E402
+from appwin import _webview2_pv, warn_no_webview2                         # noqa: E402
+# 2026-10-11 Mac 端：窗口域按平台分发（Windows 走 appwin 不变，Mac 走 appwin_mac）
+if sys.platform == "darwin":
+    from appwin_mac import run_app                                        # noqa: E402
+else:
+    from appwin import run_app                                            # noqa: E402
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
 try:
@@ -87,7 +92,8 @@ _tick("常量区/埋点就绪")
 
 def main():
     _tick("main() 进入（Python 侧已起来）")
-    if not webview2_ok():
+    # Mac 用 WKWebView，没有 WebView2 这回事（2026-10-11 Mac 端）
+    if sys.platform != "darwin" and not webview2_ok():
         warn_no_webview2()
         return
 
@@ -155,20 +161,35 @@ def _check():
 
     # ⚠ 这条必须留着：winforms 顶层硬依赖 webview.platforms.win32，
     #   打包时把它 excludes 掉，pywebview 会误导性地报「You must have pythonnet installed」
-    try:
-        import webview.platforms.winforms as _wf   # noqa: F401
-        out.append("winforms 后端 = 可导入 ✅")
-    except Exception as e:
-        ok = False
-        out.append("winforms 后端 ❌ 界面根本起不来！%r" % (e,))
-
-    for mod in ("clr", "pythonnet"):
+    if sys.platform == "darwin":
+        # 2026-10-11 Mac 端：后端是 cocoa(WKWebView)，winforms/clr 检查不适用
         try:
-            __import__(mod)
-            out.append("%s ✅" % mod)
+            import webview.platforms.cocoa as _ck   # noqa: F401
+            out.append("cocoa 后端(WKWebView) = 可导入 ✅")
         except Exception as e:
             ok = False
-            out.append("%s ❌ %r" % (mod, e))
+            out.append("cocoa 后端 ❌ 界面根本起不来！%r" % (e,))
+        try:
+            import AppKit                            # noqa: F401
+            out.append("pyobjc(AppKit) = 可导入 ✅")
+        except Exception as e:
+            ok = False
+            out.append("pyobjc(AppKit) ❌ %r" % (e,))
+    else:
+        try:
+            import webview.platforms.winforms as _wf   # noqa: F401
+            out.append("winforms 后端 = 可导入 ✅")
+        except Exception as e:
+            ok = False
+            out.append("winforms 后端 ❌ 界面根本起不来！%r" % (e,))
+
+        for mod in ("clr", "pythonnet"):
+            try:
+                __import__(mod)
+                out.append("%s ✅" % mod)
+            except Exception as e:
+                ok = False
+                out.append("%s ❌ %r" % (mod, e))
 
     try:
         out.append("openpyxl = %s ✅" % openpyxl.__version__)
@@ -313,3 +334,10 @@ if __name__ == "__main__":
                                                  APP_NAME + " 启动失败", 0x10)
             except Exception:
                 pass
+            # Mac 端（2026-10-11）：没有 MessageBox，落 crash.log 兜底可查
+            if sys.platform == "darwin":
+                try:
+                    with io.open(wp("crash.log"), "a", encoding="utf-8") as f:
+                        f.write(traceback.format_exc() + "\n")
+                except Exception:
+                    pass

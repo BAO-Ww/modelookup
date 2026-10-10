@@ -1,0 +1,87 @@
+/* ============================================================
+   型号查询 · 手机版竖屏增强层（样机 v1）
+   断点 760px 以下生效；桌面布局完全不受影响（桌面版不含本文件）。
+   ============================================================ */
+@media (max-width: 760px){
+
+  /* ---------- 整体布局：fixed 侧栏 → 顶部文档流 ---------- */
+  html{ -webkit-text-size-adjust:100%; }
+  body{ overscroll-behavior-y:none; }
+  .bodywrap{ padding:0 10px 24px !important; }
+  .side{
+    position:static !important; width:auto !important;
+    overflow:visible !important;
+    margin:0 -10px; padding:10px 12px 12px !important;
+    border:0; border-bottom:1px solid var(--line); border-radius:0 !important;
+    box-shadow:none !important;
+  }
+  .mains{ padding-top:10px; }
+
+  /* 搜索框吸顶 */
+  .side .searchbar{
+    position:sticky; top:0; z-index:40;
+    background:#fff; border:1px solid var(--line); box-shadow:var(--shadow);
+  }
+  .side #q{ font-size:16px; padding:13px 0; }   /* 16px 防 iOS 聚焦自动放大 */
+
+  /* 品牌/品类折叠（点 fhead 展开，mobile.js 挂事件） */
+  .fgroup{ margin-top:8px; }
+  .fgroup .fhead{ cursor:pointer; -webkit-user-select:none; user-select:none; padding:4px 0 2px; }
+  .fgroup .fhead::after{
+    content:'展开 ▾'; float:right; font-size:11px; color:#98a2b3; font-weight:400;
+  }
+  .fgroup.open .fhead::after{ content:'收起 ▴'; }
+  .fgroup .chips{ display:none; }
+  .fgroup.open .chips{ display:flex; max-height:150px; overflow-y:auto; }
+  /* 清理价区间始终保留（常用），侧栏内间距收紧 */
+  #tools{ padding-bottom:2px; }
+  #tools .lbl{ font-size:11px; }
+
+  /* 桌面专属：更新状态/全部更新按钮（数据自动跟云端，手机不需要） */
+  .sidefoot{ display:none !important; }
+  .updbar{ display:none !important; }
+
+  /* 吸顶头样机阶段退回文档流（正式版再调两段式吸顶） */
+  .stickhead{ position:static !important; left:auto !important; right:auto !important; margin:0 -2px; }
+  #stickspacer{ display:none !important; }
+
+  /* ---------- 卡片 ---------- */
+  .card{ padding:13px 12px 12px; border-radius:12px; }
+  .pimg{ width:64px; height:64px; }
+  .kimgdel{ left:52px; }
+  .mo{ font-size:16px; letter-spacing:.2px; }
+  .chead{ gap:10px; }
+  .chead-main{ min-width:0; flex:1; }
+  .acts{ margin-left:0; width:100%; margin-top:4px; }
+  .acts .markbtn, .acts .copy{
+    padding:9px 13px; font-size:13px; border-radius:9px;   /* 触控目标 ≥36px 高 */
+  }
+  .markbtn, .copy{ min-height:34px; }
+
+  /* 价格格：两列（hot 主价占整行第一格也保持 2 列节奏） */
+  .prices{ grid-template-columns:repeat(2, 1fr) !important; gap:7px; margin-top:11px; }
+  .pr{ padding:7px 10px; }
+  .pr b{ font-size:15px; }
+  .pr.hot b{ font-size:16.5px; }
+
+  /* 行式信息 */
+  .row{ font-size:13px; margin-top:8px; }
+  .row>label{ width:58px; }
+  .calc{ gap:8px; padding:9px 10px; }
+  .calc input{ flex:1 1 110px; width:auto; min-width:110px; }
+  .stockbox{ padding:9px 10px; }
+
+  /* 溯源弹窗/登录卡在窄屏下收边距 */
+  #stktrace > div{ width:calc(100vw - 40px) !important; min-width:0 !important; max-width:none !important; }
+  #authmask .acard{ width:min(330px, calc(100vw - 36px)) !important; padding:26px 22px !important; }
+  #adminmask .amodal{ padding:16px !important; }
+  .permgroups{ grid-template-columns:1fr !important; }   /* 权限面板窄屏单列 */
+
+  /* 底部安全区 */
+  footer{ padding-bottom:calc(14px + env(safe-area-inset-bottom)); }
+  .more{ padding:16px 10px; }
+
+  /* 列表间距收紧 */
+  .list{ gap:10px; }
+  .hint{ font-size:12px; }
+}

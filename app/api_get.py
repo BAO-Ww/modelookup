@@ -5,6 +5,7 @@ ApiGetMixin.do_GET + _send——Handler(ApiGetMixin, ApiPostMixin, BaseHTTPReque
 import io
 import json
 import os
+import sys
 import threading
 import time
 import urllib.parse
@@ -166,7 +167,9 @@ class ApiGetMixin:
 
         if path == "/api/appcheck":
             # 软件自更新：查云端（worker 转发 GitHub 最新 Release），跟本机版本比
-            j, err = cloud_req("/appcheck", timeout=30)
+            # 2026-10-11 Mac 端：worker 加了 ?plat=mac 匹配 ModelLookup-mac-*.zip 资产
+            _ac = "/appcheck?plat=mac" if sys.platform == "darwin" else "/appcheck"
+            j, err = cloud_req(_ac, timeout=30)
             if err or not j or not j.get("ok"):
                 self._send(200, json.dumps({"ok": False,
                                             "msg": err or (j or {}).get("msg") or "查询失败"},

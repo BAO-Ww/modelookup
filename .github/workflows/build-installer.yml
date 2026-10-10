@@ -169,3 +169,113 @@ jobs:
           Get-ChildItem out | ForEach-Object {
             Write-Host ("  {0,-34} {1,10:N2} MB" -f $_.Name, ($_.Length / 1MB))
           }
+
+  # ---------------------------------------------------------------- Mac 端（2026-10-11）
+  # Apple Silicon 专用（arm64）· pywebview + WKWebView · 无签名（Gatekeeper 首次安装需放行）
+  # 依赖 Windows job 成功（tag 构建时由它先建 Release，本 job 追加 mac 资产）
+  build-mac:
+    needs: build
+    if: ${{ always() && !cancelled() && needs.build.result == 'success' }}
+    runs-on: macos-14
+
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+
+      - name: 装 Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+
+      - name: 算版本号
+        id: ver
+        shell: bash
+        run: |
+          v="${{ github.event.inputs.version }}"
+          if [ -z "$(echo "$v" | tr -d '[:space:]')" ]; then
+            case "${{ github.ref }}" in
+              refs/tags/*) v="${GITHUB_REF_NAME}" ;;
+              *) v="" ;;
+            esac
+          fi
+          if [ -n "$v" ] && [[ "$v" != v* ]]; then v="v$v"; fi
+          if [ -z "$v" ]; then
+            num="0.0"; rel="false"
+          else
+            num="${v#v}"; rel="true"
+          fi
+          echo "tag=$v"     >> "$GITHUB_OUTPUT"
+          echo "num=$num"   >> "$GITHUB_OUTPUT"
+          echo "release=$rel" >> "$GITHUB_OUTPUT"
+          echo "ver: tag=$v num=$num release=$rel"
+
+      - name: 装 Mac 构建依赖
+        # 刻意全 ASCII 输出；pyobjc 由 pywebview 在 macOS 上自动带入，这里显式装一份保险
+        run: |
+          python -m pip install --upgrade pip
+          pip install "pywebview==6.2.1" "openpyxl==3.1.5" "pyinstaller==6.22.2" pyobjc
+          python -c "import openpyxl, webview, PyInstaller; print('deps ok:', openpyxl.__version__, PyInstaller.__version__)"
+
+      - name: 生成 icon.icns
+        run: |
+          mkdir -p app/assets/icns_build/icon.iconset
+          cd app/assets
+          sips -z 16 16     icon.png --out icns_build/icon.iconset/icon_16x16.png
+          sips -z 32 32     icon.png --out icns_build/icon.iconset/icon_16x16@2x.png
+          sips -z 32 32     icon.png --out icns_build/icon.iconset/icon_32x32.png
+          sips -z 64 64     icon.png --out icns_build/icon.iconset/icon_32x32@2x.png
+          sips -z 128 128   icon.png --out icns_build/icon.iconset/icon_128x128.png
+          sips -z 256 256   icon.png --out icns_build/icon.iconset/icon_128x128@2x.png
+          sips -z 256 256   icon.png --out icns_build/icon.iconset/icon_256x256.png
+          sips -z 512 512   icon.png --out icns_build/icon.iconset/icon_256x256@2x.png
+          sips -z 512 512   icon.png --out icns_build/icon.iconset/icon_512x512.png
+          sips -z 1024 1024 icon.png --out icns_build/icon.iconset/icon_512x512@2x.png
+          iconutil -c icns icns_build/icon.iconset -o icon.icns
+          ls -la icon.icns
+
+      - name: 打包 .app（PyInstaller）
+        working-directory: app
+        run: |
+          python -m PyInstaller --noconfirm --clean --distpath dist --workpath build ModelLookup-mac.spec
+          ls -la dist
+
+      - name: 写入真实版本号
+        env:
+          NUM: ${{ steps.ver.outputs.num }}
+        run: |
+          PLIST=app/dist/ModelLookup.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NUM" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NUM" "$PLIST" || \
+            /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $NUM" "$PLIST"
+          echo "版本已写入 $PLIST"
+
+      - name: 成品自检（--check）
+        run: python .github/scripts/check_mac.py app/dist/ModelLookup.app
+
+      - name: 整理产物（DMG + 更新 zip）
+        run: python .github/scripts/stage_mac.py "${{ steps.ver.outputs.num }}"
+
+      - name: 上传 Artifact（供检查 / 手动下载）
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: ModelLookup-mac-${{ steps.ver.outputs.tag || 'dev' }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: 发布 Release（追加 Mac 资产到同一 Release）
+        if: steps.ver.outputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          fail_on_unmatched_files: true
+          files: |
+            out/ModelLookup-mac-${{ steps.ver.outputs.num }}.dmg
+            out/ModelLookup-mac-${{ steps.ver.outputs.num }}.zip

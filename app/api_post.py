@@ -5,6 +5,7 @@ ApiPostMixin.do_POST——_send 经 MRO 复用 ApiGetMixin 的。
 import base64
 import json
 import os
+import sys
 import threading
 import urllib.parse
 
@@ -53,7 +54,12 @@ class ApiPostMixin:
                                            ensure_ascii=False))
                 return
             set_state("running", "正在下载新版本安装包…")
-            threading.Thread(target=_app_install_bg, args=(state.LOG.append,), daemon=True).start()
+            # 2026-10-11 Mac 端：更新链按平台分发（Windows 链不动，Mac 走 updater_mac）
+            if sys.platform == "darwin":
+                from updater_mac import _app_install_bg as _app_bg
+            else:
+                _app_bg = _app_install_bg
+            threading.Thread(target=_app_bg, args=(state.LOG.append,), daemon=True).start()
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             return
         if u.path == "/api/token":

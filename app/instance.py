@@ -2,6 +2,7 @@
 """单实例互斥 + 端口登记（2026-10-11 拆分一期二级细拆：从 main.py 原样搬出，纯搬运零行为变化）。
 依赖方向：config → paths → … → instance（被 server 与入口 main() 调用）。"""
 import io
+import sys
 import urllib.request
 
 from config import HOST, PORTS
@@ -18,6 +19,9 @@ _MUTEX = None
 def already_running():
     """True = 本机已有本程序在跑（互斥量已被别人持有）。"""
     global _MUTEX
+    # 2026-10-11 Mac 端：flock 锁文件（瞬时），语义与 Windows 命名互斥量对齐
+    if sys.platform == "darwin":
+        return _already_running_posix()
     try:
         import ctypes
         k = ctypes.windll.kernel32
@@ -30,6 +34,26 @@ def already_running():
             k.CloseHandle(ctypes.c_void_p(h))
             return True
         _MUTEX = h                          # 拿着不放，进程退出自动释放
+        return False
+    except Exception:
+        return False
+
+
+_LOCKFD = None
+
+
+def _already_running_posix():
+    """Mac：flock 单实例（fcntl，进程退出系统自动释放，同互斥量语义）。"""
+    global _LOCKFD
+    try:
+        import fcntl
+        f = open(wp("single.lock"), "a+")
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            f.close()
+            return True
+        _LOCKFD = f                      # 拿着不放，进程退出自动释放
         return False
     except Exception:
         return False
