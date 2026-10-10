@@ -96,7 +96,7 @@ jobs:
         continue-on-error: true
         with:
           name: ModelLookup-Mobile-${{ steps.ver.outputs.tag || 'dev' }}
-          path: out/*
+          path: mobile/app/out/*
           if-no-files-found: error
           retention-days: 7
 
@@ -120,4 +120,4 @@ jobs:
           draft: false
           fail_on_unmatched_files: true
           files: |
-            out/ModelLookup-Mobile-${{ steps.ver.outputs.num }}.apk
+            mobile/app/out/ModelLookup-Mobile-${{ steps.ver.outputs.num }}.apk
