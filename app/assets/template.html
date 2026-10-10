@@ -1725,16 +1725,14 @@ function loadSubRec(){
   if (lbl) lbl.textContent = (AUTH && AUTH.role === 'admin') ? '子用户发布' : '我的发布';
   sel.innerHTML = '<option value="">加载中…</option>';
   if (AUTH && AUTH.role === 'admin'){
-    /* 2026-10-09 用户要求：下拉列出【全部子账号】+ 发布数 + 在线状态
-       （2026-10-10 深夜省额度口径：心跳写入 worker 端 60 分钟节流，
-        「在线」= 最近 2 小时内有过请求，窗口盖过节流间隔） */
+    /* 2026-10-09 用户要求：下拉列出【全部子账号】+ 发布数
+       （2026-10-10 深夜：在线心跳彻底下线省 KV 额度，下拉不再显示 ●在线/○离线） */
     Promise.all([
       authFetch('/puball'),
-      authFetch('/presence').catch(function(){ return null; }),
       authFetch('/admin/list').catch(function(){ return null; })
     ]).then(function(rs){
-      var j = rs[0], pv = (rs[1] && rs[1].ok && rs[1].presence) || null,
-          al = (rs[2] && rs[2].ok && rs[2].users) || null;
+      var j = rs[0],
+          al = (rs[1] && rs[1].ok && rs[1].users) || null;
       if (!j || !j.ok){ sel.innerHTML = '<option value="">' + esc((j && j.msg) || '拉取失败') + '</option>'; return; }
       window._SUBPUB = j;
       var npub = j.all || {};
@@ -1743,13 +1741,9 @@ function loadSubRec(){
       (al || []).forEach(function(r){ if (r.u && r.u !== AUTH.u) us[r.u] = 1; });       // 账号管理里的全部子账号
       us = Object.keys(us).sort();
       var h = '<option value="">不筛选（看全部）</option>';
-      function onTag(u){
-        if (!pv) return '';
-        return (Date.now() - (pv[u] || 0) < 7200000) ? ' ●在线' : ' ○离线';
-      }
       us.forEach(function(u){
         var n = Object.keys(npub[u] || {}).length;
-        h += '<option value="' + esc(u) + '">' + esc(u) + '（发布 ' + n + '）' + onTag(u) + '</option>';
+        h += '<option value="' + esc(u) + '">' + esc(u) + '（发布 ' + n + '）</option>';
       });
       if (!us.length) h = '<option value="">还没有子账号</option>';
       sel.innerHTML = h;
