@@ -147,6 +147,8 @@ main{padding:22px 0 60px}
 .topbar .chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
 .topbar .tsep{width:1px;height:14px;background:#d7dce6;flex:none;margin:0 3px}
 .topbar .tlbl{font-size:12px;color:#7b8494;flex:none}
+/* 库存 pill 可点（溯源弹窗 2026-10-10） */
+.pill.wh[data-sc],.pill.whmore[data-sc]{cursor:pointer}
 /* 开关型筛选（只看有货/能发外区/未发布/已发布）：保留 .chip 类给事件委托，外观做成勾选框 */
 .fchkrow{display:grid;grid-template-columns:1fr 1fr;gap:7px 10px;margin-top:9px}
 .chip.fchk{display:flex;align-items:center;gap:6px;border:0;background:none;padding:0;border-radius:0;font-size:12.5px;color:var(--ink2);line-height:1.4}
@@ -540,16 +542,20 @@ function showYyAlert(msg){
 /* 实时库存（exe 版从用友 YonSuite 拉的现存量，点「更新实时库存」刷新）：
    STOCK = { 型号norm: { q:现存量, a:可用量, wt:{仓库类型:可用量} } }，键与 norm() 同一套归一 */
 var STOCKDATA = null;
-/* 库存匹配（2026-10-10 用户二次定稿，**只认一字不差**）：发布型号必须和用友型号
-   完全一致才算有货——用友里多一个字（星河U1 这类描述尾）也= 不是同一个型号 = 没货。
-   （归一只归写法：全半角/空格/大小写；内容多一个字少一个字都不算）
-   唯一例外（2026-10-10 晚补，BC/BD-629GHEP 实锤）：用友行带**系列尾缀**且该型号自己的
-   全名里就写着这个尾缀（BC/BD-629GHEP大富豪系列 ↔ 海尔冷柜BC/BD-629GHEP大富豪系列）
-   → 认同一台。必须同时满足：① 用友键以型号开头 ② 整串出现在全名里 ③ 唯一命中。
-   套机行全名里含别的型号（ZQD60F-C6XW…套机）不满足①，不会误伤（2026-10-10 全量验过）。 */
-function stockOf(mo, name){
+/* 库存匹配（2026-10-10 深夜终稿「**编码优先、型号兜底**」）：
+   ① 卡片有 YS物料编码（约 6 成的行）→ 先走编码一对一硬核对——编码是 SKU 唯一码
+     （用友 productsku_cCode = 表里的 YS物料编码，同一套），对得上就是对得上，
+     没有任何启发式和解释空间，型号误绑/系列尾缀歧义在这 6 成里根本不会发生；
+   ② 没编码、编码表还没拉到、或编码没命中 → 退回型号匹配（一字不差 + 系列尾缀
+     唯一例外，2026-10-10 全量验过零误伤）。
+   （归一只归写法：全半角/空格/大小写；内容多一个字少一个字都不算） */
+function stockOf(mo, name, code){
   var s = STOCKDATA && STOCKDATA.stock;
   if (!s) return null;
+  if (code){
+    var bc = STOCKDATA.sbc, ck = norm(code);
+    if (bc && ck && bc[ck]) return bc[ck];      // 编码硬核对命中（a=0 也照回：真没货）
+  }
   var k = norm(mo);
   if (s[k]) return s[k];                      // 一字不差精确
   if (!name) return null;
@@ -564,7 +570,7 @@ function stockOf(mo, name){
 }
 /* 已发布型号按发布类型的剩余可售（2026-10-09 从 pubStockWarn 抽出来，筛选「没库存」也要用）：
    正品发布看非样机/非次品仓的可用量，样机发布看样机仓；库存里查不到返回 -1（也当没库存提醒） */
-function pubLeftOf(mo, kind, name){
+function pubLeftOf(mo, kind, name, code){
   /* 2026-10-09 晚再定稿（用户：库存对不对是重中之重）：用友实时库存是唯一准绳——
      · 用友能查到这台 → 用可用量（0 就是真的没货，要报）；
      · 用友现存量报表里连这一行都没有 → 就是没有现存 = 没货（之前回退清理数量 1，
@@ -572,7 +578,7 @@ function pubLeftOf(mo, kind, name){
      · 只有实时库存还没拉过时才回退金山表清理数量兜底（此时横幅整体隐藏，仅筛选用）。
      （更早的误报反例 JSQ25：型号在用友有货但躺在别的仓——那会儿只数非样机非次品仓
        才漏的，现在直接用全仓可用量，不会重蹈） */
-  var live = stockOf(mo, name);
+  var live = stockOf(mo, name, code);
   if (live) return isNum(live.a) ? Math.round(live.a) : 0;
   if (STOCKDATA && STOCKDATA.stock && Object.keys(STOCKDATA.stock).length) return 0;
   var it = null;
@@ -586,6 +592,36 @@ function itemOf(c){
   for (var i = 0; i < ALL.length; i++){ if (ALL[i].c === c) return ALL[i]; }
   return null;
 }
+
+/* 库存溯源（2026-10-10 深夜「编码优先」配套）：点卡片库存 pill 弹「编码 → 用友原始行明细」，
+   自助查证 10 秒一单：走的编码直连还是型号匹配、每个仓多少、可用/现存合计、数据拉取时间。 */
+function openStockTrace(code, mo){
+  var it = null;
+  for (var i = 0; i < ALL.length; i++){ if (ALL[i].mo === mo){ it = ALL[i]; break; } }
+  var live = it ? stockOf(it.mo, nameOf(it), it.code) : null;
+  if (!live) return;
+  var viaCode = !!(code && STOCKDATA.sbc && norm(code) && STOCKDATA.sbc[norm(code)]);
+  var rows = (live.whs || []).map(function(x){
+    return '<tr><td style="padding:2px 4px 2px 0">' + esc(x.w) + '</td><td style="padding:2px 6px;color:#7b8494">' + esc(x.t || '') + '</td><td style="text-align:right"><b>' + Math.round(x.n) + '</b></td></tr>';
+  }).join('');
+  var ov = document.createElement('div');
+  ov.id = 'stktrace';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML = '<div style="background:#fff;border-radius:12px;min-width:320px;max-width:430px;max-height:70vh;overflow:auto;padding:16px 18px;font-size:13px;box-shadow:0 12px 40px rgba(0,0,0,.25)">'
+    + '<div style="font-weight:700;margin-bottom:4px">' + (code ? '编码 ' + esc(code) : '型号 ' + esc(mo || '')) + '</div>'
+    + '<div style="color:#7b8494;margin-bottom:10px">' + esc(mo || '') + (viaCode ? ' · <span style="color:#178a50;font-weight:600">编码直连</span>' : ' · 型号匹配') + '</div>'
+    + '<table style="width:100%;border-collapse:collapse">'
+    + '<tr style="color:#98a1b0"><td style="padding-bottom:4px">仓库</td><td></td><td style="text-align:right;padding-bottom:4px">可用</td></tr>' + rows + '</table>'
+    + '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #e5e8ef">可用合计 <b>' + Math.round(live.a || 0) + '</b> · 现存合计 <b>' + Math.round(live.q || 0) + '</b></div>'
+    + '<div style="color:#98a1b0;font-size:11.5px;margin-top:6px">用友实时数据 · 拉取于 ' + esc((STOCKDATA && STOCKDATA.ts) || '') + ' · 点空白处关闭</div>'
+    + '</div>';
+  ov.addEventListener('click', function(e){ if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+}
+document.addEventListener('click', function(e){
+  var p = e.target.closest ? e.target.closest('span.pill.wh[data-sc], span.pill.whmore[data-sc]') : null;
+  if (p) openStockTrace(p.getAttribute('data-sc'), p.getAttribute('data-mo'));
+});
 
 /* ================= 本地存储 ================= */
 /* 发布缓存按账号隔离（2026-10-09 修「已发布串号」）：旧版 xy2-* 键不分账号，
@@ -1839,7 +1875,7 @@ function renderItem(it){
        · 美的 / 容声（「美的」页）：拿货价·慧买卖 / 给二批 / 取整，下面接京东价 + 参考闲鱼价 */
   var g = [], pg = [];
   var hot = null;
-  var live = stockOf(it.mo, nameOf(it));   // 用友实时库存（提前取：清理数量和库存行都要用）
+  var live = stockOf(it.mo, nameOf(it), it.code);   // 编码优先（硬核对），型号兜底
   if (it._md){
     if (pok('p_mh') && isNum(it.mh)) { g.push(prCell('拿货价 · 慧买卖', it.mh, 'hot', '拿货价·慧买卖')); hot = it.mh; }
     if (pok('p_m2') && isNum(it.m2)) g.push(prCell('价格 · 给二批', it.m2, '', '给二批价'));
@@ -1889,6 +1925,7 @@ function renderItem(it){
      2026-10 二次改版：可用/现存总数不要了 —— 只显示「什么仓有几个」，
      一个仓一个 pill：仓名（类型）数量；4 个以上的收进「等 N 个仓」，全量在 title 里。 */
   var liveHTML = '';
+  var _scAttr = it.code ? ' data-sc="' + esc(it.code) + '" data-mo="' + esc(it.mo || '') + '"' : '';
   if (live && ((live.whs && live.whs.length) || (live.wt && Object.keys(live.wt).length))){
     var LIVE_CLS = { '正品仓': 'ok', '样机仓': 'sky', '次品仓': 'bad',
                      '机壳仓': 'mute', '特价仓': 'warn', '待送仓': 'warn' };
@@ -1902,11 +1939,11 @@ function renderItem(it){
       var WMAX = 4;
       for (var wi = 0; wi < whs.length && wi < WMAX; wi++){
         var wx = whs[wi];
-        liveHTML += '<span class="pill wh' + (LIVE_CLS[wx.t] ? ' ' + LIVE_CLS[wx.t] : '') + '" title="' + esc(fullW) + '">'
+        liveHTML += '<span class="pill wh' + (LIVE_CLS[wx.t] ? ' ' + LIVE_CLS[wx.t] : '') + '"' + _scAttr + ' title="' + esc(fullW) + '">'
                   + esc(wx.w) + (wx.t ? '<em>' + esc(wx.t) + '</em>' : '') + '<b>' + Math.round(wx.n) + '</b></span> ';
       }
       if (whs.length > WMAX){
-        liveHTML += '<span class="pill whmore" title="' + esc(fullW) + '">等 ' + whs.length + ' 个仓</span>';
+        liveHTML += '<span class="pill whmore"' + _scAttr + ' title="' + esc(fullW) + '">等 ' + whs.length + ' 个仓</span>';
       }
     } else {
       /* 老缓存（stock_live.json 里还没有仓名明细）→ 退回按仓库类型显示 */
@@ -1916,11 +1953,11 @@ function renderItem(it){
       var fullT = liveHead + '\n' + parts.join(' / ');
       for (var lv = 0; lv < parts.length && lv < 4; lv++){
         var pa = parts[lv].split(' ');
-        liveHTML += '<span class="pill wh' + (LIVE_CLS[pa[0]] ? ' ' + LIVE_CLS[pa[0]] : '') + '" title="' + esc(fullT) + '">'
+        liveHTML += '<span class="pill wh' + (LIVE_CLS[pa[0]] ? ' ' + LIVE_CLS[pa[0]] : '') + '"' + _scAttr + ' title="' + esc(fullT) + '">'
                   + esc(pa[0]) + '<b>' + pa[1] + '</b></span> ';
       }
       if (parts.length > 4){
-        liveHTML += '<span class="pill whmore" title="' + esc(fullT) + '">等 ' + parts.length + ' 类仓</span>';
+        liveHTML += '<span class="pill whmore"' + _scAttr + ' title="' + esc(fullT) + '">等 ' + parts.length + ' 类仓</span>';
       }
     }
   }
@@ -2087,7 +2124,7 @@ function copyText(it){
     if (p[1] != null && p[1] !== '' && p[1] !== 0) L.push(p[0] + '：' + p[1]);
   });
   // 实时库存（用友 YonSuite，唯一库存来源）—— 只写「什么仓有几个」
-  var lv = stockOf(it.mo, nameOf(it));
+  var lv = stockOf(it.mo, nameOf(it), it.code);
   if (lv && ((lv.whs && lv.whs.length) || (lv.wt && Object.keys(lv.wt).length))){
     if (lv.whs && lv.whs.length){
       L.push('库存（' + ((STOCKDATA && STOCKDATA.ts) || '') + '）：' + lv.whs.map(function(x){
@@ -2166,7 +2203,7 @@ function pass(it){
   // 「只看有货」：优先用用友实时库存（2026-10 改版后唯一库存口径）；
   // 还没拉取过实时数据时，退回公布版清理明细里的「可用量 / 现存量」列，免得筛出空列表
   if (flagStock){
-    var _lv = stockOf(it.mo, nameOf(it));
+    var _lv = stockOf(it.mo, nameOf(it), it.code);
     if (_lv){
       if (!((_lv.a || 0) > 0 || (_lv.q || 0) > 0)) return false;
     } else {
@@ -2185,7 +2222,7 @@ function pass(it){
   if (SUBVIEW && SUBVIEW.fns){
     var _nm = SUBVIEW.info[it.c];
     var _nk = (_nm && _nm.k) ? _nm.k : (it.k === 's' ? 's' : 'l');
-    if (pubLeftOf(it.mo || it.c, _nk, nameOf(it)) > 0) return false;
+    if (pubLeftOf(it.mo || it.c, _nk, nameOf(it), it.code) > 0) return false;
   }
   /* 「亏钱」筛选（顶栏开关）：按卡片当前口径算定价 < 成本；选的口径表里没了也算 */
   if (SUBVIEW && SUBVIEW.floss && !lossSetView()[it.c]) return false;
@@ -2326,8 +2363,8 @@ function run(){
   moreEl.hidden = true;
   shown = 0;
   var hasFilter = !!(curBrand || curCat || curKind || curPtype || flagStock || flagSend || flagPub || pminV != null || pmaxV != null || SUBVIEW);
-  /* 顶部筛选横条（方式/价格类型）：点了品牌/品类（或搜索/其它筛选）才出现，平时不占地方 */
-  topEl.hidden = !(q || hasFilter);
+  /* 顶部筛选横条（方式/价格类型）：2026-10-10 晚用户改定「常驻」——打开就有，随时可筛 */
+  topEl.hidden = false;
   // 空搜索框 + 没点任何筛选 = 什么都不列。
   // （上一版是「打开就铺全部」，用户反馈又慢又没用 —— 这是查找工具，不是浏览工具）
   if (!q && !hasFilter){ cur = []; hintEl.innerHTML = ''; listEl.innerHTML = idleHTML(); return; }
@@ -3031,7 +3068,7 @@ function pubStockWarn(){
     var m = marks[c]; if (!m) return;
     var it = itemOf(c);
     var kind = m.k || (it && it.k === 's' ? 's' : 'l');
-    var left = pubLeftOf((it && it.mo) || c, kind, it ? nameOf(it) : '');   // 用型号查库存，别用记录键（变体码查不到）
+    var left = pubLeftOf((it && it.mo) || c, kind, it ? nameOf(it) : '', it ? it.code : '');   // 用型号查库存，别用记录键（变体码查不到）
     if (left <= 0) lost.push(c + '（' + (kind === 's' ? '样机' : '正品') + '）');
   });
   if (!lost.length){ box.hidden = true; box.innerHTML = ''; return; }

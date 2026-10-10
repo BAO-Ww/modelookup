@@ -436,9 +436,16 @@ var UPSTATE = { price_at: "", stock_at: "", rev: null, fetching: false };
 /* 实时库存（exe 版从用友 YonSuite 拉的现存量，点「更新实时库存」刷新）：
    STOCK = { 型号norm: { q:现存量, a:可用量, wt:{仓库类型:可用量} } }，键与 norm() 同一套归一 */
 var STOCKDATA = null;
-function stockOf(mo, name){
+function stockOf(mo, name, code){
   var s = STOCKDATA && STOCKDATA.stock;
   if (!s) return null;
+  /* 2026-10-10 深夜「编码优先、型号兜底」（同 exe 版）：有 YS物料编码 → 编码一对一
+     硬核对（用友 productsku_cCode 同源，SKU 唯一码，零启发式）；没命中/没编码 →
+     退回型号匹配（一字不差 + 系列尾缀唯一例外）。 */
+  if (code){
+    var bc = STOCKDATA.sbc, ck = norm(code);
+    if (bc && ck && bc[ck]) return bc[ck];
+  }
   var k = norm(mo);
   if (s[k]) return s[k];                      // 一字不差精确
   /* 系列尾缀例外（2026-10-10，同 exe 版）：用友键以型号开头 + 整串在全名里 + 唯一命中 */
@@ -1361,7 +1368,7 @@ function renderItem(it){
        · 美的 / 容声（「美的」页）：拿货价·慧买卖 / 给二批 / 取整，下面接京东价 + 参考闲鱼价 */
   var g = [], pg = [];
   var hot = null;
-  var live = stockOf(it.mo, nameOf(it));   // 用友实时库存（提前取：清理数量和库存行都要用）
+  var live = stockOf(it.mo, nameOf(it), it.code);   // 编码优先（硬核对），型号兜底
   if (it._md){
     if (pok('p_mh') && isNum(it.mh)) { g.push(prCell('拿货价 · 慧买卖', it.mh, 'hot')); hot = it.mh; }
     if (pok('p_m2') && isNum(it.m2)) g.push(prCell('价格 · 给二批', it.m2));
@@ -1580,7 +1587,7 @@ function copyText(it){
     if (p[1] != null && p[1] !== '' && p[1] !== 0) L.push(p[0] + '：' + p[1]);
   });
   // 实时库存（用友 YonSuite，唯一库存来源）—— 只写「什么仓有几个」
-  var lv = stockOf(it.mo, nameOf(it));
+  var lv = stockOf(it.mo, nameOf(it), it.code);
   if (lv && ((lv.whs && lv.whs.length) || (lv.wt && Object.keys(lv.wt).length))){
     if (lv.whs && lv.whs.length){
       L.push('库存（' + ((STOCKDATA && STOCKDATA.ts) || '') + '）：' + lv.whs.map(function(x){
@@ -1658,7 +1665,7 @@ function pass(it){
   // 「只看有货」：优先用用友实时库存（2026-10 改版后唯一库存口径）；
   // 还没拉取过实时数据时，退回公布版清理明细里的「可用量 / 现存量」列，免得筛出空列表
   if (flagStock){
-    var _lv = stockOf(it.mo, nameOf(it));
+    var _lv = stockOf(it.mo, nameOf(it), it.code);
     if (_lv){
       if (!((_lv.a || 0) > 0 || (_lv.q || 0) > 0)) return false;
     } else {
@@ -1710,7 +1717,7 @@ function isBlankCard(it){
   if (it._md) return false;
   if (MARKED[it.c]) return false;
   if (SUBVIEW && SUBVIEW.set && SUBVIEW.set[it.c]) return false;
-  var live = stockOf(it.mo, nameOf(it));
+  var live = stockOf(it.mo, nameOf(it), it.code);
   if (live && ((live.a || 0) > 0 || (live.q || 0) > 0)) return false;
   if (!(STOCKDATA && STOCKDATA.stock && Object.keys(STOCKDATA.stock).length)){
     var _gp = isNum(it.lav) ? it.lav : 0, _sp = isNum(it.sav) ? it.sav : 0;
@@ -2233,7 +2240,7 @@ function pubStockWarn(){
     var kind = m.k || 'l';
     var _it = null;                                       // 用型号查库存，别用记录键（变体码查不到）
     for (var _i = 0; _i < ALL.length; _i++){ if (ALL[_i].c === c){ _it = ALL[_i]; break; } }
-    var st = stockOf((_it && _it.mo) || c, _it ? nameOf(_it) : '');
+    var st = stockOf((_it && _it.mo) || c, _it ? nameOf(_it) : '', _it ? _it.code : '');
     if (!st){ lost.push(c + '（库存里查不到）'); return; }
     var good = 0, samp = 0;
     Object.keys(st.wt || {}).forEach(function(t){

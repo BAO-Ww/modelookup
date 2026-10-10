@@ -1197,7 +1197,8 @@ def stock_load():
             with io.open(p, encoding="utf-8") as f:
                 d = json.load(f)
             if isinstance(d.get("stock"), dict):
-                STOCK = {"ts": d.get("ts"), "rows": d.get("rows") or 0, "stock": d["stock"]}
+                STOCK = {"ts": d.get("ts"), "rows": d.get("rows") or 0, "stock": d["stock"],
+                         "sbc": d.get("sbc") or None}
                 if d.get("ts"):
                     STATE["stock_at"] = d["ts"]      # 侧栏一打开就显示上次的库存时间
         except Exception:
@@ -1308,7 +1309,8 @@ def yy_alert_poll():
 def stock_push_cloud(log):
     """管理号拉完用友 → 整包上传云端，全员共享。失败只记日志，不影响本机。"""
     with STOCK_LOCK:
-        obj = {"ts": STOCK.get("ts"), "rows": STOCK.get("rows"), "stock": STOCK.get("stock")}
+        obj = {"ts": STOCK.get("ts"), "rows": STOCK.get("rows"), "stock": STOCK.get("stock"),
+               "sbc": STOCK.get("sbc") or None}
     j, err = cloud_req("/stockcloud", "POST", obj, timeout=180)
     if err or not j or not j.get("ok"):
         log("⚠ 库存上传云端失败（子账号拿不到这次的更新）：%s" % (err or (j or {}).get("msg")))
@@ -1349,7 +1351,8 @@ def stock_pull_cloud(log, force=True):
         set_state("error", (j or {}).get("msg") or "云端还没有库存数据（等管理号更新一次）")
         return
     with STOCK_LOCK:
-        STOCK = {"ts": j.get("ts"), "rows": j.get("rows") or 0, "stock": j["stock"]}
+        STOCK = {"ts": j.get("ts"), "rows": j.get("rows") or 0, "stock": j["stock"],
+                 "sbc": j.get("sbc") or None}
     stock_save()
     ts = j.get("ts") or ""
     log("云端库存同步完成：%s 行（%s）" % (j.get("rows") or 0, ts))
@@ -1788,6 +1791,7 @@ def yy_finish(recs, log):
     except Exception:
         pass                              # 表拿不到就退回纯拼接口径，不影响出数
     agg = {}
+    agg_code = {}                          # 编码桶（2026-10-10 深夜「编码优先」）：与型号桶并行
     for r0 in recs:
         mo = norm_model(r0.get(YY_K_MODEL))
         if not mo:
@@ -1826,9 +1830,24 @@ def yy_finish(recs, log):
         wname = str(r0.get(YY_K_WH) or "").strip() or "未知仓"
         k2 = (wname, wt)
         a["whs"][k2] = round(a["whs"].get(k2, 0.0) + av, 2)
+        # 编码维度并行聚一份（同一行既进型号桶也进编码桶；productsku_cCode=YS物料编码同源）
+        code = norm_model(r0.get("productsku_cCode"))
+        if code and not code.startswith("#"):          # 排除 #N/A 脏值
+            ac = agg_code.setdefault(code, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
+            try:
+                ac["q"] += float(r0.get(YY_K_QTY) or 0)
+            except (TypeError, ValueError):
+                pass
+            ac["a"] += av
+            ac["wt"][wt] = round(ac["wt"].get(wt, 0.0) + av, 2)
+            ac["whs"][k2] = round(ac["whs"].get(k2, 0.0) + av, 2)
 
     # whs: {(仓名, 类型): 数量} → 排序列表 [{w, t, n}]（数量多的在前）
     for a in agg.values():
+        lst = [{"w": k[0], "t": k[1], "n": v} for k, v in a["whs"].items()]
+        lst.sort(key=lambda x: (-x["n"], x["w"]))
+        a["whs"] = lst
+    for a in agg_code.values():
         lst = [{"w": k[0], "t": k[1], "n": v} for k, v in a["whs"].items()]
         lst.sort(key=lambda x: (-x["n"], x["w"]))
         a["whs"] = lst
@@ -1841,7 +1860,7 @@ def yy_finish(recs, log):
 
     ts = time.strftime("%m-%d %H:%M")
     with STOCK_LOCK:
-        STOCK = {"ts": ts, "rows": len(recs), "stock": agg}
+        STOCK = {"ts": ts, "rows": len(recs), "stock": agg, "sbc": agg_code}
     stock_save()
     log("实时库存更新完成：%d 行 · %d 个型号 · 命中表中 %d 个型号" % (len(recs), len(agg), hit))
     _STK_DETAIL[0] = "%d 行现存量 · %d 个型号有货 · 命中表中 %d 个，已共享云端" % (len(recs), len(agg), hit)
