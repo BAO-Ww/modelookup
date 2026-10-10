@@ -64,7 +64,7 @@ _k = None
 del _k
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.23"
+APP_VERSION = "2.7.24"
 APP_ID = "ModelLookup"
 
 # 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
@@ -535,25 +535,58 @@ def merge_records(allrecs):
             r["nat"], r["natk"] = rec["nat"], rec.get("natk")
 
     # ---- 第二批：价格表
+    #   精准归卡（2026-10-10 两轮定稿）：
+    #   ① 先按「型号原文」分组 —— ES60H-D2S 和 ES60H-D2S新 编码/价格都不同，是两个 SKU，
+    #      不能因 core_of 截中文并成一张卡互覆价格（D2S新 的行把 D2S 的隆阳价盖掉过）；
+    #   ② 同一型号原文有多个货源 → 合并成一张卡（2026-10-10 晚用户拍板：不拆卡），
+    #      卡上挂 srcs 列表，每个货源各标各的价，前端价格格/发货行注明货源；
+    #      卡主字段取「有物料编码」的货源行（编码是库存/图/官网的主键，隆阳这类正常供货商都有；
+    #      HM夏那种裸型号行没编码，只当附加价）——库存口径跟着主货源走；
+    #   ③ 同货源多行 → 沿用老口径取最后一行；
+    #   ④ 公布版先建的卡只跟「型号原文一致」的价格表行合并，原文不同的自己开卡。
+    #   发布粒度（用户拍板）：一型一条发布，货源只是成本口径标注，发布键不带货源。
+    _px = {}
     for rec in [x for x in allrecs if x.get("kind") is None]:
-        ck = core_of(rec["mo"])
-        r = rows.get(ck)
-        if r is None:
-            r = rows[ck] = {"c": ck, "mo": rec["mo"], "b": rec["b"], "cat": rec["cat"],
-                            "code": rec["code"], "n": rec["n"], "lp": rec["lp"],
-                            "nat": None, "natk": None, "k": "", "src_kind": "p"}
-        else:
-            r["src_kind"] = "cp"
-        for k in ("b", "cat", "code", "n", "lp"):
-            if r.get(k) in (None, "") and rec.get(k) not in (None, ""):
-                r[k] = rec[k]
-        r.update(pt=rec["pt"],
-                 ship=rec["ship"], sfrom=rec["from_src"],
-                 xyid=rec["xyid"], xyp=rec["xyp"], profit=rec["profit"],
-                 s69=rec["s69"], smax=rec["smax"], searn=rec["searn"], suser=rec["suser"],
-                 base=rec["base"], t2=rec["t2"])
-        if rec.get("mo") and len(str(rec["mo"])) > len(str(r.get("mo") or "")):
-            r["mo"] = rec["mo"]
+        _px.setdefault(core_of(rec["mo"]), {}).setdefault(norm_model(rec["mo"]), []).append(rec)
+    for ck_core, groups in _px.items():
+        multi_model = len(groups) > 1
+        base0 = rows.get(ck_core)                                  # 公布版先建的卡（可能没有）
+        base_ex = norm_model(base0["mo"]) if base0 else None
+        for ex, recs in groups.items():
+            by_src = {}
+            for rec in recs:                                       # dict 保序：货源按首次出现排
+                by_src.setdefault(rec.get("from_src") or "", []).append(rec)
+            src_rows = []                                          # [(货源名, 该货源代表行)]
+            for sname, srecs in by_src.items():
+                src_rows.append((sname, srecs[-1]))                # 同货源多行取最后一行（老口径）
+            pri = next((r for _s, r in src_rows if r.get("code")), src_rows[0][1])
+            rec = pri
+            ck = ck_core
+            if multi_model and base_ex != ex:
+                ck = "%s@%s" % (ck_core, str(recs[0].get("mo") or ex))
+            r = rows.get(ck)
+            if r is None:
+                r = rows[ck] = {"c": ck, "mo": rec["mo"], "b": rec["b"], "cat": rec["cat"],
+                                "code": rec["code"], "n": rec["n"], "lp": rec["lp"],
+                                "nat": None, "natk": None, "k": "", "src_kind": "p"}
+            else:
+                r["src_kind"] = "cp"
+            for k in ("b", "cat", "code", "n", "lp"):
+                if r.get(k) in (None, "") and rec.get(k) not in (None, ""):
+                    r[k] = rec[k]
+            r.update(pt=rec["pt"],
+                     ship=rec["ship"], sfrom=rec["from_src"] or r.get("sfrom"),
+                     xyid=rec["xyid"], xyp=rec["xyp"], profit=rec["profit"],
+                     s69=rec["s69"], smax=rec["smax"], searn=rec["searn"], suser=rec["suser"],
+                     base=rec["base"], t2=rec["t2"])
+            if rec.get("mo") and len(str(rec["mo"])) > len(str(r.get("mo") or "")):
+                r["mo"] = rec["mo"]
+            # 多货源 → 挂 srcs（含主货源在内的每个货源一份价），前端据此注明「这个价是哪个货源的」
+            if len(src_rows) > 1:
+                r["srcs"] = [{"sfrom": s, "pt": sr.get("pt"), "lpz": sr.get("lpz"),
+                              "spz": sr.get("spz"), "ship": sr.get("ship"),
+                              "s69": sr.get("s69"), "xyp": sr.get("xyp")}
+                             for s, sr in src_rows]
 
     # ---- 第三批：美的 / 容声（自己那一套报价）
     #   同一型号在这张表里可能出现两次（不同批次报价），取「拿货价·慧买卖」最低的那行；
