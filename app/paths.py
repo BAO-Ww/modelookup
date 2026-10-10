@@ -19,7 +19,11 @@ def res_dir():
 
 
 def work_dir():
-    d = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), APP_ID)
+    # 2026-10-11 Mac 端：darwin 走标准 Application Support；Windows 路径逐字不变
+    if sys.platform == "darwin":
+        d = os.path.join(os.path.expanduser("~"), "Library", "Application Support", APP_ID)
+    else:
+        d = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), APP_ID)
     os.makedirs(d, exist_ok=True)
     return d
 

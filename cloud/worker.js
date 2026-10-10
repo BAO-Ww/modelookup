@@ -638,7 +638,12 @@ async function route(request, env, path, ctx) {
     if (!r.ok) return { __fail: "GitHub 查询失败 HTTP " + r.status + "（检查 GH_TOKEN 配置）" };
     try { return await r.json(); } catch (e) { return { __fail: "GitHub 返回了异常数据（坏 JSON）" }; }
   }
-  function setupAsset(rel) {
+  function setupAsset(rel, plat) {
+    // 2026-10-11 Mac 端：?plat=mac 匹配 ModelLookup-mac-*.zip；不带 plat 仍走 exe（老客户端零影响）
+    if (plat === "mac") {
+      return (rel.assets || []).find((x) => /^ModelLookup-mac-[\w.]*\.zip$/i.test(x.name))
+          || (rel.assets || []).find((x) => /^ModelLookup-mac.*\.zip$/i.test(x.name)) || null;
+    }
     const a = (rel.assets || []).find((x) => /^ModelLookup-Setup-\d[\w.]*\.exe$/i.test(x.name))
            || (rel.assets || []).find((x) => /\.exe$/i.test(x.name));
     return a || null;
@@ -647,7 +652,7 @@ async function route(request, env, path, ctx) {
     const rel = await ghLatest();
     if (rel.__fail) return jerr(rel.__fail, 502);
     if (!rel.tag_name) return jerr("GitHub 上没有 Release（检查 GH_TOKEN 配置）", 502);
-    const a = setupAsset(rel);
+    const a = setupAsset(rel, url.searchParams.get("plat") || "");
     return J({ ok: true, tag: rel.tag_name, ver: String(rel.tag_name).replace(/^v/i, ""),
                name: a ? a.name : "", size: a ? a.size : 0 });
   }
@@ -655,7 +660,7 @@ async function route(request, env, path, ctx) {
     const rel = await ghLatest();
     if (rel.__fail) return jerr(rel.__fail, 502);
     if (!rel.tag_name) return jerr("GitHub 查询失败", 502);
-    const a = setupAsset(rel);
+    const a = setupAsset(rel, url.searchParams.get("plat") || "");
     if (!a) return jerr("Release 里没有安装包", 404);
     const dr = await fetch(a.url, { headers: {          // API asset URL + octet-stream = 原始下载
       "Authorization": "Bearer " + (env.GH_TOKEN || ""),

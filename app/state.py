@@ -32,8 +32,8 @@ def _tick(label):
     if not os.environ.get("ML_TIMING"):
         return
     try:
-        with io.open(os.path.join(os.environ.get("LOCALAPPDATA") or ".", APP_ID,
-                                  "boot_timing.log"), "a", encoding="utf-8") as f:
+        # 2026-10-11 Mac 端：统一走 wp()（Windows 上与原 LOCALAPPDATA 路径逐字相同）
+        with io.open(wp("boot_timing.log"), "a", encoding="utf-8") as f:
             f.write("%7.2f s  %s\n" % (time.time() - _T0, label))
     except Exception:
         pass
