@@ -199,14 +199,24 @@ def login_and_fetch():
 
 # ---------------------------------------------------------------- 聚合 + 上传
 
+def _clean_base(s):
+    """型号字段剥中文尾（与 app core_of 同款）：BC/BD-100GHPG9Z小富豪 → BC/BD-100GHPG9Z。
+    ⚠ 截完必须 rstrip 分隔符，否则 BCD-550WGCFDM4WHU1(棕) 会留下拖尾「(」。"""
+    m = re.search(r"[\u4e00-\u9fff]", s)
+    if m and m.start() >= 3:
+        return s[: m.start()].rstrip("(-_/+.,、，")
+    return s
+
+
 def aggregate(recs, t_mo=None):
     """聚合键（2026-10-10 晚「型号表当裁判」口径，与 app yy_finish 对齐）：
-    ERP「型号」字段本身是干净的（BC/BD-629GHEP），脏尾缀全在物料SKU名称里
-    （…大富豪系列）。但不能无脑不拼——型号字段会截短（JSQ25-13TE7）、有的中文尾
-    是型号本体（星光棕/套机/星河U1）。规则：
-      · 拼接键在型号表里 → 用拼接键；
-      · 干净型号在表里、拼接键不在 → 剥掉描述尾缀用干净键；
-      · 都不在（或没拉到型号表）→ 维持拼接（旧口径兜底）。"""
+    ERP「型号」字段大多干净（BC/BD-629GHEP），但有的行字段本身就带中文尾
+    （BC/BD-100GHPG9Z小富豪），有的截短（JSQ25-13TE7），有的中文尾是型号本体
+    （星光棕/套机/星河U1）。三级候选按序取第一个在型号表里的：
+      ① 拼接键（型号字段 + skuName 里型号之后的尾巴）——截短补全靠它；
+      ② 型号字段原样——skuName 带描述尾缀（…大富豪系列）时靠它；
+      ③ 型号字段剥中文尾——型号字段自身带描述尾（…小富豪）时靠它。
+    都不在表里 → 维持①（宁可键脏也别丢数量，前端还有尾缀兜底匹配）。"""
     agg = {}
     for r0 in recs:
         mo = norm_model(r0.get(K_MODEL))
@@ -218,11 +228,17 @@ def aggregate(recs, t_mo=None):
             tail = sku[sku.index(mo) + len(mo):]
             if tail:
                 full = mo + tail          # 完整名候选：型号字段截短时靠它一字不差对上
-        if full != mo and t_mo and mo in t_mo and full not in t_mo:
-            pass                          # SKU名称尾缀是描述（…大富豪系列），剥掉用干净型号键
-        else:
-            mo = full
-        a = agg.setdefault(mo, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
+        key = full
+        if t_mo:
+            if full in t_mo:
+                key = full
+            elif mo in t_mo:
+                key = mo
+            else:
+                mo_c = _clean_base(mo)
+                if mo_c and mo_c in t_mo:
+                    key = mo_c
+        a = agg.setdefault(key, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
         try:
             a["q"] += float(r0.get(K_QTY) or 0)
         except (TypeError, ValueError):

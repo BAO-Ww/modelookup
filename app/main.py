@@ -1798,11 +1798,20 @@ def yy_finish(recs, log):
             tail = sku[sku.index(mo) + len(mo):]
             if tail:
                 full = mo + tail          # 完整名候选：型号字段截短时靠它一字不差对上
-        if full != mo and T_MO and mo in T_MO and full not in T_MO:
-            pass                          # SKU名称尾缀是描述（…大富豪系列），剥掉用干净型号键
-        else:
-            mo = full
-        a = agg.setdefault(mo, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
+        # 三级候选按序取第一个在型号表里的（与 yy_cloud_pull.py aggregate 同款）：
+        # ① 拼接键（截短补全）②型号字段原样（skuName 带描述尾）③型号字段剥中文尾
+        #   （型号字段自身带描述尾，BC/BD-100GHPG9Z小富豪；core_of 与前端 coreOf 同款）
+        key = full
+        if T_MO:
+            if full in T_MO:
+                key = full
+            elif mo in T_MO:
+                key = mo
+            else:
+                mo_c = core_of(r0.get(YY_K_MODEL))
+                if mo_c and mo_c in T_MO:
+                    key = mo_c
+        a = agg.setdefault(key, {"q": 0.0, "a": 0.0, "wt": {}, "whs": {}})
         try:
             a["q"] += float(r0.get(YY_K_QTY) or 0)
         except (TypeError, ValueError):
