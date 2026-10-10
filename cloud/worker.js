@@ -244,11 +244,14 @@ async function route(request, env, path, ctx) {
   if (!usersGate[who]) return jerr("账号不存在或已删除，请重新登录", 403);
   if (usersGate[who].disabled) return jerr("账号已停用", 403);
 
-  // 在线心跳（2026-10-09）：任何带 token 的请求都算活跃；KV 写 5 分钟节流（省额度）
+  // 在线心跳（2026-10-10 深夜复活：用户要求保留在线标记，按省额度口径重做）：
+  // KV 写 60 分钟节流——每台机器每天 ~16 次，几台机器合计 ~60 写/天，1000 额度内无压力
+  // （当初爆表是 5 分钟一写 ≈ 900+/天）。「在线」口径 = 最近 2 小时内有过请求，
+  // 窗口必须盖过 60 分钟的节流间隔，否则活跃机器会被误判离线。
   try {
     const pv = JSON.parse((await env.KV.get("presence")) || "{}");
     const now = Date.now();
-    if (!pv[who] || now - (pv[who].t || 0) > 300000) {
+    if (!pv[who] || now - (pv[who].t || 0) > 3600000) {
       pv[who] = { t: now };
       await env.KV.put("presence", JSON.stringify(pv));
     }
@@ -284,6 +287,7 @@ async function route(request, env, path, ctx) {
     return J({ ok: true });
   }
 
+  // 在线状态（管理号看子账号下拉用）：只读 presence，零额外写入
   if (path === "/presence" && request.method === "GET") {
     const users = await getUsers(env);
     const me = users[who];
@@ -418,7 +422,9 @@ async function route(request, env, path, ctx) {
       const k = typeof v === "object" && v ? (v.k === "s" ? "s" : "l") : "l";
       if (!(c in marks) || pubTs(marks[c]) < t) marks[c] = { t, k };
     }
-    await env.KV.put("pub_" + who, JSON.stringify(marks));
+    // KV 省额度（2026-10-10）：只有真的并进来了发布标记才写 pub_——
+    // 打价场景每次 /pubsync 只带 prices，pub_ 原来被无条件整包重写，白烧一倍写额度
+    if (Object.keys(inc).length) await env.KV.put("pub_" + who, JSON.stringify(marks));
     if (b.prices && typeof b.prices === "object" && !Array.isArray(b.prices)) {
       const pp = await getPubP(who);
       for (const [c0, p] of Object.entries(b.prices)) {
@@ -524,10 +530,13 @@ async function route(request, env, path, ctx) {
   async function autoKick(kind, ageMs) {
     // 检查+登记（在 withLock 串行区里跑，两个客户端同时探测也只会登记一次）。
     // 返回 true = 本轮由我触发，调用方拿 waitUntil 去真正 dispatch。
+    // 阈值 90 分钟（2026-10-10 深夜，KV 省额度整改）：cron 每小时一跑，
+    // 阈值 30 分钟时每轮都抢在 cron 前面白触发一遍（ci_auto put + 多余 CI 跑 ≈ 64 写/天）。
+    // 改成 90 分钟 = 只在 cron 真的断更（漏 1-2 轮）时才兜底触发，平时零写入。
     try {
       const bjHour = new Date(Date.now() + 8 * 3600 * 1000).getUTCHours();
       if (bjHour < 8) return false;                  // 0-8 点不拉（用户口径）
-      if (ageMs < 30 * 60000) return false;          // 数据还新鲜，不动
+      if (ageMs < 90 * 60000) return false;          // cron 每小时刷新，90 分钟内都是新鲜的
       const key = "ci_auto_" + kind;
       const la = +(await env.KV.get(key)) || 0;
       if (Date.now() - la < 30 * 60000) return false; // 刚自动触发过，节流
@@ -722,7 +731,8 @@ async function route(request, env, path, ctx) {
     if (want === "all" || want === "kd") out.kd = await ghDispatch(CI_WF.kd);
     if (!Object.keys(out).length || !Object.values(out).every(Boolean))
       return jerr("触发云端任务失败（检查 GH_TOKEN 是否有 workflow 权限）", 502);
-    await env.KV.put("ci_last", String(Date.now()));      // 触发成功才计时，失败可立即重试
+    // 节流时间戳尽力而为：KV 额度爆的当天写不进去也别把整个触发搞失败（2026-10-10）
+    try { await env.KV.put("ci_last", String(Date.now())); } catch (e) {}   // 触发成功才计时，失败可立即重试
     return J({ ok: true, triggered: out, at: new Date().toISOString(), prev });
   }
   if (path === "/cistatus" && request.method === "GET") {
