@@ -265,9 +265,12 @@ def cloud_req(path, method="GET", obj=None, timeout=180):
 
 
 def fetch_model_set():
-    """从 worker /xlsxcloud 拉 data.xlsx（金山清理明细），解析「型号」列 → 归一化集合。
-    这是聚合键的裁判表：ERP 干净型号在表里就用干净键（剥掉「…大富豪系列」这类描述尾缀）。
-    拉不到 / 解析不了 → 返回 None，聚合退回旧拼接口径（不影响出数）。"""
+    """从 worker /xlsxcloud 拉 data.xlsx（金山清理明细）+ price.xlsx（LYDF 价格表），
+    解析「型号」列 → 归一化集合。这是聚合键的裁判表：ERP 干净型号在表里就用干净键
+    （剥掉「…大富豪系列」这类描述尾缀）。
+    ⚠ 两张表都要：小富豪×3/全空间×2 这几个型号只在 LYDF 价格表里、清理明细没有，
+      只扫 data.xlsx 会让它们的 ERP 键残留脏尾缀。
+    拉不到 / 解析不了 → 返回已有部分（或 None），聚合退回旧拼接口径（不影响出数）。"""
     try:
         import base64
         import openpyxl
@@ -275,35 +278,42 @@ def fetch_model_set():
         if err or not (j or {}).get("ok"):
             log("⚠ 型号表拉取失败（%s），聚合退回拼接口径" % (err or (j or {}).get("msg")))
             return None
-        b64 = (j.get("files") or {}).get("data.xlsx")
-        if not b64:
-            log("⚠ 云端表格里没有 data.xlsx，聚合退回拼接口径")
-            return None
-        wb = openpyxl.load_workbook(io.BytesIO(base64.b64decode(b64)),
-                                    read_only=True, data_only=True)
+        files = j.get("files") or {}
         out = set()
-        for ws in wb.worksheets:
-            # 只扫「清理明细」sheet（滞销/样机）= 软件型号表的真来源。
-            # ⚠ 千万别全簿遍历：这表里有 Sheet9 这种 104 万行的空壳 sheet，
-            #   read_only 模式逐行迭代会跑几十分钟把整个 job 拖死（本机实测 SIGTERM）。
-            if "清理" not in (ws.title or ""):
-                continue
-            rows = list(ws.iter_rows(values_only=True))
-            hi = None
-            i_mo = None
-            for ri in range(min(4, len(rows))):        # 与 app header_map 同款：前 4 行找表头
-                names = [str(x).strip() if x is not None else "" for x in (rows[ri] or [])]
-                if "型号" in names:
-                    hi, i_mo = ri, names.index("型号")
-                    break
-            if hi is None:
-                continue
-            for r in rows[hi + 1:]:
-                v = r[i_mo] if i_mo is not None and i_mo < len(r) else None
-                m = norm_model(v)
-                if m and m != "型号":
-                    out.add(m)
-        wb.close()
+
+        def harvest(b64, sheet_filter=None, header_scan=4, need_all=("型号",)):
+            """通用收型号：在 header_scan 行内找含 need_all 的表头行，收型号列。"""
+            if not b64:
+                return
+            wb = openpyxl.load_workbook(io.BytesIO(base64.b64decode(b64)),
+                                        read_only=True, data_only=True)
+            for ws in wb.worksheets:
+                # ⚠ 千万别全簿瞎扫：data.xlsx 里有 Sheet9 这种 104 万行的空壳 sheet，
+                #   read_only 逐行迭代会跑几十分钟把 job 拖死（本机实测 SIGTERM）。
+                if sheet_filter and not sheet_filter(ws.title):
+                    continue
+                rows = list(ws.iter_rows(values_only=True))
+                hi = i_mo = None
+                for ri in range(min(header_scan, len(rows))):
+                    names = [str(x).strip() if x is not None else "" for x in (rows[ri] or [])]
+                    if all(n in names for n in need_all):
+                        hi, i_mo = ri, names.index("型号")
+                        break
+                if hi is None:
+                    continue
+                for r in rows[hi + 1:]:
+                    v = r[i_mo] if i_mo is not None and i_mo < len(r) else None
+                    m = norm_model(v)
+                    if m and m != "型号":
+                        out.add(m)
+            wb.close()
+
+        # 清理明细（滞销/样机）：软件型号表的主来源
+        harvest(files.get("data.xlsx"), sheet_filter=lambda t: "清理" in (t or ""))
+        # LYDF 价格表：型号字段截短值 + 部分型号只在这里有（小富豪/全空间…）。
+        # 表头「型号+品牌」在 r2（美的在 r1）；用「型号+品牌」判据正好跳过现存量10.6 旧 sheet
+        harvest(files.get("price.xlsx"), header_scan=15,
+                need_all=("型号", "品牌"))
         log("型号表裁判集：%d 个型号" % len(out))
         return out or None
     except Exception as e:
