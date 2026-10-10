@@ -1726,7 +1726,8 @@ function loadSubRec(){
   sel.innerHTML = '<option value="">加载中…</option>';
   if (AUTH && AUTH.role === 'admin'){
     /* 2026-10-09 用户要求：下拉列出【全部子账号】+ 发布数 + 在线状态
-       （云端心跳：10 分钟内有请求=在线；发布数来自发布记录；账号列表来自账号管理） */
+       （2026-10-10 深夜省额度口径：心跳写入 worker 端 60 分钟节流，
+        「在线」= 最近 2 小时内有过请求，窗口盖过节流间隔） */
     Promise.all([
       authFetch('/puball'),
       authFetch('/presence').catch(function(){ return null; }),
@@ -1744,7 +1745,7 @@ function loadSubRec(){
       var h = '<option value="">不筛选（看全部）</option>';
       function onTag(u){
         if (!pv) return '';
-        return (Date.now() - (pv[u] || 0) < 600000) ? ' ●在线' : ' ○离线';
+        return (Date.now() - (pv[u] || 0) < 7200000) ? ' ●在线' : ' ○离线';
       }
       us.forEach(function(u){
         var n = Object.keys(npub[u] || {}).length;
