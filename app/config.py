@@ -3,7 +3,7 @@
 依赖方向：config 是依赖图根，不 import 任何本项目模块。"""
 
 APP_NAME = "型号查询"
-APP_VERSION = "2.7.24"
+APP_VERSION = "2.7.25"
 APP_ID = "ModelLookup"
 
 # payload 结构版本：与 parse_kdocs.py 产出 meta.pv 对齐。
