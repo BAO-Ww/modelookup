@@ -121,3 +121,13 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             mobile/app/out/ModelLookup-Mobile-${{ steps.ver.outputs.num }}.apk
+
+      - name: 签名文件随 Release 存档（无固定 secret 时；下载后存成 MOBILE_KEYSTORE_B64）
+        if: steps.ver.outputs.release == 'true' && env.ML_KS_B64 == ''
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          fail_on_unmatched_files: false
+          files: |
+            mobile/app/android/ml.keystore

@@ -56,16 +56,19 @@ def patch_gradle(adir, store_pass):
         sys.exit("android{} block not found in build.gradle")
     src = src[:m.end()] + "\n" + inject + src[m.end():]
 
-    # release buildType：模板里若指向 debug 签名则替换，否则在 release { 后插入
+    # release buildType 指向 mlrelease：模板有 debug 指向就替换；没有就在 release { 后插入。
+    # ⚠ 两个分支都必须写回 src（2026-10-11 实锤：n1==0 时 new 没赋回 src → 产物 unsigned）。
     new, n1 = re.subn(r"signingConfig\s+signingConfigs\.debug",
                       "signingConfig signingConfigs.mlrelease", src)
+    src = new
     if n1 == 0:
-        new, _ = re.subn(r"(buildTypes\s*\{\s*release\s*\{)",
-                         r"\1\n            signingConfig signingConfigs.mlrelease", src)
-    else:
+        new, n2 = re.subn(r"(buildTypes\s*\{\s*release\s*\{)",
+                          r"\1\n            signingConfig signingConfigs.mlrelease", src)
         src = new
+        if n2 == 0:
+            sys.exit("release buildType not found in build.gradle — Capacitor template changed?")
     io.open(gp, "w", encoding="utf-8", newline="\n").write(src)
-    print("build.gradle patched (signingConfig -> mlrelease)")
+    print("build.gradle patched (signingConfig -> mlrelease, replaced=%d)" % n1)
 
 
 def main():
