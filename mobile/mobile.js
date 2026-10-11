@@ -91,11 +91,85 @@ function initTabs(){
   if (document.getElementById('ml-tabbar')) return;
   if (!document.getElementById('lossalert')) return;      // 模板 DOM 未就绪，等下轮
 
-  /* -- 搜索框提出侧栏、固定成顶栏（sticky 会被侧栏高度钳制，滚过就跑——2026-10-11 实测） -- */
+  /* -- 顶栏 = 搜索框 + 方式四分段（合成一个固定头，原生 App 观感） -- */
   var sb = document.querySelector('.side .searchbar');
   if (sb && !document.getElementById('ml-topsearch')){
     sb.id = 'ml-topsearch';
-    document.body.appendChild(sb);                        // 整节点搬移，模板事件仍绑定其上
+  }
+  var header = document.getElementById('ml-header');
+  if (!header){
+    header = document.createElement('div');
+    header.id = 'ml-header';
+    document.body.appendChild(header);
+  }
+  if (sb && sb.parentNode !== header) header.appendChild(sb);
+
+  /* 方式四分段：topbar 的事件监听是容器委托（搬走子节点就断链——实测），
+     所以 topbar 整体进抽屉保留原逻辑，顶栏放"影子分段"转发点击、轮询同步选中态 */
+  var topbar = document.getElementById('topbar');
+  if (topbar && !document.getElementById('ml-topbar2')){
+    var bar2 = document.createElement('div');
+    bar2.id = 'ml-topbar2';
+    [['','全部'],['z','正品'],['l','滞销'],['s','样机']].forEach(function(p){
+      var shadow = document.createElement('button');
+      shadow.className = 'chip' + (p[0] === '' ? ' on' : '');
+      shadow.dataset.kind = p[0];
+      shadow.textContent = p[1];
+      shadow.addEventListener('click', function(){
+        var real = topbar.querySelector('[data-kind="' + p[0] + '"]');
+        if (real) real.click();
+      });
+      bar2.appendChild(shadow);
+    });
+    header.appendChild(bar2);
+  }
+
+  /* 「筛选到 N 条」提示归位到列表上方（不占吸顶区） */
+  var hint = document.getElementById('hint');
+  var listEl = document.getElementById('list');
+  if (hint && listEl && hint.nextElementSibling !== listEl){
+    listEl.parentNode.insertBefore(hint, listEl);
+  }
+  var sh = document.getElementById('stickhead');
+  if (sh) sh.style.display = 'none';               // topbar 已进抽屉，原吸顶容器退场
+  var sp = document.getElementById('stickspacer');
+  if (sp) sp.style.display = 'none';
+
+  /* -- 筛选抽屉：品牌/品类/方式开关价格(原topbar)/清理价/子用户发布 -- */
+  if (!document.getElementById('ml-drawer')){
+    var drawer = document.createElement('div');
+    drawer.id = 'ml-drawer';
+    drawer.innerHTML = '<div class="ml-drawer-head"><b>筛选</b>'
+      + '<button id="ml-drawer-done">完成</button></div>';
+    ['brandbox','catbox'].forEach(function(id){
+      var n = document.getElementById(id);
+      if (n) drawer.appendChild(n);
+    });
+    if (topbar){
+      var grp = document.createElement('div');
+      grp.className = 'ml-drawer-group';
+      grp.innerHTML = '<h5>方式 · 开关 · 价格类型</h5>';
+      grp.appendChild(topbar);                     // 整节点搬入：委托监听、逻辑零改动
+      drawer.appendChild(grp);
+    }
+    ['tools','subrec','imgfile','jsonfile'].forEach(function(id){
+      var n = document.getElementById(id);
+      if (n){ drawer.appendChild(n); }
+    });
+    document.body.appendChild(drawer);
+    var mask = document.createElement('div');
+    mask.id = 'ml-drawer-mask';
+    document.body.appendChild(mask);
+    mask.addEventListener('click', mlDrawerClose);
+    drawer.querySelector('#ml-drawer-done').addEventListener('click', mlDrawerClose);
+
+    /* 顶栏筛选按钮（漏斗 + 生效条件数角标） */
+    var fbtn = document.createElement('button');
+    fbtn.id = 'ml-filterbtn';
+    fbtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16l-6.2 7.4V19l-3.6-2v-4.6L4 5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><em id="ml-filtercnt" hidden></em>';
+    fbtn.addEventListener('click', mlDrawerOpen);
+    sb.appendChild(fbtn);
+    setInterval(function(){ mlFilterCnt(); mlSyncSeg(); }, 1000);
   }
 
   /* -- 消息视图：横幅整节点搬入 -- */
@@ -132,6 +206,7 @@ function initTabs(){
     /* 模板全局 [hidden]{display:none!important} 会压过 CSS 切换，hidden 属性必须同步 */
     document.getElementById('view-msg').hidden = tab !== 'msg';
     document.getElementById('view-me').hidden = tab !== 'me';
+    if (ML_STATE !== 'drawer'){ ML_STATE = (tab === 'home') ? '' : tab; if (ML_STATE) mlGuardPush(); }
     if (tab === 'msg') window.scrollTo(0, 0);
     if (tab === 'me') mlRenderMe();
     mlUpdateBadge();
@@ -143,6 +218,48 @@ function initTabs(){
   setInterval(mlUpdateBadge, 3000);
   mlUpdateBadge();
 }
+
+function mlDrawerOpen(){
+  document.body.classList.add('ml-drawer-open');
+  if (ML_STATE !== 'drawer'){ ML_STATE = 'drawer'; mlGuardPush(); }
+}
+function mlDrawerClose(){
+  document.body.classList.remove('ml-drawer-open');
+  if (ML_STATE === 'drawer') ML_STATE = '';
+}
+function mlFilterCnt(){
+  var n = 0, el;
+  try {
+    el = document.querySelector('#chips .chip.on[data-brand]');
+    if (el && el.dataset.brand) n++;
+    el = document.querySelector('#catchips .chip.on[data-cat]');
+    if (el && el.dataset.cat) n++;
+    el = document.getElementById('pmin');
+    if (el && el.value) n++;
+    el = document.getElementById('pmax');
+    if (el && el.value) n++;
+  } catch(e){}
+  var bd = document.getElementById('ml-filtercnt');
+  if (bd){ bd.textContent = n; bd.hidden = !n; }
+}
+
+function mlSyncSeg(){
+  var topbar = document.getElementById('topbar');
+  var bar2 = document.getElementById('ml-topbar2');
+  if (!topbar || !bar2) return;
+  Array.prototype.forEach.call(topbar.querySelectorAll('[data-kind]'), function(real){
+    var sh = bar2.querySelector('[data-kind="' + real.dataset.kind + '"]');
+    if (sh) sh.classList.toggle('on', real.classList.contains('on'));
+  });
+}
+
+/* ---------- 安卓返回键：抽屉开→关抽屉；消息/我的→回首页；再按才退出 ---------- */
+var ML_STATE = '';                       // '' | 'drawer' | 'msg' | 'me'
+function mlGuardPush(){ try { history.pushState(null, ''); } catch(e){} }
+window.addEventListener('popstate', function(){
+  if (ML_STATE === 'drawer'){ mlDrawerClose(); ML_STATE = ''; mlGuardPush(); return; }
+  if (ML_STATE){ mlSwitchTab('home'); ML_STATE = ''; mlGuardPush(); }
+});
 
 function mlUpdateBadge(){
   var nav = document.getElementById('ml-tabbar');
