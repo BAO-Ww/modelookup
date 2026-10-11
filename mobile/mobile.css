@@ -17,24 +17,34 @@
   }
   .mains{ padding-top:10px; }
 
-  /* 搜索框：整节点提出侧栏 → 固定顶栏（mobile.js 搬移；sticky 会被侧栏高度钳制） */
-  #ml-topsearch{
+  /* ---------- 固定顶栏：搜索框 + 方式四分段（原生 App 观感，永不截断） ---------- */
+  .side{ display:none !important; }        /* 侧栏内容已全部搬走（搜索框/方式→顶栏，其余→抽屉） */
+  #ml-header{
     position:fixed; top:0; left:0; right:0; z-index:45;
-    margin:0; border:0; border-bottom:1px solid var(--line); border-radius:0 !important;
-    padding:10px 12px !important; background:#fff;
-    box-shadow:0 1px 4px rgba(16,24,40,.06);
+    background:#fff; box-shadow:0 1px 5px rgba(16,24,40,.07);
   }
-  #ml-topsearch #q{ font-size:16px; padding:12px 0; }   /* 16px 防 iOS 聚焦自动放大 */
-  .bodywrap{ padding-top:58px !important; }
-  .ml-view{ padding-top:66px !important; }
-  body.ml-tab-msg #ml-topsearch, body.ml-tab-me #ml-topsearch{ display:none !important; }
+  #ml-topsearch{ padding:9px 10px 7px !important; background:#fff; border:0; box-shadow:none; }
+  /* 注意：#ml-topsearch 就是模板的 .searchbar 节点本身（整节点搬移+改名），不是它的父级 */
+  #ml-topsearch{
+    background:#f2f4f8; border:1px solid transparent; border-radius:12px; box-shadow:none;
+  }
+  #ml-topsearch:focus-within{ background:#fff; border-color:var(--brand); box-shadow:0 0 0 3px rgba(46,107,230,.1); }
+  #ml-topsearch #q{ font-size:16px; padding:11px 0; }   /* 16px 防 iOS 聚焦自动放大 */
+  #ml-topbar2{ display:flex; gap:6px; padding:0 10px 9px; }
+  #ml-topbar2 .chip{
+    flex:1; text-align:center; margin:0; padding:8px 0; font-size:13.5px;
+    border-radius:9px; white-space:nowrap;
+  }
+  #ml-topbar2 .chip.on{ background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600; }
+  .bodywrap{ padding-top:104px !important; }
+  .ml-view{ padding-top:104px !important; }
+  #ml-drawer{ padding-top:52px; }
+  body.ml-tab-msg #ml-header, body.ml-tab-me #ml-header{ display:none !important; }
 
-  /* 吸顶：方式/价格类型条钉在顶栏下面（滚动时筛选不跑） */
-  .stickhead{
-    position:sticky !important; top:56px !important; left:auto !important; right:auto !important;
-    z-index:35; margin:0 -2px; border-radius:10px;
-  }
-  #stickspacer{ display:block !important; }
+  /* 原吸顶容器退场（方式条已并入顶栏），提示归位列表上方 */
+  #stickhead{ display:none !important; }
+  #stickspacer{ display:none !important; }
+  .mains .hint{ margin:2px 2px 10px; }
   .fgroup{ margin-top:8px; }
   .fgroup .fhead{ cursor:pointer; -webkit-user-select:none; user-select:none; padding:4px 0 2px; }
   .fgroup .fhead::after{
@@ -93,6 +103,60 @@
   .lossalert .lchip{ white-space:normal !important; display:inline-block; word-break:break-all; margin:0 6px 2px 0; }
   .pubwarn{ word-break:break-word; }
 
+  /* ---------- 筛选抽屉：品牌/品类/清理价/子用户发布 ---------- */
+  .side{ display:none !important; }        /* 侧栏内容已全部搬走（搜索框→顶栏，筛选→抽屉） */
+  .bodywrap{ padding-top:58px !important; }
+  #ml-filterbtn{
+    flex:none; width:40px; height:40px; margin-left:6px;
+    border:0; border-radius:10px; background:#f2f5fa; color:var(--ink2);
+    cursor:pointer; position:relative; -webkit-tap-highlight-color:transparent;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #ml-filterbtn svg{ width:20px; height:20px; }
+  #ml-filterbtn:active{ background:#e6eaf2; }
+  #ml-filtercnt{
+    position:absolute; top:-4px; right:-4px;
+    min-width:15px; height:15px; border-radius:8px; padding:0 3px;
+    background:var(--brand); color:#fff; font-size:10px; font-style:normal;
+    line-height:15px; text-align:center; font-weight:600;
+  }
+  #ml-drawer{
+    position:fixed; top:0; left:0; right:0; z-index:80;
+    background:#fff; border-radius:0 0 16px 16px;
+    padding:52px 14px 14px; max-height:78vh; overflow-y:auto;
+    transform:translateY(-102%); transition:transform .22s ease-out;
+    box-shadow:0 10px 30px rgba(16,24,40,.14);
+  }
+  body.ml-drawer-open #ml-drawer{ transform:translateY(0); }
+  #ml-drawer-mask{
+    position:fixed; inset:0; z-index:75; background:rgba(15,23,42,.35);
+    opacity:0; pointer-events:none; transition:opacity .2s;
+  }
+  body.ml-drawer-open #ml-drawer-mask{ opacity:1; pointer-events:auto; }
+  .ml-drawer-head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 2px 10px; border-bottom:1px solid var(--line2);
+  }
+  .ml-drawer-head b{ font-size:15px; color:var(--ink); }
+  #ml-drawer-done{
+    border:0; background:var(--brand); color:#fff; font-size:13px; font-weight:600;
+    padding:7px 18px; border-radius:99px; cursor:pointer; font-family:inherit;
+  }
+  /* 抽屉内的筛选块回归自然流（搬出侧栏后去掉折叠行为） */
+  #ml-drawer .fgroup{ background:#f5f6f8; border-radius:10px; padding:10px 12px; margin-top:10px; }
+  #ml-drawer .fhead{ cursor:default; }
+  #ml-drawer .fhead::after{ content:'' !important; }
+  #ml-drawer .chips{ display:flex !important; max-height:none; }
+  #ml-drawer .subrec .lbl{ font-size:12px; color:#7b8494; }
+  #ml-drawer .subrec select{ width:100%; margin-top:6px; padding:9px 10px; border:1px solid #d7dce6; border-radius:9px; font-size:13px; background:#fff; }
+  #ml-drawer .ml-drawer-group{ background:#f5f6f8; border-radius:10px; padding:10px 12px; margin-top:10px; }
+  #ml-drawer .ml-drawer-group h5{
+    margin:0 0 8px; font-size:11px; color:#98a2b3; font-weight:700; letter-spacing:1px;
+  }
+  /* 原方式条在抽屉里：换成可换行的胶囊流 */
+  #ml-drawer #topbar{ flex-wrap:wrap; padding:0; background:none; border-radius:0; overflow:visible; }
+  #ml-drawer #topbar .chip{ padding:8px 12px; font-size:12.5px; }
+
   /* ---------- 底部导航：首页 / 消息 / 我的 ---------- */
   #ml-tabbar{
     position:fixed; left:0; right:0; bottom:0; z-index:60;
@@ -114,10 +178,13 @@
     line-height:16px; text-align:center; font-weight:600;
   }
 
-  /* 消息 / 我的 视图 */
+  /* 消息 / 我的 视图：首页容器（main）整个退场；无固定头，内容从顶部开始 */
   .ml-view{ display:none; padding:66px 12px 20px; }
+  body.ml-tab-msg main, body.ml-tab-me main{ display:none !important; }
+  body.ml-tab-msg .ml-view, body.ml-tab-me .ml-view{ padding-top:14px !important; }
   body.ml-tab-msg .side, body.ml-tab-msg .mains,
-  body.ml-tab-me  .side, body.ml-tab-me  .mains{ display:none !important; }
+  body.ml-tab-me  .side, body.ml-tab-me  .mains,
+  body.ml-tab-msg .bodywrap, body.ml-tab-me .bodywrap{ display:none !important; }
   body.ml-tab-msg #view-msg, body.ml-tab-me #view-me{ display:block; }
   body.ml-tab-msg footer, body.ml-tab-me footer,
   body.ml-tab-msg #ml-tabbar ~ footer{ display:none; }
