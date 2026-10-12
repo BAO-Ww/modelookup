@@ -298,4 +298,3 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             out/ModelLookup-mac-${{ steps.ver.outputs.num }}.dmg
-            out/ModelLookup-mac-${{ steps.ver.outputs.num }}.zip
