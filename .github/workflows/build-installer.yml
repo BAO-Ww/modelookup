@@ -51,6 +51,8 @@ jobs:
 
       - name: 算版本号
         id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $v = "${{ github.event.inputs.version }}"
@@ -214,6 +216,8 @@ jobs:
 
       - name: 算版本号
         id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           v="${{ github.event.inputs.version }}"
@@ -342,6 +346,8 @@ jobs:
 
       - name: 算版本号
         id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           v="${{ github.event.inputs.version }}"
           if [ -z "$(echo "$v" | tr -d '[:space:]')" ]; then
