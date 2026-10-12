@@ -240,6 +240,13 @@ async function route(request, env, path, ctx) {
                perm: user.role === "admin" ? {} : migratePerm(user.perm) });
   }
 
+  // ---------- 手机版 H5（2026-10-12）：/m 出页面（免登录，登录框在页面里） ----------
+  if (path === "/m" && request.method === "GET") {
+    const html = await env.KV.get("mhtml");
+    if (!html) return jerr("手机版还没上云", 404);
+    return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", ...CORS } });
+  }
+
   const token = request.headers.get("X-Token") || "";
   const usersGate = await getUsers(env);       // 审计（G2/G3）：所有带 token 接口统一校验账号还在、没停用
   const who = await checkToken(env, token, usersGate);
@@ -480,6 +487,61 @@ async function route(request, env, path, ctx) {
     delete imgs[c];
     await env.KV.put("myimgs", JSON.stringify(imgs));
     return J({ ok: true });
+  }
+  // 整库一次性上云（2026-10-12）：管理号把本地 payload 图库全量灌进 myimgs。
+  // 一次 KV.put = 1 写额度（逐图 POST 会烧上千写/天）；单值上限 25MB，超了拒收。
+  if (path === "/myimgsbulk" && request.method === "POST") {
+    const users = await getUsers(env);
+    const me = users[who];
+    if (!me || me.role !== "admin") return jerr("只有管理号能整库上云", 403);
+    const b = await request.json().catch(() => ({}));
+    const inc = b.imgs && typeof b.imgs === "object" && !Array.isArray(b.imgs) ? b.imgs : null;
+    if (!inc) return jerr("imgs 字段不对");
+    const imgs = await getMyImgs(env);
+    let n = 0;
+    for (const c0 of Object.keys(inc)) {
+      const c = safeKey(c0, 100);
+      const v = inc[c0];
+      if (!c || typeof v !== "string" || !v.startsWith("data:image/")) continue;
+      if (v.length > 400000) continue;
+      imgs[c] = v; n++;
+    }
+    const total = JSON.stringify(imgs).length;
+    if (total > 24000000) return jerr("整库太大（" + Math.round(total / 1048576) + "MB），超 KV 单值上限");
+    await env.KV.put("myimgs", JSON.stringify(imgs));
+    return J({ ok: true, added: n, total: Object.keys(imgs).length, bytes: total });
+  }
+
+  // ---------- 手机版数据 /mpayload（2026-10-12）----------
+  // GET：登录用户读手机端 payload（{meta,rows,imgs}，CI 每轮金山任务重建上传）。
+  // POST：管理号/C-I 上传；内容没变不写 KV（省写额度）；单值上限 24MB。
+  if (path === "/mpayload" && request.method === "GET") {
+    const v = await env.KV.get("mpayload");
+    if (!v) return jerr("手机端数据还没上云", 404);
+    return new Response(v, { headers: { "Content-Type": "application/json; charset=utf-8", ...CORS } });
+  }
+  if (path === "/mpayload" && request.method === "POST") {
+    const users0 = await getUsers(env);
+    if ((users0[who] || {}).role !== "admin") return jerr("只有管理号能上传手机端数据", 403);
+    const raw = await request.text();
+    if (raw.length > 24000000) return jerr("手机端数据太大（" + Math.round(raw.length / 1048576) + "MB），超 KV 单值上限", 413);
+    let obj; try { obj = JSON.parse(raw); } catch (e) { return jerr("不是合法 JSON"); }
+    if (!obj || !Array.isArray(obj.rows)) return jerr("缺 rows，拒收");
+    const mb = Math.round(raw.length / 1048576 * 10) / 10;
+    if ((await env.KV.get("mpayload")) === raw) return J({ ok: true, changed: false, mb });
+    await env.KV.put("mpayload", raw);
+    return J({ ok: true, changed: true, rows: obj.rows.length, mb });
+  }
+
+  // ---------- 手机版页面 /mhtml（2026-10-12）：管理号更新 KV 里的 m.html ----------
+  if (path === "/mhtml" && request.method === "POST") {
+    const users0 = await getUsers(env);
+    if ((users0[who] || {}).role !== "admin") return jerr("只有管理号能更新手机版页面", 403);
+    const b = await request.json().catch(() => ({}));
+    if (!b || typeof b.html !== "string" || !b.html) return jerr("html 字段不对");
+    if (b.html.length > 1000000) return jerr("html 太大（" + Math.round(b.html.length / 1024) + "KB）");
+    await env.KV.put("mhtml", b.html);
+    return J({ ok: true, kb: Math.round(b.html.length / 1024) });
   }
 
   // ---------- 用友库存云中转（2026-10-08）：管理号更新 → 全员共享 ----------

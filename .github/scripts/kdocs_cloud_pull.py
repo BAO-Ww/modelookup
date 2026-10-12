@@ -160,6 +160,60 @@ def load_kdocs_cookies():
     return pw_cookies
 
 
+def build_mpayload(files_b64, log):
+    """手机端 payload（2026-10-12）：用仓库里同源解析代码构建 {meta,rows,imgs}
+    → POST /mpayload 上云（worker 对内容去重，没变不烧 KV 写额度）。
+    LOCALAPPDATA 指到临时目录当工作目录（paths.wp() 的落点，CI 是 Linux）；
+    图库 images_cache.json / 欣盛库 xinsheng.sqlite3 直接读仓库 app/assets。
+    失败只告警不拖死 xlsx 链路。"""
+    try:
+        import shutil
+        import sys
+        import tempfile
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        work = tempfile.mkdtemp(prefix="mlwork_")
+        os.environ["LOCALAPPDATA"] = work
+        sys.path.insert(0, os.path.join(root, "app"))
+        sys.path.insert(0, root)
+        import paths
+        wd = paths.work_dir()          # LOCALAPPDATA 下还有一层 ModelLookup，以此为准
+        for name in ("data.xlsx", "price.xlsx", "subsidy.xlsx"):
+            if name in files_b64:
+                with open(os.path.join(wd, name), "wb") as f:
+                    f.write(base64.b64decode(files_b64[name]))
+        xs_src = os.path.join(root, "app", "assets", "xinsheng.sqlite3")
+        if os.path.isfile(xs_src):
+            shutil.copy(xs_src, os.path.join(wd, "xinsheng.sqlite3"))
+        else:
+            log("⚠ 仓库里没有欣盛库 app/assets/xinsheng.sqlite3，手机端这轮不带官方售价/补图")
+        import payload as P
+        from config import CLEAN_XLSX, PRICE_XLSX
+        recs, month = [], ""
+        for name in (CLEAN_XLSX, PRICE_XLSX):
+            p = os.path.join(work, name)
+            if not os.path.isfile(p):
+                continue
+            r, mo = P.load_records_from_path(p)
+            recs += r
+            month = month or mo
+            log("手机端：%s → %d 条记录" % (name, len(r)))
+        if not recs:
+            log("⚠ 手机端 payload：没有可用数据文件，跳过")
+            return
+        pl = P.build_payload(recs, P.load_img_library(), month)
+        P.attach_subsidy(pl, log)
+        P.attach_xinsheng(pl, log)
+        body = {"meta": pl.get("meta") or {}, "rows": pl.get("rows") or [],
+                "imgs": pl.get("imgs") or {}}
+        j = worker_req("/mpayload", "POST", body, timeout=600)
+        log("手机端 payload 上云：%s（rows=%d）%s"
+            % (j.get("mb"), len(body["rows"]), "✔" if j.get("ok") else "✘ " + str(j.get("msg"))))
+        if not j.get("ok"):
+            raise RuntimeError(j.get("msg"))
+    except Exception as e:
+        log("⚠ 手机端 payload 构建失败（不影响 xlsx 链路）：%r" % e)
+
+
 def main():
     from playwright.sync_api import sync_playwright
 
@@ -202,16 +256,19 @@ def main():
 
     ts = "-".join(hashes)
     log("本次内容哈希 ts=%s（云端 %s）" % (ts, old_ts or "无"))
-    if ts == old_ts:
-        log("两张表内容都没变，跳过上传（机器不会有任何感知）✔")
-        return
+    if ts != old_ts:
+        j = worker_req("/xlsxcloud", "POST",
+                       {"ts": ts, "files": files}, timeout=300)
+        if not j.get("ok"):
+            raise RuntimeError("上传被拒：%s" % j.get("msg"))
+        log("已上传云端（%.1f MB）——所有机器的软件 60 秒内自动跟随重建 ✔"
+            % (j.get("mb") or 0))
+    else:
+        log("两张表内容都没变，跳过 xlsx 上传（机器不会有任何感知）✔")
 
-    j = worker_req("/xlsxcloud", "POST",
-                   {"ts": ts, "files": files}, timeout=300)
-    if not j.get("ok"):
-        raise RuntimeError("上传被拒：%s" % j.get("msg"))
-    log("已上传云端（%.1f MB）——所有机器的软件 60 秒内自动跟随重建 ✔"
-        % (j.get("mb") or 0))
+    # 手机端 payload（2026-10-12）：每轮都构建上传，worker 内容去重省写额度；
+    # 表没变也要走一遍——欣盛库/代码更新后手机端才能跟上
+    build_mpayload(files, log)
 
 
 if __name__ == "__main__":

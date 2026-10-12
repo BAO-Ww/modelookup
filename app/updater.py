@@ -43,6 +43,55 @@ def xlsx_follower():
         time.sleep(60)
 
 
+def xs_last():
+    """上次欣盛商城同步时间（xs_ts.txt，没有 = 从未同步过 → 首轮就拉）。"""
+    try:
+        return io.open(wp("xs_ts.txt"), encoding="utf-8").read().strip()
+    except Exception:
+        return ""
+
+
+def xinsheng_follower():
+    """欣盛臻选商城月度同步线程（2026-10-12）：官方售价 + 缺图补图的数据源。
+    每小时看一眼，距上次同步 ≥30 天才真拉（增量只拉新增/变价，几十秒）；
+    同步完直接挂到当前 payload 上 bump rev 无感刷新，不用重解析金山表。
+    任何异常只记日志，绝不影响其他更新链路。"""
+    time.sleep(300)                      # 开场让位给首屏和表格跟随
+    while True:
+        try:
+            last = xs_last()
+            due = True
+            if last:
+                try:
+                    t = time.mktime(time.strptime(last, "%Y-%m-%d %H:%M"))
+                    due = (time.time() - t) >= 30 * 86400
+                except Exception:
+                    due = True
+            if due and state.read_state()["status"] not in ("running", "login"):
+                from xinsheng_datasource import XinshengDataSource
+                ds = XinshengDataSource(db_path=wp("xinsheng.sqlite3"))
+                st = ds.sync()
+                now = time.strftime("%Y-%m-%d %H:%M")
+                try:
+                    io.open(wp("xs_ts.txt"), "w", encoding="utf-8").write(now)
+                except Exception:
+                    pass
+                state.LOG.append("欣盛商城月度同步：%s" % st)
+                try:
+                    from payload import attach_xinsheng, get_payload, set_payload
+                    p = get_payload()
+                    attach_xinsheng(p, state.LOG.append)
+                    set_payload(p)       # rev+1 → 页面无感重载
+                except Exception as e:
+                    state.LOG.append("欣盛数据挂载失败：%s" % e)
+        except Exception as e:
+            try:
+                state.LOG.append("欣盛同步异常：%s" % e)
+            except Exception:
+                pass
+        time.sleep(3600)                 # 每小时看一眼，满 30 天才真拉
+
+
 def _app_install_bg(log):
     """软件自更新：从云端下安装包 → 静默覆盖安装 → 本进程退出让位（2026-10-08）。
     走 worker 中转（/appdl），客户端不用碰 GitHub。"""

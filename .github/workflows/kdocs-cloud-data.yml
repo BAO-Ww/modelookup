@@ -28,9 +28,9 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Playwright + Chromium
+      - name: Install Playwright + Chromium + openpyxl
         run: |
-          pip install playwright==1.48.0
+          pip install playwright==1.48.0 openpyxl
           python -m playwright install --with-deps chromium
 
       - name: Pull KDocs tables and upload

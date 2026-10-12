@@ -7,6 +7,7 @@ import base64
 import io
 import json
 import os
+import sqlite3
 import threading
 import time
 
@@ -180,6 +181,66 @@ def attach_subsidy(payload, log):
     log("补贴表：%d 条 → 命中表中 %d 个型号" % (len(subs), n_hit))
 
 
+def _pick_mall_img(al):
+    """商城图集选图（2026-10-12 二次修）：/perm/ 路径是带价格大字报的活动海报，
+    先跳过；剩下的优先 .png（官方渲染图，多为干净底机图）；全不行退第一张。"""
+    try:
+        arr = [u for u in json.loads(al) if isinstance(u, str) and u.startswith("http")]
+    except Exception:
+        return ""
+    if not arr:
+        return ""
+    good = [u for u in arr if "/perm/" not in u]
+    pngs = [u for u in good if u.lower().endswith(".png")]
+    return pngs[0] if pngs else (good[0] if good else arr[0])
+
+
+def attach_xinsheng(payload, log):
+    """欣盛臻选商城（官方补贴小程序同源 H5）数据挂载（2026-10-12）。
+    对码：商城商品编码 cCode == 卡片 YS物料编码 code（同一套用友物料编码，实测 968 命中 660/68%）：
+      · r['xp'] = 商城官方售价（fSalePrice）——只在与指导价 lp 有差异时挂
+        （商城价=指导价就不挂，避免界面重复一列；2026-10-12 用户反馈）
+      · 缺官网图的卡 r['ximg'] = 商城图集选图（跳海报、优先渲染图，见 _pick_mall_img；
+        官网图永远优先，商城图只兜底，yonyoucloud 公网 CDN 可直链无防盗链）
+    库文件 wp('xinsheng.sqlite3')（精简版 ~3MB，desc_html/raw 不落盘）。
+    库不存在/损坏 → 跳过，绝不拖死重建。"""
+    p = wp("xinsheng.sqlite3")
+    if not os.path.isfile(p):
+        return
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % p.replace("\\", "/"), uri=True)
+        xmap = {}
+        for code, sp, al in con.execute(
+                "SELECT code, sale_price, album_urls FROM products WHERE code IS NOT NULL AND code != ''"):
+            if code not in xmap:
+                xmap[code] = (sp, al or "")
+        con.close()
+    except Exception as e:
+        log("欣盛商城库读取失败（这轮不带官方售价/补图）：%s" % e)
+        return
+    if not xmap:
+        return
+    imgs = payload.get("imgs") or {}
+    n_xp = n_img = 0
+    for r in payload.get("rows") or []:
+        hit = xmap.get(r.get("code"))
+        if not hit:
+            continue
+        sp, al = hit
+        if isinstance(sp, (int, float)) and sp > 0:
+            lp = r.get("lp") or 0
+            if not lp or abs(sp - lp) > 0.01:
+                r["xp"] = sp
+                n_xp += 1
+        if al and r.get("c") and not imgs.get(r["c"]):
+            album = _pick_mall_img(al)
+            if album:
+                r["ximg"] = album
+                n_img += 1
+    log("欣盛商城：官方售价挂上 %d 卡（与指导价同价的不重复挂）/ 缺图补上 %d 张（跳海报、优先渲染图）"
+        % (n_xp, n_img))
+
+
 def rebuild(log):
     """用工作目录里的 data.xlsx / price.xlsx 重建 payload。"""
     allrecs, month = [], ""
@@ -212,6 +273,7 @@ def rebuild(log):
     payload = build_payload(allrecs, cache, month)
     payload["meta"]["src"] = ""
     attach_subsidy(payload, log)          # 补贴表（以旧换新）：69码 + 售价
+    attach_xinsheng(payload, log)         # 欣盛商城（2026-10-12）：官方售价 + 缺图补图
     # 官网详情页直链（web 映射）从老 payload 继承，按新 rows 的 key 过滤
     if old and old.get("web"):
         _web = {r.get("c"): old["web"][r.get("c")] for r in payload["rows"] if r.get("c") in old["web"]}
