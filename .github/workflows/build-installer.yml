@@ -88,6 +88,15 @@ jobs:
           # 这行刻意用纯 ASCII：runner 控制台是 cp1252，打中文会 UnicodeEncodeError
           python -c "import openpyxl, webview, clr, PyInstaller; print('deps ok:', openpyxl.__version__, PyInstaller.__version__)"
 
+      - name: 注入版本号（_buildver.py：exe「关于」与 Release tag 同源）
+        # 只在发版构建注入（release=true）；分支验证构建不注入，exe 用 config.py 兜底号
+        if: steps.ver.outputs.release == 'true'
+        working-directory: app
+        shell: pwsh
+        run: |
+          "BUILD_VERSION = '${{ steps.ver.outputs.num }}'" | Out-File -FilePath _buildver.py -Encoding ascii
+          Get-Content _buildver.py
+
       - name: 打包 exe（PyInstaller）
         working-directory: app
         shell: pwsh
@@ -238,6 +247,11 @@ jobs:
           sips -z 1024 1024 icon.png --out icns_build/icon.iconset/icon_512x512@2x.png
           iconutil -c icns icns_build/icon.iconset -o icon.icns
           ls -la icon.icns
+
+      - name: 注入版本号（_buildver.py：与 Release tag 同源，跟 Windows exe 同一个号）
+        if: steps.ver.outputs.release == 'true'
+        working-directory: app
+        run: echo "BUILD_VERSION = '${{ steps.ver.outputs.num }}'" > _buildver.py
 
       - name: 打包 .app（PyInstaller）
         working-directory: app
