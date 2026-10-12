@@ -6,7 +6,7 @@ APP_NAME = "型号查询"
 # 本地开发兜底号；发版构建时 CI 生成 app/_buildver.py（BUILD_VERSION = Release tag 号），
 # 下面 import 成功就用注入号覆盖——三平台 exe 的「关于」永远和 Release 版本同源。
 # 2026-10-12 用户定稿：版本号自动递增（_ci.py --dispatch 不带号 → 最新 tag patch+1）。
-APP_VERSION = "2.7.25"
+APP_VERSION = "2.7.26"
 try:
     from _buildver import BUILD_VERSION as APP_VERSION
 except ImportError:
