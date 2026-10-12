@@ -40,6 +40,70 @@ class ApiGetMixin:
         u = urllib.parse.urlparse(self.path)
         path = u.path
 
+        # ---------- 文案生成（2026-10-12，纯追加） ----------
+        if path == "/api/copy":
+            q = urllib.parse.parse_qs(u.query)
+            model = (q.get("model") or [""])[0].strip()
+            kind = (q.get("kind") or ["l"])[0]
+            force = (q.get("force") or ["0"])[0] in ("1", "true")
+            openfolder = (q.get("open") or ["0"])[0] in ("1", "true")
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            import copywriter
+            if openfolder:
+                # 打开图片文件夹（资源管理器）；目录不存在说明还没生成过
+                d = os.path.join(copywriter.copy_root(),
+                                 copywriter.norm_model(model) or model)
+                try:
+                    os.makedirs(d, exist_ok=True)
+                    os.startfile(d)  # noqa 仅 Windows 桌面端
+                    self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+                except Exception as e:
+                    self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+                return
+            try:
+                res = copywriter.generate(model, kind, force,
+                                          log=lambda s: state.LOG.append("[文案] " + s))
+                self._send(200, json.dumps(res, ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": "文案生成失败：%s" % e,
+                                            "titles": [], "points": [], "desc": "", "xhs": [],
+                                            "images": []}, ensure_ascii=False))
+            return
+
+        if path.startswith("/copyimg/"):
+            # 文案配图（copy/<型号>/img_NN.jpg）：路径穿越防护，只许读 copy 目录
+            import copywriter
+            core = urllib.parse.unquote(path[len("/copyimg/"):])
+            parts = core.split("/")
+            if (len(parts) != 2 or not all(parts)
+                    or ".." in parts[0] or ".." in parts[1] or "/" in parts[0] or "\\" in parts[0]
+                    or "/" in parts[1] or "\\" in parts[1]):
+                self._send(403, b"forbidden", "text/plain; charset=utf-8")
+                return
+            fp = os.path.join(copywriter.copy_root(), parts[0], parts[1])
+            root = os.path.abspath(copywriter.copy_root())
+            if not os.path.abspath(fp).startswith(root) or not os.path.isfile(fp):
+                self._send(404, b"not found", "text/plain; charset=utf-8")
+                return
+            ext = os.path.splitext(fp)[1].lower()
+            ctype = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                     ".webp": "image/webp"}.get(ext, "application/octet-stream")
+            with io.open(fp, "rb") as f:
+                raw = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "public, max-age=3600")
+            self.end_headers()
+            try:
+                self.wfile.write(raw)
+            except Exception:
+                pass
+            return
+        # ---------- 文案路由结束 ----------
+
         if path in ("/", "/index.html"):
             _tick("WebView 来取页面了")
             p = wp("index.html")

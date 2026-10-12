@@ -364,8 +364,11 @@ async function route(request, env, path, ctx) {
   }
 
   // ---------- 发布记录（云端，跟账号走，换电脑登录也在） ----------
-  // KV: pub_<u> = { 型号: {t: 标记时间戳ms, k: 'l'|'s' 正品/样机} }（旧客户端值是纯数字，兼容读取）
-  //     pubp_<u> = { 型号: 当时的闲鱼定价 }
+  // KV: pub_<u> = { 型号: {t, k, xys: { 闲鱼号: {t, k, p} } } }
+  //     2026-10-12 多闲鱼号：一个账号可能挂多个闲鱼号，各号各价 —— xys 里一号一条。
+  //     顶层 t/k = 最新一条的镜像（老客户端只看顶层，照常工作）。
+  //     pubp_<u> = { 型号: 当前价镜像 }（老客户端/手机端兼容用，新客户端主要看 xys.p）
+  const DEF_XY = "默认";
   const pubTs = (v) => (typeof v === "object" && v ? (+v.t || 0) : (+v || 0));
   async function getPub(u) {
     return getJSON(env, "pub_" + u, {});
@@ -373,25 +376,69 @@ async function route(request, env, path, ctx) {
   async function getPubP(u) {
     return getJSON(env, "pubp_" + u, {});
   }
+  // 顶层镜像重算：取 xys 里最新一条的 t/k/p
+  function markTop(m) {
+    let lt = 0, lk = "l", lp = null;
+    for (const e of Object.values(m.xys)) {
+      const tt = +e.t || 0;
+      if (tt >= lt) { lt = tt; lk = e.k === "s" ? "s" : "l"; lp = isFinite(+e.p) ? +e.p : null; }
+    }
+    m.t = lt || Date.now(); m.k = lk;
+    return m;
+  }
+  // 老格式（数字 / {t,k}）包上 xys，价从 pubp_ 带进默认号
+  function normMark(v, flatP) {
+    if (typeof v !== "object" || !v) v = { t: +v || Date.now(), k: "l" };
+    if (!v.xys || typeof v.xys !== "object") {
+      const d = { t: +v.t || Date.now(), k: v.k === "s" ? "s" : "l", p: isFinite(+flatP) ? +flatP : null };
+      v = { t: d.t, k: d.k, xys: { [DEF_XY]: d } };
+    }
+    return v;
+  }
+  async function getPubN(u) {
+    const m = await getPub(u), pp = await getPubP(u), out = {};
+    for (const [c, v] of Object.entries(m)) out[c] = normMark(v, pp[c]);
+    return out;
+  }
 
   // 自己的发布记录（带各自的闲鱼定价）
   if (path === "/pub" && request.method === "GET") {
-    return J({ ok: true, marks: await getPub(who), prices: await getPubP(who) });
+    return J({ ok: true, marks: await getPubN(who), prices: await getPubP(who) });
   }
-  // 标记/取消一条：{c: 型号, on: true/false, k: 'l'|'s', p: 闲鱼定价(可选)}
+  // 标记/取消一条：{c, on, k: 'l'|'s', p: 闲鱼定价(可选), xy: 闲鱼号(可选，缺省=默认)}
   if (path === "/pub" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     const c = safeKey(b.c, 100);                       // 审计（G1/S4）：长度上限 + 键名黑名单
     if (!c) return jerr("型号不能为空");
+    const xy = safeKey(b.xy, 24) || DEF_XY;
     const marks = await getPub(who);
     if (b.on === false) {
-      delete marks[c];
-      // 2026-10-10 新规矩：取消发布，定价一并清掉（旧的「价格跟型号走」作废）
-      const pp0 = await getPubP(who);
-      if (c in pp0) { delete pp0[c]; await env.KV.put("pubp_" + who, JSON.stringify(pp0)); }
+      const cur = marks[c];
+      // 指了号且还有多条 → 只删那一条；否则整条删（老客户端行为不变）
+      if (cur && typeof cur === "object" && cur.xys && Object.keys(cur.xys).length > 1 && cur.xys[xy]) {
+        delete cur.xys[xy];
+        markTop(cur);
+        marks[c] = cur;
+        // pubp_ 镜像跟到剩余最新一条的价（没价就删镜像）
+        const pp0 = await getPubP(who);
+        const rest = Object.values(cur.xys).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0] || null;
+        if (rest && isFinite(+rest.p)) pp0[c] = +rest.p;
+        else if (c in pp0) delete pp0[c];
+        await env.KV.put("pubp_" + who, JSON.stringify(pp0));
+      } else {
+        delete marks[c];
+        // 2026-10-10 新规矩：取消发布，定价一并清掉（旧的「价格跟型号走」作废）
+        const pp0 = await getPubP(who);
+        if (c in pp0) { delete pp0[c]; await env.KV.put("pubp_" + who, JSON.stringify(pp0)); }
+      }
     } else {
-      marks[c] = { t: Date.now(), k: b.k === "s" ? "s" : "l" };
-      if (b.p != null && isFinite(+b.p)) {
+      const now = Date.now();
+      const k = b.k === "s" ? "s" : "l";
+      const cur = normMark(marks[c], (await getPubP(who))[c]);
+      cur.xys[xy] = { t: now, k, p: isFinite(+b.p) ? +b.p : null };
+      markTop(cur);
+      marks[c] = cur;
+      if (isFinite(+b.p)) {
         const pp = await getPubP(who);
         pp[c] = +b.p;
         await env.KV.put("pubp_" + who, JSON.stringify(pp));
@@ -400,22 +447,60 @@ async function route(request, env, path, ctx) {
     await env.KV.put("pub_" + who, JSON.stringify(marks));
     return J({ ok: true });
   }
-  // 整包合并（登录后把本机旧记录并上云端）：{marks: {c: {t,k} | t}, prices: {c: 价}}
+  // 整包合并（登录后把本机旧记录并上云端）：{marks: {c: {t,k} | {t,k,xys}}, prices: {c: 价}, xyp: {c: {号: 价}}}
   if (path === "/pubsync" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     if (Array.isArray(b.prices)) return jerr("prices 格式错误（应为对象）");   // 审计：数组下标会被当型号
     const marks = await getPub(who);
+    const pp0 = await getPubP(who);
     const inc = b.marks && typeof b.marks === "object" && !Array.isArray(b.marks) ? b.marks : {};
+    let chM = false;
     for (const [c0, v] of Object.entries(inc)) {
       const c = safeKey(c0, 100);
       if (!c) continue;                                // 审计（S4）：脏键直接丢
-      const t = pubTs(v) || Date.now();
-      const k = typeof v === "object" && v ? (v.k === "s" ? "s" : "l") : "l";
-      if (!(c in marks) || pubTs(marks[c]) < t) marks[c] = { t, k };
+      if (v && typeof v === "object" && v.xys && typeof v.xys === "object" && Object.keys(v.xys).length) {
+        // 新客户端：逐号并（只新盖旧，不删云端已有号）
+        const cur = normMark(marks[c], pp0[c]);
+        for (const [x0, e] of Object.entries(v.xys)) {
+          const x = safeKey(x0, 24);
+          if (!x || !e || typeof e !== "object") continue;
+          if (!cur.xys[x] || (+cur.xys[x].t || 0) < (+e.t || 0))
+            cur.xys[x] = { t: +e.t || Date.now(), k: e.k === "s" ? "s" : "l", p: isFinite(+e.p) ? +e.p : null };
+        }
+        markTop(cur);
+        if (JSON.stringify(marks[c]) !== JSON.stringify(cur)) { marks[c] = cur; chM = true; }
+      } else {
+        // 老客户端：并进默认号
+        const t = pubTs(v) || Date.now();
+        const k = typeof v === "object" && v ? (v.k === "s" ? "s" : "l") : "l";
+        const cur = normMark(marks[c], pp0[c]);
+        const d = cur.xys[DEF_XY];
+        if (!d || (+d.t || 0) < t) {
+          cur.xys[DEF_XY] = { t, k, p: isFinite(+pp0[c]) ? +pp0[c] : null };
+          markTop(cur);
+          marks[c] = cur; chM = true;
+        }
+      }
     }
     // KV 省额度（2026-10-10）：只有真的并进来了发布标记才写 pub_——
     // 打价场景每次 /pubsync 只带 prices，pub_ 原来被无条件整包重写，白烧一倍写额度
-    if (Object.keys(inc).length) await env.KV.put("pub_" + who, JSON.stringify(marks));
+    if (chM) await env.KV.put("pub_" + who, JSON.stringify(marks));
+    // xyp 增量（2026-10-12 多闲鱼号）：改某号某型的价，只对已存在的标记改，不造新标记
+    if (b.xyp && typeof b.xyp === "object" && !Array.isArray(b.xyp)) {
+      let chX = false;
+      for (const [c0, xs] of Object.entries(b.xyp)) {
+        const c = safeKey(c0, 100);
+        if (!c || !xs || typeof xs !== "object" || Array.isArray(xs)) continue;
+        const cur = marks[c];
+        if (!cur || typeof cur !== "object" || !cur.xys) continue;
+        for (const [x0, p] of Object.entries(xs)) {
+          const x = safeKey(x0, 24);
+          if (!x || !cur.xys[x] || !isFinite(+p) || cur.xys[x].p === +p) continue;
+          cur.xys[x].p = +p; chX = true;
+        }
+      }
+      if (chX) await env.KV.put("pub_" + who, JSON.stringify(marks));
+    }
     if (b.prices && typeof b.prices === "object" && !Array.isArray(b.prices)) {
       const pp = await getPubP(who);
       for (const [c0, p] of Object.entries(b.prices)) {
@@ -426,7 +511,7 @@ async function route(request, env, path, ctx) {
       }
       await env.KV.put("pubp_" + who, JSON.stringify(pp));
     }
-    return J({ ok: true, marks, prices: await getPubP(who) });
+    return J({ ok: true, marks: await getPubN(who), prices: await getPubP(who) });
   }
   // 管理号看所有**子账号**各发布了什么（带各自的闲鱼定价；管理号自己不在这份名单里）
   if (path === "/puball" && request.method === "GET") {
@@ -436,7 +521,7 @@ async function route(request, env, path, ctx) {
     const out = {}, prices = {};
     for (const u of Object.keys(users)) {
       if (users[u].role === "admin") continue;
-      out[u] = await getPub(u);
+      out[u] = await getPubN(u);
       prices[u] = await getPubP(u);
     }
     return J({ ok: true, all: out, prices });
@@ -460,9 +545,16 @@ async function route(request, env, path, ctx) {
   }
 
   // ---------- 补图上云（所有人共享：谁补的大家都能看到） ----------
-  // KV: myimgs = { 卡片key: dataURL }；单图压到 220px JPEG（~20KB），总量超 18MB 拒收
+  // KV: myimgs = { 卡片key: {b: dataURL, by: 补图人|'sys'(整库灌入)|'__legacy__'(旧数据)} }
+  // 2026-10-12 加归属：公共池合并拉下来后人人本地都有，原来 × 谁都能点、谁都能删别人的图。
   async function getMyImgs(env) {
-    return getJSON(env, "myimgs", {});
+    const raw = await getJSON(env, "myimgs", {});
+    const out = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (typeof v === "string") out[k] = { b: v, by: "__legacy__" };   // 旧格式兜一层
+      else if (v && typeof v === "object" && v.b) out[k] = { b: v.b, by: v.by || "__legacy__" };
+    }
+    return out;
   }
   if (path === "/myimgs" && request.method === "GET") {
     return J({ ok: true, imgs: await getMyImgs(env) });
@@ -473,7 +565,7 @@ async function route(request, env, path, ctx) {
     if (!c || !b.b64) return jerr("参数不全");
     if (String(b.b64).length > 400000) return jerr("图太大，压一压再传");
     const imgs = await getMyImgs(env);
-    imgs[c] = String(b.b64);
+    imgs[c] = { b: String(b.b64), by: who };           // 归属 = 上传人（服务端定，不信客户端）
     const total = JSON.stringify(imgs).length;
     if (total > 24000000) return jerr("云端补图库满了（" + Math.round(total/1048576) + "MB），清理后再传");
     await env.KV.put("myimgs", JSON.stringify(imgs));
@@ -484,8 +576,15 @@ async function route(request, env, path, ctx) {
     const c = safeKey(b.c, 100);
     if (!c) return jerr("型号不能为空");
     const imgs = await getMyImgs(env);
-    delete imgs[c];
-    await env.KV.put("myimgs", JSON.stringify(imgs));
+    const e = imgs[c];
+    if (e) {
+      // 2026-10-12 权限：子账号只能删自己补的；管理号除 sys 整库图外都能删
+      const users = await getUsers(env);
+      const isAdmin = !!(users[who] && users[who].role === "admin");
+      if (e.by !== who && !(isAdmin && e.by !== "sys")) return jerr("只能删自己补的图", 403);
+      delete imgs[c];
+      await env.KV.put("myimgs", JSON.stringify(imgs));
+    }
     return J({ ok: true });
   }
   // 整库一次性上云（2026-10-12）：管理号把本地 payload 图库全量灌进 myimgs。
@@ -504,7 +603,7 @@ async function route(request, env, path, ctx) {
       const v = inc[c0];
       if (!c || typeof v !== "string" || !v.startsWith("data:image/")) continue;
       if (v.length > 400000) continue;
-      imgs[c] = v; n++;
+      imgs[c] = { b: v, by: "sys" }; n++;              // 整库灌入的标 sys，谁都不能在前端删
     }
     const total = JSON.stringify(imgs).length;
     if (total > 24000000) return jerr("整库太大（" + Math.round(total / 1048576) + "MB），超 KV 单值上限");
