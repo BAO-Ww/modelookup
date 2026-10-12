@@ -190,7 +190,7 @@ def build_mpayload(files_b64, log):
         from config import CLEAN_XLSX, PRICE_XLSX
         recs, month = [], ""
         for name in (CLEAN_XLSX, PRICE_XLSX):
-            p = os.path.join(work, name)
+            p = os.path.join(wd, name)
             if not os.path.isfile(p):
                 continue
             r, mo = P.load_records_from_path(p)
