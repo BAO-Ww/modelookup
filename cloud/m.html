@@ -11,7 +11,7 @@
   #phone { width:100%; max-width:430px; min-height:100vh; background:#f2f4f8; box-shadow:0 0 40px rgba(0,0,0,.18); position:relative; padding-bottom:58px; }
 
   /* ===== 登录页 ===== */
-  #login { position:absolute; inset:0; z-index:50; background:linear-gradient(180deg,#2e6be6,#2760d2 55%,#f2f4f8); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:0 34px; }
+  #login { position:absolute; inset:0; z-index:50; background:linear-gradient(180deg,#2e6be6,#2760d2 55%,#f2f4f8); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:calc(20px + env(safe-area-inset-top)) 34px calc(20px + env(safe-area-inset-bottom)); }
   #login .lg { color:#fff; font-size:22px; font-weight:700; letter-spacing:2px; margin-bottom:6px; }
   #login .sub { color:rgba(255,255,255,.75); font-size:12px; margin-bottom:30px; }
   #login input { width:100%; border:none; outline:none; border-radius:10px; padding:12px 14px; font-size:15px; margin-bottom:12px; background:#fff; }
@@ -19,7 +19,7 @@
   #login .err { color:#ffd2d2; font-size:12px; min-height:18px; margin-top:8px; text-align:center; }
 
   /* ===== 顶栏 ===== */
-  #top { position:sticky; top:0; z-index:20; background:linear-gradient(180deg,#2e6be6,#2760d2); color:#fff; padding:9px 12px 8px; }
+  #top { position:sticky; top:0; z-index:20; background:linear-gradient(180deg,#2e6be6,#2760d2); color:#fff; padding:calc(9px + env(safe-area-inset-top)) 12px 8px; }
   #top h1 { font-size:14px; font-weight:600; display:flex; justify-content:space-between; align-items:baseline; margin-bottom:7px; }
   #top h1 small { font-size:10px; font-weight:400; opacity:.72; }
   #top h1 .out { color:#cfe0ff; text-decoration:underline; font-size:11px; }

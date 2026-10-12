@@ -96,11 +96,32 @@ def patch_gradle(adir, store_pass):
     print("build.gradle patched (signingConfig -> mlrelease, replaced=%d)" % n1)
 
 
+def patch_styles(adir):
+    """状态栏染成商务蓝 #2e6be6（2026-10-12 用户截图反馈顶部白条违和）。
+    幂等：已含 statusBarColor 就跳过。"""
+    sp = os.path.join(adir, "app", "src", "main", "res", "values", "styles.xml")
+    if not os.path.isfile(sp):
+        print("styles.xml not found, skip statusbar patch")
+        return
+    src = io.open(sp, encoding="utf-8").read()
+    if "statusBarColor" in src:
+        print("styles.xml already patched, skip")
+        return
+    new, n = re.subn(r"(<style\s+[^>]*AppTheme\.NoActionBar[^>]*>)",
+                     r'\1\n        <item name="android:statusBarColor">#2E6BE6</item>', src)
+    if n == 0:
+        print("AppTheme.NoActionBar style not found, skip statusbar patch")
+        return
+    io.open(sp, "w", encoding="utf-8", newline="\n").write(new)
+    print("styles.xml patched (statusBarColor=#2E6BE6)")
+
+
 def main():
     adir = sys.argv[1] if len(sys.argv) > 1 else "android"
     store_pass = os.environ.get("ML_KS_PASS") or DEFAULT_PASS
     ensure_keystore(adir, store_pass)
     patch_gradle(adir, store_pass)
+    patch_styles(adir)
 
 
 if __name__ == "__main__":
