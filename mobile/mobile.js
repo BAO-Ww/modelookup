@@ -12,18 +12,105 @@
 "use strict";
 
 /* ---------- ① /api/* 本地服务合成 ---------- */
+/* 库存（2026-10-11 实机反馈"全部商品都报错"根治）：
+   桌面版的用友库存是本地服务从云端 /stockcloud 拉回来再经 /api/stock 喂前端；
+   手机上没有本地服务，曾合成 ok:false → 库存全空 → 没库存/亏损提醒全按兜底口径误报。
+   现改为手机端直连云端 /stockcloud（管理号共享的用友实时数据，~0.4MB），
+   拉到后按桌面同款形状 {ok,ts,rows,stock,sbc} 喂给模板，口径一份不抄。
+   拉取失败静默兜底（同桌面"库存还没拉过"的口径），绝不弹错误。 */
+var _stockCache = null, _stockAt = 0, _stockP = null, _stockTimedOut = false;
+var STOCK_TTL = 10 * 60000;                     // 缓存 10 分钟
+/* 云端请求（模板的 authFetch 在 IIFE 里拿不到，自带一份同款：双主机轮试 + X-Token） */
+var ML_HOSTS = ['https://auth.baozang.kdns.fr', 'https://modelookup-auth.bao3053.workers.dev'];
+function mlCloud(path){
+  var token = null;
+  try { var a = JSON.parse(localStorage.getItem('ml_auth') || 'null'); token = a && a.token; } catch(e){}
+  var hosts = [localStorage.getItem('ml_auth_host') || ML_HOSTS[0]];
+  ML_HOSTS.forEach(function(h){ if (hosts.indexOf(h) < 0) hosts.push(h); });
+  function tryOne(i){
+    if (i >= hosts.length) return Promise.resolve(null);
+    var opt = { headers: {} };
+    if (token) opt.headers['X-Token'] = token;
+    return _origFetch(hosts[i] + path, opt).then(function(r){
+      try { localStorage.setItem('ml_auth_host', hosts[i]); } catch(e){}
+      return r.json();
+    }).then(function(j){ return (j && j._st === undefined) ? j : j; })
+      .catch(function(){ return tryOne(i + 1); });
+  }
+  return tryOne(0);
+}
+function mlCloudStock(){
+  if (_stockCache && Date.now() - _stockAt < STOCK_TTL) return Promise.resolve(_stockCache);
+  if (_stockP) return _stockP;
+  _stockP = new Promise(function(res){
+    var done = false;
+    function finish(v){
+      if (done) return; done = true; _stockP = null; res(v || null);
+    }
+    var timer = setTimeout(function(){ _stockTimedOut = true; finish(null); }, 15000);  // 15s 超时：绝不让启动链路挂着
+    mlCloud('/stockcloud').then(function(j){
+      clearTimeout(timer);
+      if (j && j.ok && j.stock && Object.keys(j.stock).length){
+        _stockCache = { ok:true, ts:j.ts||'', rows:j.rows||0, stock:j.stock, sbc:j.sbc||null };
+        _stockAt = Date.now();
+        try { window.STOCKDATA = _stockCache; } catch(e){}
+        finish(_stockCache);      /* 晚到场景由 rev bump → 模板原生 reloadAll 兜住，无需手动重启 */
+      } else finish(null);
+    }).catch(function(){ clearTimeout(timer); finish(null); });
+  });
+  return _stockP;
+}
+var _booted = false;                            // 模板 start() 是否已跑过（晚到库存要重启渲染）
+function mlStockFake(){
+  return mlCloudStock().then(function(s){ return s || { ok:false, msg:'' }; });
+}
+/* rev 机制：库存到位后 bump，模板原生 /api/state 轮询发现 rev 变了会走
+   reloadAll() → fetch /api/data + /api/stock（都被本拦截层合成）→
+   内部 STOCKDATA 正确赋值 + start() 重渲染 —— 全程走模板自己的路径，零侵入 */
+/* 拆分版数据源（在线预览用，2026-10-11）：页面秒开，rows 先到先渲染，
+   imgs.json 后台跟上后再 bump rev 带图重渲染。APK 单文件版 payload 直接内联在
+   window.__ML_PAYLOAD，走同一入口零分支。 */
+var _plP = null;
+function mlPayload(){
+  if (window.__ML_PAYLOAD) return Promise.resolve(window.__ML_PAYLOAD);
+  if (_plP) return _plP;
+  _plP = _origFetch('data/rows.json', { cache: 'no-cache' }).then(function(r){
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function(j){
+    j.imgs = window.__ML_IMGS || {};              // 图还没到就先无图渲染
+    window.__ML_PAYLOAD = j;
+    return j;
+  });
+  return _plP;
+}
+/* 图库后台预取：到了就补进 payload；页面已启动则 bump rev 触发带图重渲染 */
+(function(){
+  function go(){
+    _origFetch('data/imgs.json', { cache: 'no-cache' }).then(function(r){
+      return r.ok ? r.json() : null;
+    }).then(function(j){
+      if (!j || !j.imgs) return;
+      window.__ML_IMGS = j.imgs;
+      if (window.__ML_PAYLOAD){ window.__ML_PAYLOAD.imgs = j.imgs; window.__ML_REV = (window.__ML_REV || 0) + 1; }
+    }).catch(function(){});
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go);
+  else setTimeout(go, 0);
+})();
 var FAKE = {
-  '/api/state':     function(){ return { status:'done', rev:0, built:'', price_at:'', stock_at:'', alert_ts:0, alert_msg:'', log:[] }; },
+  '/api/state':     function(){ return { status:'done', rev: window.__ML_REV || 0, built:'', price_at:'', stock_at:(window.STOCKDATA&&window.STOCKDATA.ts)||'', alert_ts:0, alert_msg:'', log:[] }; },
+  '/api/data':      function(){ return mlPayload(); },
   '/api/token':     function(){ return { token:null }; },
   '/api/perm':      function(){ return { ok:true }; },
-  '/api/stock':     function(){ return { ok:false, msg:'样机暂不带用友实时库存（正式版从云端拉）' }; },
+  '/api/stock':     mlStockFake,
   '/api/appcheck':  function(){ return { ok:false, msg:'手机版无需软件更新' }; },
   '/api/appinstall':function(){ return { ok:false, msg:'手机版无需软件更新' }; },
   '/api/updateall': function(){ return { ok:false, running:false, msg:'手机版不触发云端更新（数据自动跟随云端）' }; },
   '/api/update':    function(){ return { ok:false, running:false, msg:'手机版不触发云端更新' }; },
   '/api/cancel':    function(){ return { ok:true }; },
   '/api/focus':     function(){ return { ok:true }; },
-  '/api/ping':      function(){ return { app:'modelookup-mobile', ver:'0.0.0' }; }
+  '/api/ping':      function(){ return { app:'modelookup-mobile', ver:'m1.3' }; }
 };
 var _origFetch = window.fetch;
 window.fetch = function(u){
@@ -32,10 +119,13 @@ window.fetch = function(u){
     if (path.charAt(0) === '/' && path.indexOf('/api/') === 0){
       for (var k in FAKE){
         if (path === k || path.indexOf(k + '?') === 0 || path.indexOf(k) === 0){
-          var body = JSON.stringify(FAKE[k]());
-          return Promise.resolve(new Response(body, {
-            status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' }
-          }));
+          var out;
+          try { out = FAKE[k](); } catch(e){ out = { ok:false, msg:'' }; }
+          return Promise.resolve(out).then(function(v){
+            return new Response(JSON.stringify(v), {
+              status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' }
+            });
+          });
         }
       }
     }
@@ -68,7 +158,7 @@ if (document.readyState === 'loading'){
    横幅节点（pubwarn/yyalert/lossalert）整节点搬进「消息」页——
    模板后续 innerHTML 更新与 close 事件仍作用在同一节点上，零侵入。
    ============================================================ */
-var ML_VER = 'm1.2';
+var ML_VER = 'm1.3';
 var ML_ICONS = {
   home: '<svg viewBox="0 0 24 24" fill="none"><path d="M4 11.2 12 4l8 7.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.5 10.5V20h11v-9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   msg:  '<svg viewBox="0 0 24 24" fill="none"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.6 3.6V17H6.5A2.5 2.5 0 0 1 4 14.5v-8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
@@ -169,12 +259,14 @@ function initTabs(){
     fbtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16l-6.2 7.4V19l-3.6-2v-4.6L4 5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><em id="ml-filtercnt" hidden></em>';
     fbtn.addEventListener('click', mlDrawerOpen);
     sb.appendChild(fbtn);
-    setInterval(function(){ mlFilterCnt(); mlSyncSeg(); }, 1000);
+    setInterval(function(){ mlFilterCnt(); mlSyncSeg(); mlHeaderH(); }, 1000);
   }
+  mlHeaderH();
 
-  /* -- 消息视图：横幅整节点搬入 -- */
+  /* -- 消息视图：子页头（返回按钮）+ 横幅整节点搬入 -- */
   var msg = document.createElement('div');
   msg.id = 'view-msg'; msg.className = 'ml-view'; msg.hidden = true;
+  msg.appendChild(mlSubhead('消息'));
   var empty = document.createElement('div');
   empty.className = 'ml-empty'; empty.id = 'ml-msg-empty';
   empty.innerHTML = '暂无消息<br><span style="font-size:12px">亏损提醒 / 没库存提醒 / 用友告警会出现在这里</span>';
@@ -187,6 +279,10 @@ function initTabs(){
   /* -- 我的视图 -- */
   var me = document.createElement('div');
   me.id = 'view-me'; me.className = 'ml-view'; me.hidden = true;
+  me.appendChild(mlSubhead('我的'));
+  var meBody = document.createElement('div');
+  meBody.id = 'ml-me-body';
+  me.appendChild(meBody);
 
   /* -- tabbar -- */
   var nav = document.createElement('nav');
@@ -223,6 +319,16 @@ function mlDrawerOpen(){
   document.body.classList.add('ml-drawer-open');
   if (ML_STATE !== 'drawer'){ ML_STATE = 'drawer'; mlGuardPush(); }
 }
+/* 子页头（消息/我的）：左上角返回按钮 —— 2026-10-11 实机反馈"界面没有返回功能" */
+function mlSubhead(title){
+  var h = document.createElement('div');
+  h.className = 'ml-subhead';
+  h.innerHTML = '<button class="ml-back" aria-label="返回首页">'
+    + '<svg viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    + '</button><b>' + mlEscape(title) + '</b>';
+  h.querySelector('.ml-back').addEventListener('click', function(){ mlSwitchTab('home'); });
+  return h;
+}
 function mlDrawerClose(){
   document.body.classList.remove('ml-drawer-open');
   if (ML_STATE === 'drawer') ML_STATE = '';
@@ -252,6 +358,14 @@ function mlSyncSeg(){
     if (sh) sh.classList.toggle('on', real.classList.contains('on'));
   });
 }
+
+/* 顶栏实测高度 → CSS 变量 --ml-hh（列表让位用；写死会压住首行，2026-10-11 实机反馈） */
+function mlHeaderH(){
+  var h = document.getElementById('ml-header');
+  if (!h) return;
+  document.documentElement.style.setProperty('--ml-hh', h.offsetHeight + 'px');
+}
+window.addEventListener('resize', mlHeaderH);
 
 /* ---------- 安卓返回键：抽屉开→关抽屉；消息/我的→回首页；再按才退出 ---------- */
 var ML_STATE = '';                       // '' | 'drawer' | 'msg' | 'me'
@@ -287,8 +401,13 @@ function mlRenderMe(){
     var el = document.querySelector('.sidecount .mt b');
     built = el ? el.textContent : '';
   } catch(e){}
+  var stockTs = '';
+  try { stockTs = (window.STOCKDATA && window.STOCKDATA.ts) || (_stockCache && _stockCache.ts) || ''; } catch(e){}
+  var stockTxt = stockTs ? ('云端实时 · ' + stockTs) : '拉取中…';
   var roleTxt = !a ? '未登录' : (a.role === 'admin' ? '管理员' : '子账号');
-  me.innerHTML =
+  var meBody = document.getElementById('ml-me-body');
+  if (!meBody) return;                                   // initTabs 未就绪
+  meBody.innerHTML =
     '<div class="ml-card"><h4>账号</h4>'
     + '<div class="ml-kv"><span>当前账号</span><b>' + (a ? mlEscape(a.u) : '未登录') + '</b></div>'
     + '<div class="ml-kv"><span>身份</span><b>' + roleTxt + '</b></div>'
@@ -297,6 +416,7 @@ function mlRenderMe(){
     + '<div class="ml-card"><h4>我的数据</h4>'
     + '<div class="ml-kv"><span>已发布</span><b>' + markedN + ' 个型号</b></div>'
     + '<div class="ml-kv"><span>库内型号</span><b>' + allN + ' 个</b></div>'
+    + '<div class="ml-kv"><span>实时库存</span><b>' + mlEscape(stockTxt) + '</b></div>'
     + '<div class="ml-kv"><span>数据快照</span><b>' + mlEscape(built || '见首页侧栏') + '</b></div>'
     + '<div class="ml-kv"><span>App 版本</span><b>' + ML_VER + '</b></div>'
     + '</div>'
@@ -332,4 +452,28 @@ if (document.readyState === 'loading'){
   setTimeout(initTabs, 300);
 }
 [1200, 3000, 6000].forEach(function(ms){ setTimeout(initTabs, ms); });
+
+/* ---------- 云端实时库存（2026-10-11 实机"全部商品报错"根治） ----------
+   内联 DATA 的启动分支不会调 /api/stock（那是桌面 exe 无 DATA 时的路径），
+   所以手机版启动完成后主动从云端 /stockcloud 拉管理号共享的用友实时库存，
+   拉到后 bump rev → 模板原生轮询发现 → reloadAll() → 拦截层喂
+   /api/data（payload）+ /api/stock（库存）→ 内部 STOCKDATA 正确赋值并重渲染。
+   失败静默（兜底口径），绝不弹错误。 */
+(function(){
+  var waited = 0, _revBumped = false;
+  var t = setInterval(function(){
+    waited += 500;
+    var booted = false;
+    try { booted = !!(window.__ML && window.__ML.ALL && window.__ML.ALL.length); } catch(e){}
+    if (booted){
+      clearInterval(t);
+      mlCloudStock().then(function(s){
+        if (s && !_revBumped){
+          _revBumped = true;
+          window.__ML_REV = 1;               // 模板下轮 /api/state 轮询自己会刷新
+        }
+      });
+    } else if (waited > 60000){ clearInterval(t); }
+  }, 500);
+})();
 })();

@@ -49,8 +49,8 @@ body{
 .yyalert b{color:#912018}
 .yyalert .close{margin-left:auto;border:0;background:none;color:#b42318;font-size:16px;cursor:pointer;padding:0 4px;line-height:1}
 /* 亏钱哨兵（2026-10-10）：已发布型号按选定口径算要亏了 → 黄条提醒 */
-.lossalert{background:#fff7e6;border-color:#ffd591;color:#ad6800}
-.lossalert b{color:#874d00}
+.lossalert{background:#fff7e6;border-color:#ffd591;color:#ad6800;flex-wrap:wrap;row-gap:4px}
+.lossalert b{color:#874d00;white-space:normal}
 .lossalert .lchip{color:#ad6800;font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
 .lossalert .close{margin-left:auto;border:0;background:none;color:#ad6800;font-size:16px;cursor:pointer;padding:0 4px;line-height:1}
 .mains{flex:1;min-width:0}
@@ -3190,6 +3190,19 @@ function pubStockWarn(){
   Object.keys(marks).forEach(function(c){
     var m = marks[c]; if (!m) return;
     var it = itemOf(c);
+    /* 2026-10-11 用户：发布口径选的是 HM夏 货源（多货源卡里选「价格含税（HM夏）」）→
+       成本走 HM夏 不吃用友库存，用友里那条物料编码没货不算数，不报没库存 */
+    var _opts = it ? costOptions(it) : [];
+    if (_opts.length){
+      var _pick = _opts[0];
+      var _cs = COSTSEL[c];
+      if (_cs && _opts.length > 1){
+        for (var _oi = 0; _oi < _opts.length; _oi++){
+          if (_opts[_oi].l === _cs.l && String(_opts[_oi].v) === String(_cs.v)){ _pick = _opts[_oi]; break; }
+        }
+      }
+      if (_pick && String(_pick.l).indexOf('HM夏') >= 0) return;
+    }
     var kind = m.k || (it && it.k === 's' ? 's' : 'l');
     var left = pubLeftOf((it && it.mo) || c, kind, it ? nameOf(it) : '', it ? it.code : '');   // 用型号查库存，别用记录键（变体码查不到）
     if (left <= 0) lost.push(c + '（' + (kind === 's' ? '样机' : '正品') + '）');
