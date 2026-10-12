@@ -57,8 +57,18 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($v)) {
             if ("${{ github.ref }}" -like 'refs/tags/*') {
               $v = "${{ github.ref_name }}"
+            } elseif ("${{ github.event_name }}" -eq 'push' -and "${{ github.ref }}" -eq 'refs/heads/main') {
+              # 2026-10-12 用户定稿：push 到 main = 自动发版，版本号取最新 v* tag patch+1
+              $tags = gh api "repos/${{ github.repository }}/tags?per_page=30" | ConvertFrom-Json
+              $latest = $null
+              foreach ($t in $tags) { if ($t.name -match '^v[\d.]+$') { $latest = $t.name; break } }
+              if (-not $latest) { throw "仓库还没有 v* tag，首次请手动 --dispatch 指定版本" }
+              $parts = $latest.Substring(1).Split('.')
+              $parts[-1] = [string]([int]$parts[-1] + 1)
+              $v = "v" + ($parts -join '.')
+              Write-Host "push 自动发版：$latest → $v"
             } else {
-              $v = ""          # 分支构建 → 不发 Release
+              $v = ""          # 其他分支 → 不发 Release
             }
           }
           if (-not [string]::IsNullOrWhiteSpace($v) -and $v -notmatch '^v') { $v = "v$v" }
@@ -210,6 +220,15 @@ jobs:
           if [ -z "$(echo "$v" | tr -d '[:space:]')" ]; then
             case "${{ github.ref }}" in
               refs/tags/*) v="${GITHUB_REF_NAME}" ;;
+              refs/heads/main)
+                if [ "${{ github.event_name }}" = "push" ]; then
+                  # 2026-10-12 用户定稿：push 到 main = 自动发版，版本号取最新 v* tag patch+1
+                  latest=$(gh api "repos/${{ github.repository }}/tags?per_page=30" --jq '[.[].name | select(test("^v[0-9.]+$"))][0]')
+                  if [ -z "$latest" ]; then echo "仓库还没有 v* tag，首次请手动 --dispatch 指定版本" >&2; exit 1; fi
+                  v=$(echo "$latest" | awk -F. -v OFS=. '{ $NF = $NF + 1; print }')
+                  echo "push 自动发版：$latest → $v"
+                fi
+                ;;
               *) v="" ;;
             esac
           fi
@@ -328,6 +347,15 @@ jobs:
           if [ -z "$(echo "$v" | tr -d '[:space:]')" ]; then
             case "${{ github.ref }}" in
               refs/tags/*) v="${GITHUB_REF_NAME}" ;;
+              refs/heads/main)
+                if [ "${{ github.event_name }}" = "push" ]; then
+                  # 2026-10-12 用户定稿：push 到 main = 自动发版，版本号取最新 v* tag patch+1
+                  latest=$(gh api "repos/${{ github.repository }}/tags?per_page=30" --jq '[.[].name | select(test("^v[0-9.]+$"))][0]')
+                  if [ -z "$latest" ]; then echo "仓库还没有 v* tag，首次请手动 --dispatch 指定版本" >&2; exit 1; fi
+                  v=$(echo "$latest" | awk -F. -v OFS=. '{ $NF = $NF + 1; print }')
+                  echo "push 自动发版：$latest → $v"
+                fi
+                ;;
               *) v="" ;;
             esac
           fi
