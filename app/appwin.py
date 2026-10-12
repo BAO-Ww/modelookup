@@ -159,6 +159,17 @@ def build_menu(sub=False):
     """sub=True 返回子账号的精简菜单（只有 账号管理/退出登录，用户要求）。"""
     from webview.menu import Menu, MenuAction, MenuSeparator
 
+    # 2026-10-12：&助记符是 Windows 惯例，Mac 菜单栏不认，会把「数据(&D)」原样
+    # 显示出字面量 &。darwin 下包一层把 & 剥掉；Windows 路径零变化。
+    if sys.platform == "darwin":
+        _Menu, _MenuAction = Menu, MenuAction
+
+        def Menu(label, items):                      # noqa: F811
+            return _Menu(str(label).replace("&", ""), items)
+
+        def MenuAction(label, *a, **kw):             # noqa: F811
+            return _MenuAction(str(label).replace("&", ""), *a, **kw)
+
     def guarded(name, need):
         """菜单点按先过权限：不满足就弹提示（菜单是原生建的，创建后没法动态藏，
         所以用「点了没权限就拦」的方式，效果一样——子账号点不动）。"""

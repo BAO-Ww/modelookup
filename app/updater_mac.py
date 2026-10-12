@@ -78,6 +78,12 @@ def _app_install_bg(log):
         if got < 1048576:
             state.set_state("error", "更新包下载不完整（%d 字节），重试一次" % got)
             return
+        # 2026-10-12：appcheck 返回的是 Release 资产真实大小，对账防半截包（64KB 容差）
+        exp = int(j.get("size") or 0)
+        if exp and abs(got - exp) > 65536:
+            state.set_state("error", "更新包不完整（收到 %.1f MB / 应为 %.1f MB），重试一次"
+                            % (got / 1048576.0, exp / 1048576.0))
+            return
         log("自更新(Mac)：下载完成（%.1f MB），解压校验…" % (got / 1048576.0))
         state.set_state("running", "正在解压新版本…")
         rc = subprocess.run(["/usr/bin/ditto", "-x", "-k", zipf, work],
@@ -90,11 +96,15 @@ def _app_install_bg(log):
         state.set_state("running", "下载完成，软件将自动关闭并换成新版，装完会自动重新打开…")
 
         # ---- 帮助脚本（独立 bash，detach；步骤逐条留痕 apply.log，失败可查断点）
+        # 2026-10-12 排雷①「先删后装」→「先挪后装」：mv 旧包为 .old（原子改名，
+        # app 任何时刻都在磁盘上）→ ditto 新包 → 校验 Contents/MacOS 在位 →
+        # 成功才清 .old；ditto 失败则回滚 .old 并照常 open 旧版，更新永不搬空 app。
         sh = os.path.join(work, "apply.sh")
 
         def _q(p):
             return '"' + p.replace('"', '\\"') + '"'
 
+        old_app = dst_app + ".old"
         lines = [
             "#!/bin/bash",
             "LOG=%s" % _q(os.path.join(work, "apply.log")),
@@ -104,13 +114,27 @@ def _app_install_bg(log):
             "pkill -f %s; echo \"pkill rc=$?\" >> \"$LOG\""
             % _q(APP_ID + ".app/Contents/MacOS/" + APP_ID),
             "sleep 1",
-            "rm -rf %s; echo \"rm rc=$?\" >> \"$LOG\"" % _q(dst_app),
+            # 清掉上一次失败可能残留的备份（只动备份，不碰活着的 app）
+            "rm -rf %s; echo \"rmold rc=$?\" >> \"$LOG\"" % _q(old_app),
+            # 原子改名让位：旧包整体挪成 .old，此时 app 文件一个没少
+            "mv %s %s; echo \"mv rc=$?\" >> \"$LOG\"" % (_q(dst_app), _q(old_app)),
             "ditto %s %s; echo \"ditto rc=$?\" >> \"$LOG\"" % (_q(new_app), _q(dst_app)),
+            # 装好判据：新包 Contents/MacOS 目录在位才算成功（显式 / 拼接，不依赖 os.path）
+            'if [ -d %s ]; then'
+            ' rm -rf %s; echo "install ok, backup cleaned" >> "$LOG";'
+            ' else'
+            ' rm -rf %s; mv %s %s; echo "ditto FAILED, rolled back to old" >> "$LOG";'
+            ' fi'
+            % (_q(dst_app + "/Contents/MacOS"),
+               _q(old_app),
+               _q(dst_app), _q(old_app), _q(dst_app)),
             "xattr -cr %s 2>> \"$LOG\"" % _q(dst_app),
             "/usr/bin/open %s >> \"$LOG\" 2>&1" % _q(dst_app),
             'echo "done $(date)" >> "$LOG"',
         ]
-        with io.open(sh, "w", encoding="ascii", errors="ignore") as f:
+        # 2026-10-12 排雷②：原 ascii+ignore 写法会把路径里的中文静默吞掉，
+        # 脚本将操作错误路径。macOS/bash 原生 UTF-8，直接按 UTF-8 写。
+        with io.open(sh, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
         os.chmod(sh, 0o755)
         # start_new_session：帮助进程脱离本进程会话，os._exit 后照常存活
