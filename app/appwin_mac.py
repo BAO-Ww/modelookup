@@ -25,7 +25,7 @@ from appwin import auto_updater, build_menu, yy_alert_loop    # 跨平台复用
 from config import APP_NAME, HOST
 from paths import is_frozen, wp
 from state import _tick, set_state
-from updater import do_update, xlsx_follower
+from updater import do_update, xinsheng_follower, xlsx_follower
 
 _PLIST_LABEL = "cn.baozang.modelookup"
 
@@ -185,6 +185,7 @@ def run_app(httpd, port, startup_xlsx=None):
     # 定时跟随线程（与 Windows 版完全同一套）
     threading.Thread(target=auto_updater, daemon=True).start()
     threading.Thread(target=xlsx_follower, daemon=True).start()
+    threading.Thread(target=xinsheng_follower, daemon=True).start()   # 欣盛商城月度同步（官方售价/补图）
     threading.Thread(target=yy_alert_loop, daemon=True).start()
 
     def on_login_closed():

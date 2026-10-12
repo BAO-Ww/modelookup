@@ -18,7 +18,7 @@ from config import APP_NAME, APP_VERSION, HOST, ONLINE_SHARE, PRICE_SHARE, RUN_K
 from paths import is_frozen, rp, wp
 from payload import get_payload
 from state import _tick, has_perm, read_state, set_state
-from updater import do_update, xlsx_follower
+from updater import do_update, xinsheng_follower, xlsx_follower
 
 
 def _dpi():
@@ -438,6 +438,7 @@ def run_app(httpd, port, startup_xlsx=None):
     threading.Thread(target=auto_updater, daemon=True).start()
     # 云端表格跟随（GitHub Actions 定时拉金山传云端 → 本机 60 秒轻探自动重建）
     threading.Thread(target=xlsx_follower, daemon=True).start()
+    threading.Thread(target=xinsheng_follower, daemon=True).start()   # 欣盛商城月度同步（官方售价/补图）
     threading.Thread(target=yy_alert_loop, daemon=True).start()   # 管理号轮询用友告警
 
     def on_login_closed():
