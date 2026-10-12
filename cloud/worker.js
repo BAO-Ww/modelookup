@@ -184,6 +184,9 @@ export default {
 };
 
 async function route(request, env, path, ctx) {
+  // 2026-10-12 修复：/appcheck /appdl 用 url.searchParams 取 ?plat=，但 url 从未在
+  // route() 作用域定义（它定义在外层 fetch 里）→ 检查更新必抛「url is not defined」
+  const url = new URL(request.url);
   // ---------- 首次初始化 ----------
   if (path === "/init" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
