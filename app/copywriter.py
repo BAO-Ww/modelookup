@@ -366,10 +366,15 @@ PROMPT = """你是闲鱼/小红书家电卖家文案写手。产品：{pname}（
    全新未拆封 {brand} 226L 三门冰箱 风冷无霜 {model} 原厂正品联保
    {brand}三门冰箱 226L 风冷无霜 {model} 全新原封全国联保
    {kk_titles}
-3) points：正好3条卖点短句，每条≤16字，直接陈述、不带序号、结尾不带句号，参考口吻：「运行噪音仅34dB(A)，静音不扰眠」「风冷无霜，免手动除霜」。
-4) xhs：正好5组，每组是 {{"t":"标题","txt":"配文"}} 两个键。t：小红书标题≤20字、可带emoji、但绝对不能带#话题；txt：80-150字小红书口吻配文，必须分成2-3个自然段（每段以一个emoji开头，如 ✨/🧊/💪），txt 末尾另起一行带3-6个#话题（如 #海尔 #冰箱 #家电分享）——#话题只能出现在 txt 末尾，绝不放进 t；5组必须是5个不同角度（价格惊喜/成色/功能亮点/使用场景/情绪共鸣），禁止同一句换emoji充数。
+3) points：正好8-10条加厚卖点（宁可写满10条，不许偷懒只给3条）。每条20-45字，格式＝「核心功能（括号里带具体参数/数字）＋给用户的好处」，一条只讲一个卖点，从【真实数据】的参数表里逐项提炼（压缩机/制冷方式/能效/容量分储/面板材质/尺寸/噪音/冷冻能力/净化除菌/智能功能…有什么写什么）。
+   绝对禁止「智能生活新选择」「品质生活从XX开始」「高效XX利器」这类官网空洞口号。
+   参考口吻（照这个密度写，具体参数数字必须换成【真实数据】里的）：
+   一级双变频（变频压缩机+变频离心风机），省电节能运行平稳降噪
+   风冷无霜，不用手动除霜，制冷均匀食材不结冰
+   中门全变温区（果蔬/珍品/零度/软冻/冷冻五种模式），一台顶多台
+4) xhs：正好5组，每组是 {{"t":"标题","txt":"配文"}} 两个键。t：小红书标题≤20字、可带emoji、但绝对不能带#话题；txt：100-160字真实买家分享口吻，必须分成2-3个自然段（每段以一个emoji开头，如 ✨/🧊/💪），至少引用2个【真实数据】里的具体参数或功能（越具体越像真用过的人），txt 末尾另起一行带3-6个#话题（如 #海尔 #冰箱 #家电分享）——#话题只能出现在 txt 末尾，绝不放进 t；5组必须是5个不同角度（价格惊喜/成色/功能亮点/使用场景/情绪共鸣），禁止同一句换emoji充数，禁止空话套话堆砌。
 5) 输出纯 JSON（不要 markdown 代码块）：
-{{"titles":["","",""],"points":["","",""],"xhs":[{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}}]}}
+{{"titles":["","",""],"points":["","","","","","","","","",""],"xhs":[{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}}]}}
 
 【真实数据】
 {facts}"""
@@ -419,7 +424,7 @@ def _verify(ai, facts, nums_set):
 
     out = {}
     out['titles'] = [t for t in ai.get('titles') or [] if isinstance(t, str) and ok(t)][:3]
-    out['points'] = [p for p in ai.get('points') or [] if isinstance(p, str) and ok(p)][:3]
+    out['points'] = [p for p in ai.get('points') or [] if isinstance(p, str) and ok(p)][:10]
     xh = []
     for x in (ai.get('xhs') or []):
         if isinstance(x, dict) and isinstance(x.get('t'), str) and isinstance(x.get('txt'), str):
@@ -438,36 +443,54 @@ def glm_copy(model, kind, data, log):
     kk_titles = ('注意：这是正品全新机——标题里必须用「全新未拆封/全新原封」，绝不许出现「展示样机/样机」字样。'
                  if kind != 's' else
                  '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新未拆封/全新原封/全新」字样。')
-    raw = _chat(PROMPT.format(model=model, pname=data.get('pname') or model, brand=brand,
-                              no_params=no_params, kk_titles=kk_titles, facts=facts))
-    m = re.search(r'\{.*\}', raw, re.S)
-    ai = json.loads(m.group(0)) if m else {}
     nums_set = set(NUM_RE.findall(norm_model(model)))
-    res = _verify(ai, facts, nums_set)
-    # 价格尾巴兜底：AI 没听话写出 1649.0元 → 1649元（4.5kg 这类真小数不受影响）
-    for _k in ('titles', 'points'):
-        res[_k] = [re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', s) for s in res[_k]]
-    for x in res['xhs']:
-        x['t'] = re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', x['t'])
-        x['txt'] = re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', x['txt'])
-    dropped = ((3 - len(res['titles'])) + (3 - len(res['points'])) + (5 - len(res['xhs'])))
+    # 2026-10-13 用户反馈「小红书/闲鱼拉胯」整改：质量闸（剔空洞口号/一句话配文）
+    # + 质量不够自动重试一次（两次取分高那次），AI 解析失败也不再炸整单
+    best, best_score = None, -1
+    for attempt in range(2):
+        try:
+            raw = _chat(PROMPT.format(model=model, pname=data.get('pname') or model, brand=brand,
+                                      no_params=no_params, kk_titles=kk_titles, facts=facts))
+            m = re.search(r'\{.*\}', raw, re.S)
+            ai = json.loads(m.group(0)) if m else {}
+        except Exception as e:
+            log("AI 第 %d 次生成失败：%s" % (attempt + 1, e))
+            ai = {}
+        res = _verify(ai, facts, nums_set)
+        # 价格尾巴兜底：AI 没听话写出 1649.0元 → 1649元（4.5kg 这类真小数不受影响）
+        for _k in ('titles', 'points'):
+            res[_k] = [re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', s) for s in res[_k]]
+        for x in res['xhs']:
+            x['t'] = re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', x['t'])
+            x['txt'] = re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', x['txt'])
+        # 质量闸：卖点 8-60 字（剔「智能生活新选择」类口水话）；配文 ≥50 字且带#话题
+        res['points'] = [p for p in res['points'] if 8 <= len(p) <= 60]
+        res['xhs'] = [x for x in res['xhs'] if len(x.get('txt', '')) >= 50 and '#' in x.get('txt', '')]
+        score = len(res['xhs']) * 10 + len(res['points']) + len(res['titles'])
+        if score > best_score:
+            best, best_score = res, score
+        if len(res['xhs']) >= 4 and len(res['points']) >= 8:
+            break
+        log("第 %d 次生成质量不够（配文 %d/5、卖点 %d），自动重试" % (attempt + 1, len(res['xhs']), len(res['points'])))
+    res = best or {'titles': [], 'points': [], 'xhs': []}
+    dropped = ((3 - len(res['titles'])) + (10 - len(res['points'])) + (5 - len(res['xhs'])))
     if dropped > 0:
-        log("防编造校验剔除 %d 条含未知数字的内容" % dropped)
+        log("防编造/质量闸共剔除 %d 条不合格内容" % dropped)
     return res
 
 
 # ---------------------------------------------------------------- 描述拼装
 def build_desc(model, kk, data, pts, ship='nat'):
-    """商品描述固定版式（2026-10-13 用户拿闲鱼配文软件定稿）：AI 只供 3 条卖点短句，
-    其余全程序拼——【产品名】型号 / 卖点×3 / 【参数】【官网价】【交易】 / 结尾话术 + 可发货地区。
+    """商品描述加厚版式（2026-10-13 用户拿参考文案定稿）：【产品名】型号 / ·卖点×N（全量加厚条）
+    / 【参数】【官网价】【交易】 / 结尾话术 + 可发货地区。
     ship='nat' 全国版；'rep' 报备版（深圳/东莞/惠州/广州）。"""
     brand = (data.get('brand') or '').strip() or '原厂'
     nm = str(model).strip()
     head = re.sub(r'\s*' + re.escape(nm) + r'\s*', ' ', str(data.get('pname') or '')).strip()
     head = re.sub(r'\s{2,}', ' ', head) or (brand + '家电')
     L = ['【%s】型号 %s' % (head, nm), '']
-    for p in (pts or [])[:3]:
-        L.append(p)
+    for p in (pts or [])[:10]:
+        L.append('·' + p)
     L.append('')
     flat = []
     for _g, kv in (data.get('groups') or []):
@@ -476,7 +499,7 @@ def build_desc(model, kk, data, pts, ship='nat'):
             if s not in flat:
                 flat.append(s)
     if flat:
-        L.append('【参数】' + ' | '.join(flat[:8]))
+        L.append('【参数】' + ' | '.join(flat[:10]))
     if str(data.get('price') or '').strip():
         L.append('【官网价】%s （本店售价见标价，%s）'
                  % (data['price'], '全新未拆封' if kk == 'l' else '展示样机'))
@@ -496,7 +519,8 @@ def build_desc(model, kk, data, pts, ship='nat'):
 
 # ---------------------------------------------------------------- 图片落盘
 def dl_images(urls, mdir, log):
-    """配图落盘：copy/<型号>/01.jpg、02.jpg… 编号命名（对齐用户上货工具的原图素材）"""
+    """配图落盘（2026-10-13 用户定稿：全部下载，不再限 10 张）：
+    copy/<型号>/01.jpg、02.jpg… 编号命名（对齐用户上货工具的原图素材）"""
     os.makedirs(mdir, exist_ok=True)
     for old in os.listdir(mdir):
         try:
@@ -505,8 +529,6 @@ def dl_images(urls, mdir, log):
             pass
     saved = []
     for u in urls:
-        if len(saved) >= 10:
-            break
         ext = os.path.splitext(urllib.parse.urlparse(u).path)[1].lower() or ".jpg"
         ext = ext if ext in ('.jpg', '.jpeg', '.png', '.webp') else '.jpg'
         try:
@@ -577,7 +599,7 @@ def generate(model, kind='l', force=0, log=None):
     log = log or (lambda s: None)
     nm = norm_model(model) or model
     kk = 's' if kind == 's' else 'l'
-    cache = os.path.join(copy_root(), "%s_%s_v2.json" % (nm, kk))   # v2：新版式（结构变了，旧缓存不读）
+    cache = os.path.join(copy_root(), "%s_%s_v3.json" % (nm, kk))   # v3：卖点加厚+配文质量闸（旧缓存不读）
     if not force and os.path.isfile(cache):
         try:
             with io.open(cache, encoding="utf-8") as f:
@@ -602,8 +624,9 @@ def generate(model, kind='l', force=0, log=None):
     mdir = os.path.join(copy_root(), nm)
     images = dl_images(data.get('imgs') or [], mdir, log)
     featured = make_featured(mdir, data.get('price'), log)
-    # 卖点短句：官网 sellpoints 是真数据优先；没有才用 AI 的 3 条
-    pts = [p for p in (data.get('sellpoints') or []) if p][:3] or ai['points'][:3]
+    # 卖点：AI 从真实参数提炼的加厚条优先（2026-10-13 用户定稿，官网 sellpoint 是
+    # 「智能生活新选择」类空洞口号不要）；AI 全被剔才拿官网卖点兜底
+    pts = ai['points'][:10] or [p for p in (data.get('sellpoints') or []) if p][:10]
     res = {"ok": True, "cached": False, "model": model, "kind": kk,
            "source": data['source'], "source_url": data['url'],
            "pname": data['pname'], "price": data['price'],

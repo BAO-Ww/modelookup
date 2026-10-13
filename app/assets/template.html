@@ -702,7 +702,9 @@ function normMarksLocal(){
     } else if (!v.xys){
       var _t = v.t || Date.now(), _k = v.k === 's' ? 's' : 'l';
       var _p = (v.p != null && isFinite(+v.p)) ? +v.p : null;
-      MARKED[c] = { t: _t, k: _k, xys: { '默认': { t: _t, k: _k, p: _p } } }; ch = true;
+      MARKED[c] = { t: _t, k: _k, xys: { '默认': { t: _t, k: _k, p: _p } } };
+      if (v.cs && typeof v.cs === 'object') MARKED[c].cs = v.cs;   // 口径跟发布记录走（2026-10-13）
+      ch = true;
     }
   });
   if (ch) saveMarks();
@@ -722,9 +724,24 @@ function actXY(c){
   for (var i = 0; i < xs.length; i++) if (xs[i].xy === ACTXY[c]) return xs[i];
   return xs[0] || null;
 }
-/* 用过的闲鱼号记忆（输入框 datalist 提示用） */
-var XY_NAMES = load('xy2-xynames', []);
-function saveXyNames(){ save('xy2-xynames', XY_NAMES); }
+/* 用过的闲鱼号记忆（输入框 datalist 提示用）——2026-10-13 用户定稿：每个账号自己的，
+   不是全机通用。key 按 AUTH.u 分；AUTH 还没 ready 时空着，afterAuth 里 loadXyNames 再灌 */
+var XY_NAMES = [];
+function xyNamesKey(){ return 'xy2-xynames_' + ((AUTH && AUTH.u) ? AUTH.u : '__anon__'); }
+function loadXyNames(){
+  var v = null;
+  try { v = JSON.parse(localStorage.getItem(xyNamesKey()) || 'null'); } catch(e){ v = null; }
+  XY_NAMES = Array.isArray(v) ? v : [];
+  /* 2026-10-13 修「默认的呢」连带：按账号隔离后 key 换新，老用户该账号下还没记过号
+     时，把以前全机共用的那份搬进来当底（只搬这一次，之后各账号各长各的） */
+  if (!XY_NAMES.length){
+    try {
+      var _old = JSON.parse(localStorage.getItem('xy2-xynames') || 'null');
+      if (Array.isArray(_old) && _old.length){ XY_NAMES = _old; saveXyNames(); }
+    } catch(e){}
+  }
+}
+function saveXyNames(){ save(xyNamesKey(), XY_NAMES); }
 /* 闲鱼号配置上云（2026-10-12 用户定稿）：每个账号自己名下一份（worker KV xy_<u>），
    账号管理面板可由管理号代设，标记时点新号也会自动记进自己的配置 */
 var MYXY = null;                    // null=还没拉到；数组=云端配置（含「默认」可选不配置）
@@ -764,13 +781,38 @@ var MYIMGS = load(IMG_KEY, {});
    「本人补的」和「管理号（sys 整库图除外）」，旧数据 __legacy__ 也只有管理号能删 */
 var MYIMGOWN = load('xy2-imgown', {});
 function saveMyImgOwn(){ save('xy2-imgown', MYIMGOWN); }
-/* 成本口径记忆（2026-10-10 用户要求）：选了哪个价（价格含税/滞销清理价/样机清理价），
-   就固定在哪个——发布、重渲染、重启都不跳回默认。存本机 {型号: {l:口径, v:价}}。 */
-var COSTSEL = {};
-try { COSTSEL = JSON.parse(localStorage.getItem('ml_costsel') || '{}') || {}; } catch(e){ COSTSEL = {}; }
+/* 成本口径（2026-10-13 用户定稿终版）：**只认云端**——口径存在发布记录 MARKED[c].cs
+   里，渲染/亏钱哨兵/缺货哨兵只从 MARKED 读，本机不再存任何口径记忆。
+   没发布的卡改口径 = 当场算账不落库（跟定价同款规矩）。 */
 function saveCostSel(k, opt){
-  COSTSEL[k] = { l: opt.l, v: opt.v };
-  try { localStorage.setItem('ml_costsel', JSON.stringify(COSTSEL)); } catch(e){}
+  if (!MARKED[k]) return;   /* 没发布的没有云端落点，不存 */
+  MARKED[k].cs = { l: String(opt.l || '').slice(0, 40), v: isFinite(+opt.v) ? +opt.v : null };
+  saveMarks();
+  pubMetaPush(k);           /* 搭 /pubsync 的 cs 通道上云（旧 worker 忽略未知字段不炸） */
+}
+/* 口径 cs / 出库奖励 bn / 发全国勾选 nat 三个「核算状态」统一搭 /pubsync 上云
+   （2026-10-13 用户问「改了怎么存的」：都要跟账号走，换电脑也在）。
+   都只属于已发布的卡；旧 worker 忽略未知字段，天然兼容。 */
+function pubMetaPush(k){
+  if (!AUTH || !AUTH.token || !MARKED[k]) return;
+  var o = {};
+  if (MARKED[k].cs){ o.cs = {}; o.cs[k] = MARKED[k].cs; }
+  if (MARKED[k].bn){ o.bn = {}; o.bn[k] = MARKED[k].bn; }
+  if (MARKED[k].nat != null){ o.nat = {}; o.nat[k] = MARKED[k].nat; }
+  if (!Object.keys(o).length) return;
+  authFetch('/pubsync', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(o) }, true)
+    .catch(function(){});
+}
+/* 出库奖励「点了才算」的开关也落库（2026-10-13）：已发布的存 MARKED[k].bn={lb,sb}；
+   没发布的只当场算、不落库（跟「定价不落库」同一规矩） */
+function saveBonusSel(k, isLb, v, on){
+  if (!k || !MARKED[k]) return;
+  if (!MARKED[k].bn) MARKED[k].bn = { lb: 0, sb: 0 };
+  if (isLb) MARKED[k].bn.lb = on ? (+v || 0) : 0;
+  else MARKED[k].bn.sb = on ? (+v || 0) : 0;
+  saveMarks();
+  pubMetaPush(k);
 }
 /* 2026-10-10 新规矩（用户拍板）：定价只属于「已标记发布」的型号——
    没点标记已发布的，点价格格/手输的价都只是当场算账，离开界面就不留。
@@ -801,13 +843,17 @@ function pubPush(c, on, xy){
   if (!AUTH || !AUTH.token) return;
   /* ⚠ 必须显式带 Content-Type: application/json —— WebView2 里 string body 缺它时
      预检 OPTIONS 发得出去、实际 POST 却不跟，记录就静默丢了（实测踩坑）。
-     k = 发布的是正品('l')还是样机('s')；p = 当时的闲鱼定价（没填就是 null）
-     xy = 闲鱼号（2026-10-12 多号：一号一条记录；不传 = 老口径整条删/顶层标） */
+     k = 发布的是正品('l')还是样机('s')；p = 当时的闲鱼定价
+     xy = 闲鱼号（2026-10-12 多号：一号一条记录；不传 = 老口径整条删/顶层标）
+     2026-10-13 修「价格乱跳」：本地没价时 p 用 undefined（JSON 化后整个字段不发），
+     worker 收到没 p 就**保留该号现价**——绝不能发 null 把云端价抹了；
+     只有明确带数字才盖价。真正无价标记走弹窗必填价，p 一定有。 */
   authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ c: c, on: on,
                                              xy: (typeof xy === 'string' && xy) ? xy : null,
                                              k: (on && MARKED[c] && MARKED[c].k) || null,
-                                             p: (on && isNum(PRICES[c])) ? PRICES[c] : null }) }, true);
+                                             p: (on && isNum(PRICES[c])) ? PRICES[c] : undefined,
+                                             cs: (on && MARKED[c] && MARKED[c].cs) || null }) }, true);
 }
 function syncMarks(){
   if (!AUTH || !AUTH.token) return;
@@ -821,11 +867,15 @@ function syncMarks(){
       if (j && j.ok && j.marks){
         var changed = JSON.stringify(MARKED) !== JSON.stringify(j.marks);
         MARKED = j.marks; normMarksLocal(); saveMarks();
-        /* 2026-10-10 新规矩：定价只属于已发布的型号——云端拉的价只补「已发布」的；
-           本地没发布的价（泄漏/串号/以前「未发布也存价」时期的遗留）一律清掉 */
+        /* 口径 cs / 奖励 bn / 勾选 nat 都在 j.marks 里——云端唯一源，本地零记忆（2026-10-13 定稿） */
+        /* 2026-10-13 修「换电脑价格全变」：原来只补空位（c 不在 PRICES 才收），
+           老电脑 localStorage 里的旧价把云端价整个遮住——换台机就集体回退。
+           改定：登录同步时**云端为准**（此刻本会话还没编辑过，不存在覆盖用户输入），
+           已发布的型号云端有价就盖本地；云端没价的（理论少见）保留本地不动。
+           本会话之后的改价照旧全量推 /pubsync，不影响正常编辑。 */
         var pr = j.prices || {}, filled = false;
         Object.keys(pr).forEach(function(c){
-          if (MARKED[c] && !(c in PRICES) && isFinite(+pr[c])){ PRICES[c] = +pr[c]; filled = true; }
+          if (MARKED[c] && isFinite(+pr[c]) && PRICES[c] !== +pr[c]){ PRICES[c] = +pr[c]; filled = true; }
         });
         var pruned = prunePrices();
         if (filled || pruned) savePrices();
@@ -1160,9 +1210,10 @@ function calcHTML(it){
   /* 2026-10-10：看子用户发布 = 只读——TA 填的价照显示，但改不了（改价会存进全局定价表） */
   var svRO = !!(SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0');
   var pick = opts.length ? opts[0] : { v: '', l: '无成本价' };
-  /* 记住的口径还在选项里就用记住的（发布/重渲染/重启都不跳回默认） */
-  var _cs = COSTSEL[it.c];
-  if (_cs && opts.length > 1){
+  /* 口径只认云端（2026-10-13 定稿）：发布记录 MARKED[it.c].cs 记了就用它，
+     没记过（老发布/没发布）= 默认第一项；本地不再有任何口径记忆 */
+  var _cs = MARKED[it.c] && MARKED[it.c].cs;
+  if (_cs && _cs.l && opts.length > 1){
     for (var _i = 0; _i < opts.length; _i++){
       if (opts[_i].l === _cs.l && String(opts[_i].v) === String(_cs.v)){ pick = opts[_i]; break; }
     }
@@ -1177,7 +1228,13 @@ function calcHTML(it){
   } else {
     sel = '<select class="costsel" style="pointer-events:none;border-color:transparent;background:transparent;padding-left:0;color:#98a2b3"><option value="" data-l="无成本价">表里没有成本价</option></select>';
   }
-  return '<div class="calc" data-key="' + esc(it.c) + '">'
+  /* 2026-10-13「改了怎么存」：已发布卡的奖励点击/发全国勾选跟发布记录走——
+     渲染时把 bn 金额回填进 data 属性（calcUpdate 会自动算进挣）、勾选按 nat 回填 */
+  var _bnc = MARKED[it.c] && MARKED[it.c].bn || null;
+  var _nat = MARKED[it.c] ? MARKED[it.c].nat !== 0 : true;   /* 没记过默认勾（发全国） */
+  return '<div class="calc" data-key="' + esc(it.c) + '"'
+    + (_bnc && +_bnc.lb > 0 ? ' data-bnlb="' + (+_bnc.lb) + '"' : '')
+    + (_bnc && +_bnc.sb > 0 ? ' data-bnsb="' + (+_bnc.sb) + '"' : '') + '>'
     + '<span class="cl">闲鱼定价</span>'
     + '<input type="number" min="0" step="1" inputmode="decimal" placeholder="输入你的定价"'
     + (svRO ? ' readonly title="看子用户发布时只读——定价是 TA 填的，要改回主列表或让 TA 自己改"' : '')
@@ -1185,10 +1242,10 @@ function calcHTML(it){
     + sel
     /* 发全国要加 100 运费（卖家出），默认算上；只卖深惠广莞就把勾去掉。
        ⚠ 「可发全国」和「问过才能发全国」的型号都渲染（canNationwide），
-         铁定只发深惠广莞的不出 */
+         铁定只发深惠广莞的不出。2026-10-13：勾选状态已发布的跟记录走（nat） */
     + (canNationwide(it)
        ? '<label class="cfr" title="发深惠广莞以外要加 100 运费，勾上就在利润里扣掉；本地卖可以取消勾选">'
-         + '<input type="checkbox" class="cfrbox" checked> 发全国 −100运费</label>'
+         + '<input type="checkbox" class="cfrbox"' + (_nat ? ' checked' : '') + '> 发全国 −100运费</label>'
        : '')
     + '<span class="ci">平台费1.6% <b class="p-fee">—</b></span>'
     + '<span class="ci">挣 <b class="p-out">—</b></span>'
@@ -1256,6 +1313,7 @@ var PERM_DEFS = [
   ['upd_kdocs',   '金山更新',                '操作按钮'],
   ['upd_yy',      '用友更新',                '操作按钮'],
   ['addimg',      '补图 / 导出比价图',        '操作按钮'],
+  ['copy',        '文案生成（闲鱼/小红书）',   '操作按钮'],
 ];
 function authSave(){
   try { localStorage.setItem('ml_auth', JSON.stringify(AUTH)); } catch(e){}
@@ -1451,6 +1509,7 @@ function afterAuth(){
   /* 侧栏只保留管理号的「子用户发布」下拉（2026-10-09 定稿：子账号看自己的发布
      走「已发布」chip + 顶栏，不再要「我的发布」块）；显隐统一在 applyPermBar 管 */
   syncImgs();    // 补图并到云端（别人补的拉下来，自己补的推上去）
+  loadXyNames(); // 闲鱼号本地记忆按账号各一份（2026-10-13：不再全机通用串号）
   loadXy();     // 自己名下的闲鱼号配置（标记直选 + 顶栏筛选用）
   var bar = document.getElementById('updbar');
   if (!bar) return;
@@ -1931,7 +1990,10 @@ function showSubRec(u){
   Object.keys(marks).forEach(function(k){
     SUBVIEW.set[k] = 1;
     SUBVIEW.info[k] = { t: tsOf(marks[k]), k: (typeof marks[k] === 'object' && marks[k]) ? marks[k].k : null, p: pr[k],
-                        xs: (typeof marks[k] === 'object' && marks[k] && marks[k].xys) ? marks[k].xys : null };
+                        xs: (typeof marks[k] === 'object' && marks[k] && marks[k].xys) ? marks[k].xys : null,
+                        cs: (typeof marks[k] === 'object' && marks[k] && marks[k].cs) || null,
+                        bn: (typeof marks[k] === 'object' && marks[k] && marks[k].bn) || null,
+                        nat: (typeof marks[k] === 'object' && marks[k]) ? marks[k].nat : null };
   });
   if (u !== '0'){   // 看别人的时候，「已发布」（自看）chip 高亮摘掉，状态一致
     var _pc = topEl.querySelector('.chip[data-flag="pub"]');
@@ -2115,8 +2177,10 @@ function renderItem(it){
        没对上的维持金山表「零售指导价」 */
     if (pok('p_lp') && isNum(it.xp) && it.xp > 0) g.push(prCell('官方售价', it.xp, 'rp', '官方售价 · 欣盛官方商城'));
     else if (pok('p_lp') && isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
-    if (pok('p_lb') && isNum(it.lb) && it.lb > 0) g.push(prCell('滞销出库奖励', it.lb, 'bonus', 'bonus-lb'));
-    if (pok('p_sb') && isNum(it.sb) && it.sb > 0) g.push(prCell('样机出库奖励', it.sb, 'bonus', 'bonus-sb'));
+    /* 出库奖励「点了才算」状态跟发布记录走（2026-10-13）：已点过的渲染回 on 高亮 */
+    var _bnr = MARKED[it.c] && MARKED[it.c].bn || null;
+    if (pok('p_lb') && isNum(it.lb) && it.lb > 0) g.push(prCell('滞销出库奖励', it.lb, 'bonus' + (_bnr && +_bnr.lb > 0 ? ' on' : ''), 'bonus-lb'));
+    if (pok('p_sb') && isNum(it.sb) && it.sb > 0) g.push(prCell('样机出库奖励', it.sb, 'bonus' + (_bnr && +_bnr.sb > 0 ? ' on' : ''), 'bonus-sb'));
     /* 清理数量（2026-10 三次改版）：= 用友实时库存各仓数量加总。
        2026-10-09 晚（用户：库存对不对是重中之重）：实时已拉过就以用友为准——
        报表里查不到这台 = 没有现存 = 0（不再拿金山表的计划清理数量冒充库存，
@@ -2808,6 +2872,86 @@ function exitSelfPub(){
   run();
 }
 
+/* 闲鱼号管理小窗（2026-10-13 用户反馈：选号弹窗里只能选不能管，重命名/删除都得有）。
+   改的是自己名下那份（worker KV xy_<u>）；管理号代管子账号的仍走「账号管理」面板。
+   重命名用内联输入框（WebView2 不支持 window.prompt，别换回去） */
+function openXyMgr(onchg){
+  var old = document.getElementById('xymgr'); if (old) old.remove();
+  var list = xyOptions().slice();
+  var m = document.createElement('div'); m.id = 'xymgr';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.45);z-index:62;display:flex;align-items:center;justify-content:center';
+  function rowHTML(x, i, editing){
+    if (editing){
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed #eef1f6">'
+        + '<input id="xymrn" maxlength="24" value="' + esc(x) + '" style="flex:1;min-width:0;border:1px solid #2e6be6;border-radius:8px;padding:6px 10px;font-size:13px">'
+        + '<button class="achip" data-rnok="' + i + '" style="background:#eaf1ff;border-color:#c6d8ff">保存</button>'
+        + '<button class="achip" data-rnno>取消</button></div>';
+    }
+    return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed #eef1f6">'
+      + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x) + '</span>'
+      + '<button class="achip" data-rn="' + i + '">重命名</button>'
+      + '<button class="achip" data-del="' + i + '" style="color:#d92d20">删除</button></div>';
+  }
+  function render(editing){
+    m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px;min-width:360px;max-width:440px">'
+      + '<div style="font-weight:700;margin-bottom:4px">管理我的闲鱼号</div>'
+      + '<div style="font-size:12px;color:#8a94a6;margin-bottom:10px">改名/删除只影响这份号列表，已用它标记的发布记录不受影响</div>'
+      + '<div id="xymlist" style="max-height:260px;overflow:auto;margin-bottom:10px">'
+      + (list.length ? list.map(function(x, i){ return rowHTML(x, i, editing === i); }).join('')
+                     : '<div style="color:#8a94a6;font-size:12.5px;padding:8px 0">还没有配置，在下面添加一个</div>')
+      + '</div>'
+      + '<div style="display:flex;gap:8px;margin-bottom:14px">'
+      + '<input id="xymnew" maxlength="24" placeholder="新闲鱼号名称，如：小号B" style="flex:1;min-width:0;border:1px solid #d7dce6;border-radius:8px;padding:7px 10px;font-size:13px">'
+      + '<button class="achip" id="xymadd" style="background:#eaf1ff;border-color:#c6d8ff">添加</button></div>'
+      + '<div style="text-align:right"><button class="achip" id="xymok" style="background:#2e6be6;border-color:#2e6be6;color:#fff">完成</button></div></div>';
+  }
+  render(-1);
+  document.body.appendChild(m);
+  function persist(){
+    XY_NAMES = list.slice(); saveXyNames();
+    MYXY = list.slice();
+    refreshXySel();
+    if (AUTH && AUTH.token){
+      authFetch('/xy', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify({ list: list }) }, true).catch(function(){});
+    }
+    if (onchg) onchg();
+  }
+  m.addEventListener('click', function(e){
+    var ok = e.target.closest ? e.target.closest('[data-rnok]') : null;
+    if (ok){
+      var i = +ok.getAttribute('data-rnok');
+      var inp = m.querySelector('#xymrn');
+      var nn = inp ? inp.value.trim().slice(0, 24) : '';
+      if (nn && list.indexOf(nn) < 0){ list[i] = nn; persist(); }
+      render(-1); return;
+    }
+    if (e.target.closest ? e.target.closest('[data-rnno]') : null){ render(-1); return; }
+    var rn = e.target.closest ? e.target.closest('[data-rn]') : null;
+    if (rn){
+      render(+rn.getAttribute('data-rn'));
+      var _inp2 = m.querySelector('#xymrn'); if (_inp2){ _inp2.focus(); _inp2.select(); }
+      return;
+    }
+    var dl = e.target.closest ? e.target.closest('[data-del]') : null;
+    if (dl){
+      var j = +dl.getAttribute('data-del');
+      if (confirm('删除闲鱼号「' + list[j] + '」？（已用它标记的发布记录不受影响）')){
+        list.splice(j, 1); persist(); render(-1);
+      }
+      return;
+    }
+    if (e.target.closest ? e.target.closest('#xymadd') : null){
+      var ni = m.querySelector('#xymnew');
+      var v = ((ni && ni.value) || '').trim().slice(0, 24);
+      if (v && list.indexOf(v) < 0){ list.push(v); persist(); }
+      render(-1); return;
+    }
+    if (e.target.closest ? e.target.closest('#xymok') : null){ m.remove(); return; }
+    if (e.target === m) m.remove();
+  });
+}
+
 /* 点「标记已发布」→ 问发哪个闲鱼号 + 正品还是样机（2026-10-13 用户定稿两改）：
    ① 号不做下拉，直接点选（配置过的号一块一个，另有「其它…」手输新号，输完自动记进配置）；
    ② 没定价不许标记——价从卡片定价框收，框空着但该号之前标过价也算有价 */
@@ -2828,13 +2972,18 @@ function openPickKind(k){
   var _iv = _inp ? parseFloat(_inp.value) : NaN;
   var hasPrice = (isFinite(_iv) && _iv > 0) || (isNum(PRICES[k]) && PRICES[k] > 0);
   var opts = xyOptions();                      // 云端配置优先，本地用过的兜底
-  if (opts.indexOf(curXy) < 0 && opts.length) curXy = opts[0];
+  if (['默认'].concat(opts).indexOf(curXy) < 0) curXy = '默认';   /* 「默认」永远可选（2026-10-13） */
   function xyChipHTML(){
-    var h = opts.map(function(x){
+    /* 每次渲染都现取 xyOptions()：管理窗里改完回来 chips 立即跟新。
+       2026-10-13 用户反馈「默认的呢」：「默认」是内置兜底号，永远摆在第一个——
+       云端一个号都没配时也照常有得选；配置列表里同名的不重复出 */
+    var _o = xyOptions().filter(function(x){ return x !== '默认'; });
+    var h = ['默认'].concat(_o).map(function(x){
       var on = x === curXy;
       return '<button class="achip" data-xy="' + esc(x) + '" style="' + (on ? 'background:#eaf1ff;border-color:#2e6be6;font-weight:600' : '') + '">' + esc(x) + '</button>';
     }).join('');
-    return h + '<button class="achip" data-xy="__new" title="手动输入一个新号">其它…</button>';
+    return h + '<button class="achip" data-xy="__new" title="手动输入一个新号">其它…</button>'
+             + '<button class="achip" data-xy="__mgr" title="重命名 / 删除 / 添加闲鱼号" style="border-style:dashed;color:#5a6478">管理…</button>';
   }
   var m = document.createElement('div'); m.id = 'kindmask';
   m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.35);z-index:60;display:flex;align-items:center;justify-content:center';
@@ -2853,6 +3002,11 @@ function openPickKind(k){
   m.addEventListener('click', function(e){
     var xyb = e.target.closest ? e.target.closest('[data-xy]') : null;
     if (xyb){
+      if (xyb.getAttribute('data-xy') === '__mgr'){
+        /* 2026-10-13 用户反馈：光选不管不行——重命名/删除/添加都在这 */
+        openXyMgr(function(){ var _r = m.querySelector('#kindxyrow'); if (_r) _r.innerHTML = xyChipHTML(); });
+        return;
+      }
       if (xyb.getAttribute('data-xy') === '__new'){
         /* 其它 = 手输新号：chips 换输入框（datalist 提示用过的） */
         m.querySelector('#kindxyrow').innerHTML =
@@ -2960,6 +3114,7 @@ function openUnmarkPick(c){
 
 /* ================= 文案生成（2026-10-12，纯追加） ================= */
 function askCopy(k, kind){
+  if (!pok('copy')) return;              // 2026-10-13：文案生成是权限项（账号管理里勾）
   var old = document.getElementById('askcopy'); if (old) old.remove();
   var m = document.createElement('div'); m.id = 'askcopy';
   m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.35);z-index:61;display:flex;align-items:center;justify-content:center';
@@ -2981,6 +3136,7 @@ function askCopy(k, kind){
 }
 
 function openCopyView(k, kind, force){
+  if (!pok('copy')){ alert('文案生成没权限——找管理号在「账号管理」里勾「文案生成」'); return; }
   var old = document.getElementById('copyview'); if (old) old.remove();
   var wrap = document.createElement('div'); wrap.id = 'copyview';
   wrap.style.cssText = 'position:fixed;inset:0;background:#f2f5fa;z-index:70;display:flex;flex-direction:column;font-size:13.5px';
@@ -2995,7 +3151,7 @@ function openCopyView(k, kind, force){
     +   '<button id="cv_close" style="border:none;border-radius:8px;padding:7px 16px;font-size:13px;background:#fff;color:#2e6be6;font-weight:600">关闭</button>'
     + '</div>'
     + '<div id="cv_body" style="flex:1;display:flex;min-height:0;overflow:hidden">'
-    +   '<div style="width:280px;flex:0 0 auto;background:#fff;border-right:1px solid #e3e8f0;padding:14px;overflow:auto">'
+    +   '<div style="width:360px;flex:0 0 auto;background:#fff;border-right:1px solid #e3e8f0;padding:14px;overflow:auto">'
     +     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
     +       '<b style="font-size:13.5px">图片库</b><span id="cv_imgn" style="font-size:12px;color:#8a94a6"></span></div>'
     +     '<div id="cv_imgs" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px"></div>'
@@ -3066,7 +3222,7 @@ function openCopyView(k, kind, force){
     for (var i = 0; i < (D.titles || []).length; i++) h += rowABC('ABC'[i], D.titles[i]);
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px"><b>商品描述</b>'
       + '<button id="cv_descCopy" style="border:none;background:#2e6be6;color:#fff;border-radius:8px;padding:6px 14px;font-size:12.5px">一键复制</button></div>';
-    h += '<textarea id="cv_desc" style="width:100%;box-sizing:border-box;min-height:190px;border:1px solid #e3e8f0;border-radius:9px;padding:11px 13px;font-size:13.5px;line-height:1.7;font-family:inherit;resize:vertical"></textarea>';
+    h += '<textarea id="cv_desc" style="width:100%;box-sizing:border-box;min-height:420px;border:1px solid #e3e8f0;border-radius:9px;padding:11px 13px;font-size:13.5px;line-height:1.7;font-family:inherit;resize:vertical"></textarea>';
     main.innerHTML = h;
     wrap.querySelector('#cv_desc').value = descFull();
     main.querySelectorAll('[data-ship]').forEach ? main.querySelectorAll('[data-ship]').forEach(function(el){
@@ -3248,6 +3404,20 @@ listEl.addEventListener('input', function(e){
   savePrices();
 });
 listEl.addEventListener('change', function(e){
+  /* 2026-10-13「改了怎么存」：发全国勾选也落库——已发布的存 MARKED[k].nat（0/1）
+     并上云；没发布的只当场重算不落库（跟定价/奖励同一规矩） */
+  var cfr = e.target.closest ? e.target.closest('.cfrbox') : null;
+  if (cfr){
+    var _cb = cfr.closest('.calc');
+    var _ck = _cb ? _cb.dataset.key : null;
+    if (_ck && MARKED[_ck]){
+      MARKED[_ck].nat = cfr.checked ? 1 : 0;
+      saveMarks();
+      pubMetaPush(_ck);
+    }
+    if (_cb) calcUpdate(_cb);
+    return;
+  }
   var sel = e.target.closest ? e.target.closest('.costsel') : null;
   if (!sel) return;
   var box = sel.closest('.calc');
@@ -3277,8 +3447,10 @@ function pickCell(cell){
   if (cell.dataset.bonus){
     var isLb = cell.dataset.bonus === 'lb';
     var k = isLb ? 'data-bnlb' : 'data-bnsb';
-    if (box.getAttribute(k)){ box.removeAttribute(k); cell.classList.remove('on'); }
+    var _on = !box.getAttribute(k);
+    if (!_on){ box.removeAttribute(k); cell.classList.remove('on'); }
     else { box.setAttribute(k, cell.dataset.v || '0'); cell.classList.add('on'); }
+    saveBonusSel(box.dataset.key, isLb, cell.dataset.v, _on);   /* 已发布的跟记录走（2026-10-13） */
     calcUpdate(box);
     return;
   }
@@ -3716,7 +3888,7 @@ function pubStockWarn(){
     marks = {};
     Object.keys(SUBVIEW.info).forEach(function(c){
       var v = SUBVIEW.info[c];
-      marks[c] = { k: (v && v.k) ? v.k : 'l' };
+      marks[c] = { k: (v && v.k) ? v.k : 'l', cs: (v && v.cs) || null };
     });
   }
   var lost = [];                                       // [{c, s}] c=记录键，s=显示串
@@ -3728,7 +3900,7 @@ function pubStockWarn(){
     var _opts = it ? costOptions(it) : [];
     if (_opts.length){
       var _pick = _opts[0];
-      var _cs = COSTSEL[c];
+      var _cs = m.cs || null;   /* 口径只认云端发布记录（2026-10-13 定稿） */
       if (_cs && _opts.length > 1){
         for (var _oi = 0; _oi < _opts.length; _oi++){
           if (_opts[_oi].l === _cs.l && String(_opts[_oi].v) === String(_cs.v)){ _pick = _opts[_oi]; break; }
@@ -3781,7 +3953,7 @@ function pubStockWarn(){
 })();
 /* 数据到位 → 建索引 → 起界面 */
 /* ---------- 亏钱哨兵（2026-10-10 用户要求）：发布后表格价格变了要通知我改价 ----------
-   口径 = 发布时选的成本价（成本口径记忆 COSTSEL，没记过的老发布按默认第一项核对）。
+   口径 = 发布记录 MARKED[k].cs（云端唯一源，2026-10-13 定稿；没记过的老发布按默认第一项核对）。
    每次数据同步/列表渲染都核对一遍：闲鱼定价 < 口径现价 → 顶部黄条；
    选的口径在新表里没了（比如价格含税整列取消）也提醒。点型号跳过去改价。 */
 function lossList(){
@@ -3790,7 +3962,7 @@ function lossList(){
   for (var i = 0; i < ALL.length; i++){
     var it = ALL[i], k = it.c;
     if (!MARKED[k]) continue;
-    var cs = COSTSEL[k];
+    var cs = MARKED[k].cs;
     var opts = costOptions(it);
     var cost = null, cl = '';
     if (cs){
@@ -3800,15 +3972,17 @@ function lossList(){
     } else if (opts.length){
       cost = opts[0].v; cl = opts[0].l;
     }
-    /* 净利口径（2026-10-12 电脑端补齐手机端同款）：定价 − 1.6%平台费 − 发全国运费100 − 成本。
+    /* 净利口径（2026-10-12 电脑端补齐手机端同款）：定价 − 1.6%平台费 − 发全国运费100 − 成本 + 点了的出库奖励。
+       2026-10-13：奖励 bn（点了才算）和发全国勾选 nat 都跟发布记录走，黄条按同一套账核算。
        多闲鱼号逐号核：哪个号的价亏了就报哪个（号名带上） */
-    var fr = canNationwide(it) ? 100 : 0;
+    var _bn = MARKED[k].bn, bon = _bn ? ((+_bn.lb || 0) + (+_bn.sb || 0)) : 0;
+    var fr = (canNationwide(it) && MARKED[k].nat !== 0) ? 100 : 0;
     var xs = markXys(k), missPushed = false;
     for (var x = 0; x < xs.length; x++){
       var p = xs[x].p;
       if (!isNum(p)) continue;
       if (cost != null){
-        var net = p * (1 - 0.016) - fr - cost;
+        var net = p * (1 - 0.016) - fr - cost + bon;
         if (net < 0) out.push({ c: k, mo: it.mo || k, xy: xs[x].xy, price: p, cost: cost, net: net, l: cl });
       } else if (cs && !missPushed){
         out.push({ c: k, mo: it.mo || k, xy: xs[x].xy, price: p, cost: null, l: cl });
@@ -3819,9 +3993,10 @@ function lossList(){
   return out;
 }
 var LOSS_DISMISS = '';
-/* 「亏钱」筛选用的判定集（2026-10-10）：看发布记录（自己或别人）时，按卡片当前口径
-   （本机 COSTSEL 记忆，没有就取第一项）算 定价 < 成本 = 亏；选的口径整列没了也算。
-   价格/口径取自 SUBVIEW.info（云端发布记录里的 p），跟亏钱横幅 lossList() 同一套账 */
+/* 「亏钱」筛选用的判定集（2026-10-10）：看发布记录（自己或别人）时，按记录里的口径
+   （云端 MARKED/info 的 cs，2026-10-13 起本地不再有口径记忆；没记就取第一项）
+   算 定价 < 成本 = 亏；选的口径整列没了也算。
+   价格/口径取自 SUBVIEW.info（云端发布记录），跟亏钱横幅 lossList() 同一套账 */
 function lossSetView(){
   var out = {};
   if (!SUBVIEW) return out;
@@ -3830,7 +4005,7 @@ function lossSetView(){
     if (!info || !isNum(info.p)) continue;
     var it = itemOf(c);
     var opts = it ? costOptions(it) : [];
-    var cs = COSTSEL[c], cost = null, hasBasis = false;
+    var cs = info.cs || (MARKED[c] && MARKED[c].cs) || null, cost = null, hasBasis = false;
     if (cs){
       hasBasis = true;
       for (var j = 0; j < opts.length; j++){
@@ -3853,9 +4028,10 @@ function updateLossBanner(){
   if (!L.length){ bar.hidden = true; LOSS_DISMISS = ''; return; }
   if (sig === LOSS_DISMISS || bar.hidden === false && bar.dataset.sig === sig) return;
   bar.dataset.sig = sig; LOSS_DISMISS = '';
-  var h = '<b>⚠ 有 ' + L.length + ' 条已发布按你选的口径算是亏本的（已扣平台费/运费），快改价：</b>';
+  window.LOSS_ITEMS = L;               // 黄条点击一次性列出全部亏本卡用（2026-10-13 对齐缺货红条）
+  var h = '<b>⚠ 有 ' + L.length + ' 条已发布按你选的口径算是亏本的（已扣平台费/运费），快改价（点击黄条全部列出）：</b>';
   L.forEach(function(x){
-    h += '<a class="lchip" data-c="' + esc(x.c) + '" title="点击跳过去改价">' + esc(x.mo)
+    h += '<a class="lchip" data-c="' + esc(x.c) + '" title="点击黄条一次性列出全部亏本型号">' + esc(x.mo)
        + (x.xy && x.xy !== '默认' ? '·' + esc(x.xy) : '')
        + (x.cost != null
             ? '（定价¥' + x.price + '，净亏¥' + (Math.round(Math.abs(x.net) * 10) / 10) + '，成本¥' + x.cost + '）'
@@ -3872,16 +4048,24 @@ function updateLossBanner(){
       LOSS_DISMISS = JSON.stringify(lossList());
       bar.hidden = true; return;
     }
-    var a = e.target.closest ? e.target.closest('.lchip') : null;
-    if (!a) return;
+    /* 2026-10-13 用户定稿：跟缺货红条同款——点黄条任意位置（含型号小牌），
+       不填搜索框不跑查询，一次性把全部亏本型号卡列出来；搜索或筛选即恢复常规列表 */
+    var keys = window.LOSS_ITEMS || [];
+    if (!keys.length || bar.hidden) return;
+    var res = [];
     for (var i = 0; i < (ALL || []).length; i++){
-      if (ALL[i].c === a.dataset.c){
-        var inp = document.getElementById('q');
-        if (inp){ inp.value = ALL[i].mo; run(); }
-        window.scrollTo(0, 0);
-        break;
+      for (var j = 0; j < keys.length; j++){
+        if (ALL[i].c === keys[j].c){ res.push({ it: ALL[i], sc: 5 }); break; }
       }
     }
+    if (!res.length) return;
+    cur = res;
+    shown = 0;
+    listEl.innerHTML = '';
+    moreEl.hidden = true;
+    hintEl.innerHTML = '亏本商品 <b>' + res.length + '</b> 条（正常搜索或筛选即恢复列表）';
+    renderBatch();
+    window.scrollTo(0, 0);
   });
 })();
 
