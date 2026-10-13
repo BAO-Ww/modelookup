@@ -203,8 +203,10 @@ def parse_sellpoints(html):
 
 
 IMG_RE = re.compile(r'<img[^>]+(?:data-src|data-original|lazy-src|src)="([^"]+\.(?:jpg|jpeg|png|webp))"', re.I)
+# 背面图过滤（2026-10-13 用户定稿：只要机图正面图）——URL 带背/back/rear/后 视角的直接跳过
 BAD_IMG = re.compile(r'logo|icon|erweima|qrcode|sprite|placeholder|banner|bitmap|homePage|'
-                     r'productDetail_phone|_bg_|nocomment|headSet|mask|template|1x1|pixel', re.I)
+                     r'productDetail_phone|_bg_|nocomment|headSet|mask|template|1x1|pixel'
+                     r'|back(?!ground|drop|up)|rear|_hou\d?|背面|后视|背部', re.I)
 
 
 def extract_images(html):
@@ -354,20 +356,20 @@ def _chat(prompt):
         return json.loads(r.read().decode("utf-8"))["choices"][0]["message"]["content"]
 
 
-PROMPT = """你是闲鱼家电卖家文案写手。产品型号：{model}。
+PROMPT = """你是闲鱼/小红书家电卖家文案写手。产品：{pname}（型号 {model}）。
 
 【铁律】
 1) 只能使用【真实数据】里出现的参数、功能和数字，绝对禁止编造数据里没有的参数、功能或数字。{no_params}
-2) 口吻：{tone}
-3) 标题规则：带价格锚点仅当【真实数据】里有价格，且价格必须写成整数（写「1649元」，绝不写「1649.0元」）；
-   三条标题开头不要雷同——最多一条用完整型号开头，其余用品类词/核心卖点开头，像人写的不是模板。
-4) desc 规则：写成 2-3 段自然的口播短文（先成色来源，再挑 2-3 个最狠的卖点讲人话，最后交易保障），
-   禁止把卖点逐条复读、禁止罗列参数清单、禁止出现「1. 2.」列表。desc 里绝对不要出现发货地区/物流/运费相关内容，
-   发货相关只写在 ship_nat 和 ship_rep 里。
-5) xhs 规则：5 个标题必须是 5 个不同角度（价格惊喜/成色/功能亮点/使用场景/情绪共鸣），
-   禁止同一句话换 emoji 充数。
-6) 输出纯 JSON（不要 markdown 代码块），结构：
-{{"titles":["标题1","标题2","标题3"],"points":["卖点1","...共6到10条"],"desc":"闲鱼描述正文200-400字","ship_nat":"发货话术一句，全国可发版本，参考口吻：全国大部分地区可发，付款后尽快安排发出，物流信息全程可查，支持开箱验货","ship_rep":"发货话术一句，报备机版本，参考口吻：报备特价机，仅发 深圳/东莞/惠州/广州，可送装到位","xhs":["小红书标题1","...共5个，带emoji含型号"]}}
+2) titles：闲鱼标题三条（三选一）。分段式、段与段之间一个空格；不带价格、不带emoji、不带#话题；每条≤30字；三条开头语序必须各不同；
+   每条都必须有：型号全码 + 成色词（正品写「全新未拆封」，样机写「展示样机」）+ 服务词（全国联保/原厂正品联保）。参考版式（品牌/容量/核心卖点/品类词照【真实数据】换）：
+   {brand} 226L风冷无霜冰箱 {model} 全新未拆封 家用三门 全国联保
+   全新未拆封 {brand} 226L 三门冰箱 风冷无霜 {model} 原厂正品联保
+   {brand}三门冰箱 226L 风冷无霜 {model} 全新原封全国联保
+   {kk_titles}
+3) points：正好3条卖点短句，每条≤16字，直接陈述、不带序号、结尾不带句号，参考口吻：「运行噪音仅34dB(A)，静音不扰眠」「风冷无霜，免手动除霜」。
+4) xhs：正好5组，每组是 {{"t":"标题","txt":"配文"}} 两个键。t：小红书标题≤20字、可带emoji、但绝对不能带#话题；txt：80-150字小红书口吻配文，必须分成2-3个自然段（每段以一个emoji开头，如 ✨/🧊/💪），txt 末尾另起一行带3-6个#话题（如 #海尔 #冰箱 #家电分享）——#话题只能出现在 txt 末尾，绝不放进 t；5组必须是5个不同角度（价格惊喜/成色/功能亮点/使用场景/情绪共鸣），禁止同一句换emoji充数。
+5) 输出纯 JSON（不要 markdown 代码块）：
+{{"titles":["","",""],"points":["","",""],"xhs":[{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}}]}}
 
 【真实数据】
 {facts}"""
@@ -400,7 +402,7 @@ def _fact_floats(facts):
 
 
 def _verify(ai, facts, nums_set):
-    """防编造：titles/points/xhs 整行剔除；desc/ship 逐句剔除（句子按标点切）。"""
+    """防编造：titles/points 整行剔除；xhs 成对校验（t/txt 任一含未知数字整组剔）。"""
     fl = _fact_floats(facts)
 
     def ok(line):
@@ -415,21 +417,15 @@ def _verify(ai, facts, nums_set):
             return False
         return True
 
-    def sent_ok(text, ship_guard=False):
-        parts = re.split(r'(?<=[。！？；;\n])', text)
-        keep = [p for p in parts if ok(p)]
-        if ship_guard:
-            # desc 里不该出现发货话术（发货只放 ship_nat/ship_rep，前端拼）
-            keep = [p for p in keep if not SHIPY_RE.search(p)]
-        return ''.join(keep)
-
     out = {}
     out['titles'] = [t for t in ai.get('titles') or [] if isinstance(t, str) and ok(t)][:3]
-    out['points'] = [p for p in ai.get('points') or [] if isinstance(p, str) and ok(p)][:10]
-    out['xhs'] = [x for x in ai.get('xhs') or [] if isinstance(x, str) and ok(x)][:5]
-    out['desc'] = sent_ok(ai.get('desc') or '', ship_guard=True).strip()
-    out['ship_nat'] = sent_ok(ai.get('ship_nat') or '').strip()
-    out['ship_rep'] = sent_ok(ai.get('ship_rep') or '').strip()
+    out['points'] = [p for p in ai.get('points') or [] if isinstance(p, str) and ok(p)][:3]
+    xh = []
+    for x in (ai.get('xhs') or []):
+        if isinstance(x, dict) and isinstance(x.get('t'), str) and isinstance(x.get('txt'), str):
+            if ok(x['t']) and ok(x['txt']):
+                xh.append({'t': x['t'].strip(), 'txt': x['txt'].strip()})
+    out['xhs'] = xh[:5]
     return out
 
 
@@ -438,27 +434,69 @@ def glm_copy(model, kind, data, log):
     has_params = bool(data.get('groups'))
     no_params = ("（本次没有抓到参数表，只有型号：文案里绝不允许出现任何具体参数和数字，"
                  "只写成色/交易保障/通用卖点）" if not has_params else "")
-    tone = ("正品：全新未拆封、原厂正品、全国联保的正品行货口吻"
-            if kind != 's' else
-            "样机：展示样机、功能完好，可以提一句「外观可能有轻微展示痕迹，介意慎拍」（仅此一句不夸大），绝不写成全新")
-    raw = _chat(PROMPT.format(model=model, no_params=no_params, tone=tone, facts=facts))
+    brand = (data.get('brand') or '').strip() or '品牌'
+    kk_titles = ('注意：这是正品全新机——标题里必须用「全新未拆封/全新原封」，绝不许出现「展示样机/样机」字样。'
+                 if kind != 's' else
+                 '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新未拆封/全新原封/全新」字样。')
+    raw = _chat(PROMPT.format(model=model, pname=data.get('pname') or model, brand=brand,
+                              no_params=no_params, kk_titles=kk_titles, facts=facts))
     m = re.search(r'\{.*\}', raw, re.S)
     ai = json.loads(m.group(0)) if m else {}
     nums_set = set(NUM_RE.findall(norm_model(model)))
     res = _verify(ai, facts, nums_set)
     # 价格尾巴兜底：AI 没听话写出 1649.0元 → 1649元（4.5kg 这类真小数不受影响）
-    for _k in ('titles', 'points', 'xhs'):
+    for _k in ('titles', 'points'):
         res[_k] = [re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', s) for s in res[_k]]
-    res['desc'] = re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', res['desc'])
-    dropped = ((3 - len(res['titles'])) + (10 - len(res['points']) if len(res['points']) < 6 else 0)
-               + (5 - len(res['xhs'])))
+    for x in res['xhs']:
+        x['t'] = re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', x['t'])
+        x['txt'] = re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', x['txt'])
+    dropped = ((3 - len(res['titles'])) + (3 - len(res['points'])) + (5 - len(res['xhs'])))
     if dropped > 0:
         log("防编造校验剔除 %d 条含未知数字的内容" % dropped)
     return res
 
 
+# ---------------------------------------------------------------- 描述拼装
+def build_desc(model, kk, data, pts, ship='nat'):
+    """商品描述固定版式（2026-10-13 用户拿闲鱼配文软件定稿）：AI 只供 3 条卖点短句，
+    其余全程序拼——【产品名】型号 / 卖点×3 / 【参数】【官网价】【交易】 / 结尾话术 + 可发货地区。
+    ship='nat' 全国版；'rep' 报备版（深圳/东莞/惠州/广州）。"""
+    brand = (data.get('brand') or '').strip() or '原厂'
+    nm = str(model).strip()
+    head = re.sub(r'\s*' + re.escape(nm) + r'\s*', ' ', str(data.get('pname') or '')).strip()
+    head = re.sub(r'\s{2,}', ' ', head) or (brand + '家电')
+    L = ['【%s】型号 %s' % (head, nm), '']
+    for p in (pts or [])[:3]:
+        L.append(p)
+    L.append('')
+    flat = []
+    for _g, kv in (data.get('groups') or []):
+        for a, b in kv:
+            s = '%s %s' % (a, b)
+            if s not in flat:
+                flat.append(s)
+    if flat:
+        L.append('【参数】' + ' | '.join(flat[:8]))
+    if str(data.get('price') or '').strip():
+        L.append('【官网价】%s （本店售价见标价，%s）'
+                 % (data['price'], '全新未拆封' if kk == 'l' else '展示样机'))
+    L.append('【交易】先验后签收，破损拒收')
+    L.append('')
+    if kk == 'l':
+        L.append('%s官方正品，全新未拆封，全国联保' % brand)
+        L.append('品质保证，放心购买，售后无忧')
+    else:
+        L.append('%s官方正品，展示样机，功能完好' % brand)
+        L.append('外观可能有轻微展示痕迹，介意慎拍')
+    L.append('支持专业送货安装，当地售后师傅上门安装')
+    L.append('让您买得放心，用得安心！')
+    L.append('可发货地区：全国' if ship == 'nat' else '可发货地区：深圳/东莞/惠州/广州（可送装到位）')
+    return '\n'.join(L)
+
+
 # ---------------------------------------------------------------- 图片落盘
 def dl_images(urls, mdir, log):
+    """配图落盘：copy/<型号>/01.jpg、02.jpg… 编号命名（对齐用户上货工具的原图素材）"""
     os.makedirs(mdir, exist_ok=True)
     for old in os.listdir(mdir):
         try:
@@ -478,7 +516,7 @@ def dl_images(urls, mdir, log):
                         binary=True, timeout=20)
             if len(raw) < 3000:
                 continue
-            name = "img_%02d%s" % (len(saved) + 1, ext)
+            name = "%02d%s" % (len(saved) + 1, ext)
             with open(os.path.join(mdir, name), "wb") as f:
                 f.write(raw)
             saved.append(name)
@@ -488,12 +526,58 @@ def dl_images(urls, mdir, log):
     return saved
 
 
+def make_featured(mdir, price, log):
+    """促销首图（2026-10-13 学用户上货工具）：主图 01.* 居中白底 + 左下价格角标 → 0_主图_卖点拼版.jpg"""
+    srcs = [f for f in os.listdir(mdir) if re.match(r'^01\.(jpe?g|png|webp)$', f, re.I)]
+    if not srcs:
+        return ''
+    try:
+        from PIL import Image, ImageDraw, ImageFont   # PyInstaller: hiddenimports 已含 PIL（openpyxl 依赖 pillow）
+    except Exception:
+        log('Pillow 没装，跳过促销首图')
+        return ''
+    try:
+        im = Image.open(os.path.join(mdir, srcs[0])).convert('RGB')
+        canvas = Image.new('RGB', (900, 900), (250, 250, 250))
+        scale = min(820.0 / im.width, 820.0 / im.height, 1.0)
+        im2 = im.resize((max(1, int(im.width * scale)), max(1, int(im.height * scale))))
+        canvas.paste(im2, ((900 - im2.width) // 2, (900 - im2.height) // 2))
+        p = str(price or '').strip()
+        if p:
+            try:
+                pf = float(p)
+                p = str(int(pf)) if pf == int(pf) else str(round(pf, 2))
+            except ValueError:
+                pass
+            font = None
+            for fn in ('C:/Windows/Fonts/msyhbd.ttc', 'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/simhei.ttf'):
+                try:
+                    font = ImageFont.truetype(fn, 46)
+                    break
+                except Exception:
+                    continue
+            d = ImageDraw.Draw(canvas)
+            if font:
+                txt = '+ ' + p
+                bb = d.textbbox((0, 0), txt, font=font)
+                tw, th = bb[2] - bb[0], bb[3] - bb[1]
+                x, y = 56, 900 - 56 - th - 30
+                d.rounded_rectangle([x, y, x + tw + 52, y + th + 30], radius=18, fill=(26, 32, 48))
+                d.text((x + 26, y + 13), txt, font=font, fill=(255, 255, 255))
+        out = os.path.join(mdir, '0_主图_卖点拼版.jpg')
+        canvas.save(out, quality=88)
+        return os.path.basename(out)
+    except Exception as e:
+        log('促销首图合成失败：%s' % e)
+        return ''
+
+
 # ---------------------------------------------------------------- 主入口
 def generate(model, kind='l', force=0, log=None):
     log = log or (lambda s: None)
     nm = norm_model(model) or model
     kk = 's' if kind == 's' else 'l'
-    cache = os.path.join(copy_root(), "%s_%s.json" % (nm, kk))
+    cache = os.path.join(copy_root(), "%s_%s_v2.json" % (nm, kk))   # v2：新版式（结构变了，旧缓存不读）
     if not force and os.path.isfile(cache):
         try:
             with io.open(cache, encoding="utf-8") as f:
@@ -515,13 +599,19 @@ def generate(model, kind='l', force=0, log=None):
     except ValueError:
         pass
     ai = glm_copy(model, kk, data, log)
-    images = dl_images(data.get('imgs') or [], os.path.join(copy_root(), nm), log)
+    mdir = os.path.join(copy_root(), nm)
+    images = dl_images(data.get('imgs') or [], mdir, log)
+    featured = make_featured(mdir, data.get('price'), log)
+    # 卖点短句：官网 sellpoints 是真数据优先；没有才用 AI 的 3 条
+    pts = [p for p in (data.get('sellpoints') or []) if p][:3] or ai['points'][:3]
     res = {"ok": True, "cached": False, "model": model, "kind": kk,
            "source": data['source'], "source_url": data['url'],
            "pname": data['pname'], "price": data['price'],
-           "titles": ai['titles'], "points": ai['points'], "desc": ai['desc'],
-           "ship_nat": ai['ship_nat'], "ship_rep": ai['ship_rep'], "xhs": ai['xhs'],
-           "images": images}
+           "titles": ai['titles'], "points": ai['points'],
+           "desc_nat": build_desc(model, kk, data, pts, 'nat'),
+           "desc_rep": build_desc(model, kk, data, pts, 'rep'),
+           "xhs": ai['xhs'],
+           "images": images, "featured": featured}
     try:
         with io.open(cache, "w", encoding="utf-8") as f:
             json.dump(res, f, ensure_ascii=False)

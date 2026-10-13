@@ -209,7 +209,7 @@
           </div>
           <button id="go">查询</button>
         </div>
-        <div id="topbar"><span id="tsStock"></span><span id="tsData"></span></div>
+        <div id="topbar"><span id="tsStock"></span><span id="tsData"></span><span id="updapp" hidden style="color:#ffd75e;cursor:pointer;white-space:nowrap">⟳ 检查更新</span></div>
       </div>
 
       <div id="neterr"></div>
@@ -308,6 +308,7 @@ var fk = 'all', q = '', curBrand = '', curCat = '', curPtype = '', pminV = null,
 var fStock = false, fSend = false;   /* 开关型筛选（同电脑端顶栏，可叠加）：有货 / 发全国 */
 var fNo = false, fLoss = false, LOSS_KEYS = [];   // 抽屉里的状态筛选：没库存 / 亏钱
 var FEE = 0.016;                 // 闲鱼平台费率 1.6%（同电脑端）
+var ONLINE = true;               /* 2026-10-13 真软件化：APP 断网时本地快照只许查（改数据一律拦） */
 
 /* ============ 归一化（与电脑端严格一致） ============ */
 function half(s){ return String(s==null?'':s).replace(/[\uFF01-\uFF5E]/g,function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); }).replace(/\u3000/g,' '); }
@@ -372,6 +373,22 @@ function api(path, opt){
   if (opt.body) h['Content-Type'] = 'application/json';
   return fetch(API + path, { method: opt.method || 'GET', headers: h, body: opt.body ? JSON.stringify(opt.body) : undefined })
     .then(function(r){ return r.json().then(function(j){ if (r.status===401) throw {auth:true,msg:'登录过期'}; if(!r.ok||j.ok===false) throw {msg:j.msg||('HTTP '+r.status)}; return j; }); });
+}
+
+/* ============ 在线/离线（2026-10-13 真软件化）============
+   断网时 APP 用本地快照照常查，但改数据的操作（标记/取消/定价落库）全拦——
+   防止和云端打架。网络失败的判定：api() 里 fetch 层抛的错没有 .msg 字段 */
+function setOnline(ok){
+  if (ONLINE === ok) return;
+  ONLINE = ok;
+  var el = document.getElementById('tsData');
+  if (el) el.textContent = ok ? '' : '离线 · 只许查';
+}
+function wentOffline(){ setOnline(false); }
+function needOnline(){
+  if (ONLINE) return true;
+  toast('离线模式：只能查，联网后再操作');
+  return false;
 }
 
 /* 自绘弹窗：withInput=true 带定价输入框；cb 收 true/false/null/数字
@@ -820,7 +837,7 @@ function refreshImgs(){
 }
 function kindTxt(it){ return it.k && it.k.indexOf('s')>=0 && it.k.indexOf('l')>=0 ? '滞+样' : (it.k && it.k.indexOf('l')>=0 ? '滞销' : (it.k && it.k.indexOf('s')>=0 ? '样机' : '正品')); }
 function cardHTML(it){
-  var canPub = AUTH && (AUTH.role==='admin' || (AUTH.perm && AUTH.perm.calc));
+  var canPub = !!AUTH;   /* 2026-10-13 用户定稿：标记发布/定价不要权限，谁登了都能用（要权限的只有补图/删图，手机端没这功能） */
   var marked = !!MARKED[it.c];
   var btns = '';
   if (canPub){
@@ -896,6 +913,7 @@ function pubStockWarn(){
 
 /* ============ 发布 / 取消 ============ */
 function pubOn(it, p, k){
+  if (!needOnline()) return;                 // 离线只许查（2026-10-13）
   /* 类型跟成本口径走（2026-10-12 用户拍板）：成本下拉选的是「样机清理价」→ 样机；
      选的不是样机（含没得选），一律定义成新机 */
   k = k || (it.k==='s' ? 's' : 'l');
@@ -907,6 +925,7 @@ function pubOn(it, p, k){
   }).catch(function(e){ toast('发布失败：'+(e.msg||e)); });
 }
 function pubOff(it){
+  if (!needOnline()) return;                 // 离线只许查（2026-10-13）
   api('/pub', { method:'POST', body:{ c: it.c, on: false } }).then(function(){
     delete MARKED[it.c]; delete PRICES[it.c];
     toast('已取消发布（定价一并清了）');
@@ -1093,8 +1112,12 @@ function wire(){
         var ksel = '', selEl = box ? box.querySelector('.costsel') : null;
         if (selEl && selEl.selectedIndex>=0) ksel = selEl.options[selEl.selectedIndex].getAttribute('data-l') || '';
         var k = ksel.indexOf('样机')>=0 ? 's' : (it.k==='s' ? 's' : 'l');
+        /* 2026-10-13 用户定稿：没定价不许标记（电脑端同款规矩） */
         if (isFinite(cur1) && cur1>0){ pubOn(it, cur1, k); }
-        else dlg('标记发布「' + it.mo + '」\n闲鱼定价（留空=只标记不定价）：', true, function(v){ pubOn(it, v, k); });
+        else dlg('标记发布「' + it.mo + '」\n先填闲鱼定价（必填）：', true, function(v){
+          if (!(isFinite(v) && v>0)){ toast('没定价不能标记发布——先填价格'); return; }
+          pubOn(it, v, k);
+        });
       }
       else if (btn.dataset.act==='unpub'){
         dlg('取消发布「' + it.mo + '」？\n（闲鱼定价会一并清掉）', false, function(ok){ if (ok) pubOff(it); });
@@ -1247,13 +1270,34 @@ function boot(){
 function loadAll(){
   var jobs = [];
   /* 云端补图库（~18MB）不阻塞首屏，到了就把占位补成真图 */
-  api('/myimgs').then(function(j){ MYIMGS = j.imgs || {}; refreshImgs(); }).catch(function(){});
-  if (MP){ jobs.push(Promise.resolve()); }
+  api('/myimgs').then(function(j){
+    /* worker 端每条已是 {b:图, by:谁} 结构（2026-10-12 权限收口）——拆包取 b 当图用 */
+    var o = j.imgs || {}, m2 = {};
+    Object.keys(o).forEach(function(k){
+      var v = o[k];
+      var u = (v && typeof v === 'object') ? (v.b || null) : v;
+      if (typeof u === 'string' && u.indexOf('data:image/') === 0) m2[k] = u;
+    });
+    MYIMGS = m2; refreshImgs();
+  }).catch(function(){});
+  if (MP){
+    /* APP 本地快照秒开首屏；后台拉云端最新，有新就静默换数据（热更新，不用发版） */
+    api('/mpayload').then(function(j){
+      if (!j || !Array.isArray(j.rows) || !j.rows.length) return;
+      var a = JSON.stringify([j.meta || {}, j.rows.length]);
+      var b = JSON.stringify([MP.meta || {}, MP.rows.length]);
+      if (a === b) return;
+      MP = { meta: j.meta || {}, rows: j.rows, imgs: j.imgs || {} };
+      buildIndex(); doSearch(); renderMsgs(); renderPubView();
+      document.getElementById('tsData').textContent = '数据 ' + ((MP.meta||{}).built||'');
+    }).catch(function(){});
+  }
   else {
     jobs.push(api('/mpayload').then(function(j){
       MP = { meta: j.meta || {}, rows: j.rows || [], imgs: j.imgs || {} };
       buildIndex();
     }).catch(function(e){
+      if (!(e && e.msg)) wentOffline();      // fetch 层挂了 = 网络不通
       document.getElementById('neterr').style.display='block';
       document.getElementById('neterr').textContent = '目录还没上云（等 CI 跑一轮）或拉取失败：' + (e.msg||e);
     }));
@@ -1268,7 +1312,35 @@ function loadAll(){
   }));
   jobs.push(api('/pub').then(function(j){
     MARKED = j.marks || {}; PRICES = j.prices || {};
-  }).catch(function(){ MARKED={}; PRICES={}; }));
+  }).catch(function(e){
+    MARKED={}; PRICES={};
+    if (!(e && e.msg)) wentOffline();        // fetch 层挂了 = 网络不通（APP 离线只许查）
+  }));
+  /* 手机 APP（Capacitor 壳）专属：手动检查更新（2026-10-13 用户要求加按键）。
+     APK 壳里 window.Capacitor 一定存在，浏览器里没有 → 按键只对 APP 显示 */
+  if (typeof window.Capacitor !== 'undefined'){
+    var _up = document.getElementById('updapp');
+    if (_up){
+      _up.hidden = false;
+      _up.onclick = function(){
+        _up.textContent = '检查中…';
+        api('/appcheck?plat=apk').then(function(j){
+          _up.textContent = '⟳ 检查更新';
+          if (!j || !j.ok || !j.ver){ toast('没查到新版本（等发版后再试）'); return; }
+          dlg('最新版本 v' + j.ver + '，现在去下载安装吗？\n（可覆盖升级，不用卸载旧的）', false, function(ok){
+            if (ok){
+            /* APP：WebView 挂了 DownloadListener（CI 注入）→ 走应用内下载+自动拉起安装；
+               浏览器：没有监听器，顶层跳转由浏览器自己接管下载 */
+            var a = document.createElement('a');
+            a.href = API + '/appdl?plat=apk';
+            document.body.appendChild(a); a.click(); a.remove();
+            toast('已开始下载安装包，下载完会自动弹出安装');
+          }
+          });
+        }).catch(function(e){ _up.textContent = '⟳ 检查更新'; toast('检查失败：' + (e.msg || e)); });
+      };
+    }
+  }
   if (AUTH.role==='admin'){
     jobs.push(api('/yyalert').then(function(j){
       var ts = +j.ts || 0, msg = String(j.msg||'');
@@ -1293,7 +1365,16 @@ function tryToken(){
   AUTH = { token: t };
   return api('/perm').then(function(j){
     AUTH.u = j.u; AUTH.role = j.role; AUTH.perm = j.perm || {};
+    try { localStorage.setItem('m_auth', JSON.stringify({ u: j.u, role: j.role, perm: j.perm || {} })); } catch(e){}
   }).catch(function(e){
+    /* APP 断网但本地有身份缓存 → 离线模式（只许查）；网页版没缓存就必须重新登录 */
+    var cached = null;
+    try { cached = JSON.parse(localStorage.getItem('m_auth')||'null'); } catch(err){}
+    if (typeof window.Capacitor !== 'undefined' && cached && !(e && e.auth)){
+      AUTH = { token: t, u: cached.u, role: cached.role, perm: cached.perm || {} };
+      setOnline(false);
+      return;
+    }
     AUTH = null; localStorage.removeItem('m_token');
     throw e;
   });
@@ -1305,6 +1386,8 @@ document.getElementById('lgo').onclick = function(){
   api('/login', { method:'POST', body:{ u:u, p:p } }).then(function(j){
     localStorage.setItem('m_token', j.token);
     AUTH = { token: j.token, u: j.u, role: j.role, perm: j.perm || {} };
+    try { localStorage.setItem('m_auth', JSON.stringify({ u: j.u, role: j.role, perm: j.perm || {} })); } catch(e){}
+    setOnline(true);
     boot();
   }).catch(function(e){ document.getElementById('lerr').textContent = e.msg || '登录失败'; });
 };

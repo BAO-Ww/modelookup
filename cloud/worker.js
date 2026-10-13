@@ -247,6 +247,17 @@ async function route(request, env, path, ctx) {
     return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", ...CORS } });
   }
 
+  // 2026-10-13 手机端真软件化：CI 打 APK 时用 X-Cloud-Key 烤数据快照进包
+  // （正常用户走下面登录态的同路径，互不影响）
+  if (path === "/mpayload" && request.method === "GET") {
+    const ck = env.CLOUD_KEY || env.SECRET;
+    if (ck && (request.headers.get("X-Cloud-Key") || "") === ck) {
+      const v0 = await env.KV.get("mpayload");
+      if (!v0) return jerr("手机端数据还没上云", 404);
+      return new Response(v0, { headers: { "Content-Type": "application/json; charset=utf-8", ...CORS } });
+    }
+  }
+
   const token = request.headers.get("X-Token") || "";
   const usersGate = await getUsers(env);       // 审计（G2/G3）：所有带 token 接口统一校验账号还在、没停用
   const who = await checkToken(env, token, usersGate);
@@ -525,6 +536,33 @@ async function route(request, env, path, ctx) {
       prices[u] = await getPubP(u);
     }
     return J({ ok: true, all: out, prices });
+  }
+
+  // ---------- 闲鱼号配置（2026-10-13 用户定稿）----------
+  // KV: xy_<u> = ["默认","小号A",...] 每账号自己名下一份。
+  // 自己 GET/POST 自己的；?u= 别人的管理号可看可改（账号管理面板代设）。
+  async function getXy(u) { return getJSON(env, "xy_" + u, []); }
+  if (path === "/xy" && request.method === "GET") {
+    const u = url.searchParams.get("u") || who;
+    if (u !== who) {
+      const me = (await getUsers(env))[who];
+      if (!me || me.role !== "admin") return jerr("只有管理号能看别人的闲鱼号", 403);
+    }
+    return J({ ok: true, u, list: await getXy(u) });
+  }
+  if (path === "/xy" && request.method === "POST") {
+    const b = await request.json().catch(() => ({}));
+    let u = who;
+    if (b.u && b.u !== who) {
+      const me = (await getUsers(env))[who];
+      if (!me || me.role !== "admin") return jerr("只有管理号能改别人的闲鱼号", 403);
+      u = safeKey(b.u, 40);
+      if (!u) return jerr("账号名不合法");
+    }
+    if (!Array.isArray(b.list)) return jerr("list 格式错误");
+    const list = b.list.map((x) => String(x || "").trim().slice(0, 24)).filter(Boolean).slice(0, 20);
+    await env.KV.put("xy_" + u, JSON.stringify(list));
+    return J({ ok: true, u, list });
   }
 
   // 定点清理定价表（2026-10-10）：管理号删掉指定账号 pubp_ 里的指定键。
@@ -807,6 +845,11 @@ async function route(request, env, path, ctx) {
     if (plat === "mac") {
       return (rel.assets || []).find((x) => /^ModelLookup-mac-[\w.]*\.zip$/i.test(x.name))
           || (rel.assets || []).find((x) => /^ModelLookup-mac.*\.zip$/i.test(x.name)) || null;
+    }
+    // 2026-10-13 手机 APP「检查更新」：?plat=apk 匹配 ModelLookup-Mobile-*.apk
+    if (plat === "apk" || plat === "android") {
+      return (rel.assets || []).find((x) => /^ModelLookup-Mobile-[\w.]*\.apk$/i.test(x.name))
+          || (rel.assets || []).find((x) => /\.apk$/i.test(x.name)) || null;
     }
     const a = (rel.assets || []).find((x) => /^ModelLookup-Setup-\d[\w.]*\.exe$/i.test(x.name))
            || (rel.assets || []).find((x) => /\.exe$/i.test(x.name));

@@ -278,6 +278,11 @@ jobs:
       - name: 成品自检（--check）
         run: python .github/scripts/check_mac.py app/dist/ModelLookup.app
 
+      - name: Ad-hoc 签名（修 Gatekeeper「已损坏」：无签名+隔离属性=损坏；ad-hoc 后降级为可放行的未公证应用）
+        run: |
+          codesign --force --deep --sign - app/dist/ModelLookup.app
+          codesign --verify --deep app/dist/ModelLookup.app && echo CODESIGN_OK
+
       - name: 整理产物（DMG + 更新 zip）
         run: python .github/scripts/stage_mac.py "${{ steps.ver.outputs.num }}"
 
@@ -341,7 +346,14 @@ jobs:
           echo "release=$rel" >> "$GITHUB_OUTPUT"
           echo "ver: tag=$v num=$num release=$rel"
 
-      - name: 生成 Capacitor 安卓工程（壳加载云端 /m）
+      - name: 烤本地快照（真软件化 2026-10-13：界面+数据进 APK，断网可查，运行时云端热更新）
+        working-directory: mobile/app
+        env:
+          KX_SECRET: ${{ secrets.KX_SECRET }}
+          CLOUD_TOKEN: ${{ secrets.CLOUD_TOKEN }}
+        run: python3 ../../.github/scripts/bake_mobile_www.py www
+
+      - name: 生成 Capacitor 安卓工程（加载本地快照，不再指云端 /m）
         working-directory: mobile/app
         run: |
           npm install --no-fund --no-audit
