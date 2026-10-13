@@ -32,12 +32,14 @@ a = Analysis(
         "openpyxl", "et_xmlfile",
         "webview", "webview.menu", "webview.platforms.winforms",
         "clr", "pythonnet", "clr_loader",
+        # 促销首图合成（copywriter.make_featured）：主图 + 价格角标 PIL 拼图
+        "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # 图像是预先烤好的 dataURL，本工具不跑 numpy/PIL/Qt
-    excludes=["numpy", "scipy", "pandas", "matplotlib", "PIL", "Pillow",
+    # 图像数据是预先烤好的 dataURL；PIL 只给文案生成器拼促销首图用（2026-10-13 起要带）
+    excludes=["numpy", "scipy", "pandas", "matplotlib",
               "PyQt5", "PyQt6", "PySide2", "PySide6", "IPython", "pytest",
               "setuptools", "pkg_resources", "wheel",
               "tkinter", "unittest", "pydoc_data",

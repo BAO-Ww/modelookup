@@ -6,7 +6,6 @@
     "allowMixedContent": false
   },
   "server": {
-    "androidScheme": "https",
-    "url": "https://auth.baozang.kdns.fr/m"
+    "androidScheme": "https"
   }
 }

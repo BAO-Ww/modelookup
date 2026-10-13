@@ -116,12 +116,103 @@ def patch_styles(adir):
     print("styles.xml patched (statusBarColor=#2E6BE6)")
 
 
+def patch_manifest(adir):
+    """真软件化（2026-10-13）：应用内下载 APK 并拉起安装需要 REQUEST_INSTALL_PACKAGES。幂等。"""
+    mf = os.path.join(adir, "app", "src", "main", "AndroidManifest.xml")
+    if not os.path.isfile(mf):
+        print("AndroidManifest.xml not found, skip install-permission patch")
+        return
+    src = io.open(mf, encoding="utf-8").read()
+    if "REQUEST_INSTALL_PACKAGES" in src:
+        print("manifest already patched, skip")
+        return
+    new, n = re.subn(r"(<uses-permission[^>]*/>)",
+                     r'\1\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />',
+                     src, count=1)
+    if n == 0:
+        print("no uses-permission anchor in manifest, skip")
+        return
+    io.open(mf, "w", encoding="utf-8", newline="\n").write(new)
+    print("manifest patched (REQUEST_INSTALL_PACKAGES)")
+
+
+DL_SNIPPET = """
+        // 2026-10-13 真软件化：应用内更新——WebView 下载监听，APK 走 DownloadManager
+        // 下载完自动拉起系统安装器（不用再跳浏览器手动点开）
+        bridge.getWebView().setDownloadListener(new android.webkit.DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String ua, String cd, String mime, long len) {
+                try {
+                    android.app.DownloadManager.Request req = new android.app.DownloadManager.Request(android.net.Uri.parse(url));
+                    req.setMimeType("application/vnd.android.package-archive");
+                    req.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                    req.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "ModelLookup-update.apk");
+                    final android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                    final long id = dm.enqueue(req);
+                    android.widget.Toast.makeText(MainActivity.this, "Download started, please wait", android.widget.Toast.LENGTH_LONG).show();
+                    BroadcastReceiver done = new BroadcastReceiver() {
+                        @Override
+                        public void onReceive(android.content.Context ctx, android.content.Intent i) {
+                            long rid = i.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                            if (rid != id) return;
+                            android.net.Uri uri = dm.getUriForDownloadedFile(id);
+                            if (uri == null) return;
+                            android.content.Intent open = new android.content.Intent(android.content.Intent.ACTION_VIEW);
+                            open.setDataAndType(uri, "application/vnd.android.package-archive");
+                            open.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION | android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                            try { startActivity(open); } catch (Exception ex) { }
+                        }
+                    };
+                    android.content.IntentFilter f = new android.content.IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+                    if (android.os.Build.VERSION.SDK_INT >= 33) {
+                        registerReceiver(done, f, android.content.Context.RECEIVER_EXPORTED);
+                    } else {
+                        registerReceiver(done, f);
+                    }
+                } catch (Exception e) {
+                    // 兜底：交给系统浏览器下载
+                    try {
+                        startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)));
+                    } catch (Exception ex) { }
+                }
+            }
+        });
+"""
+
+
+def patch_downloader(adir):
+    """MainActivity.onCreate 注入 DownloadListener（应用内下载→拉起安装）。幂等。"""
+    hits = []
+    root = os.path.join(adir, "app", "src", "main", "java")
+    for dirpath, _dirs, files in os.walk(root):
+        for fn in files:
+            if fn == "MainActivity.java":
+                hits.append(os.path.join(dirpath, fn))
+    if not hits:
+        print("MainActivity.java not found, skip downloader patch")
+        return
+    mp = hits[0]
+    src = io.open(mp, encoding="utf-8").read()
+    if "setDownloadListener" in src:
+        print("MainActivity already patched, skip")
+        return
+    anchor = "super.onCreate(savedInstanceState);"
+    if anchor not in src:
+        print("onCreate anchor not found in MainActivity, skip downloader patch")
+        return
+    src = src.replace(anchor, anchor + "\n" + DL_SNIPPET, 1)
+    io.open(mp, "w", encoding="utf-8", newline="\n").write(src)
+    print("MainActivity patched (in-app APK download listener)")
+
+
 def main():
     adir = sys.argv[1] if len(sys.argv) > 1 else "android"
     store_pass = os.environ.get("ML_KS_PASS") or DEFAULT_PASS
     ensure_keystore(adir, store_pass)
     patch_gradle(adir, store_pass)
     patch_styles(adir)
+    patch_manifest(adir)
+    patch_downloader(adir)
 
 
 if __name__ == "__main__":
