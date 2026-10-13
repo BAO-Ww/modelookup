@@ -165,9 +165,36 @@ async function getUsers(env) {
 async function putUsers(env, users) {
   await env.KV.put(K_USERS, JSON.stringify(users));
 }
+// ---------------- 密码加固（2026-10-13，免费档方案） ----------------
+// 裸 SHA-256(salt+pw) 撞库成本太低 → PBKDF2-SHA256。格式烤进 ph 字段：
+//   新格式 "pbkdf2$<iter>$<salt>$<hex>"；老格式就是裸 hex，登录成功时静默升级（不惊动用户）。
+// 免费套餐每次请求 10ms CPU：1 万次迭代走 WebCrypto 原生实现实测毫秒级，余量足；
+// OWASP 推荐的 21 万次要付费版（默认 30s CPU）才跑得动——哪天升 ¥36 只改下面这一个数。
+const PBKDF2_ITER = 10000;
+async function pbkdf2hex(p, saltHex, iter) {
+  const salt = new Uint8Array(saltHex.match(/.{2}/g).map(h => parseInt(h, 16)));
+  const key = await crypto.subtle.importKey("raw", enc.encode(p), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, key, 256);
+  return [...new Uint8Array(bits)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+// 老格式密码 → 新格式（换个新盐；pv 不动，已登录的 token 不掉线）
+async function upgradePw(env, users, u, p) {
+  const user = users[u];
+  if (!user || String(user.ph || "").startsWith("pbkdf2$")) return;
+  const salt2 = crypto.randomUUID().replaceAll("-", "");
+  user.salt = salt2;
+  user.ph = "pbkdf2$" + PBKDF2_ITER + "$" + salt2 + "$" + (await pbkdf2hex(p, salt2, PBKDF2_ITER));
+  await putUsers(env, users);
+}
 async function verifyPw(user, p) {
+  const ph = String(user.ph || "");
+  if (ph.startsWith("pbkdf2$")) {
+    const parts = ph.split("$");                       // [pbkdf2, iter, salt, hex]
+    if (parts.length !== 4 || !/^\d+$/.test(parts[1])) return false;
+    try { return (await pbkdf2hex(p, parts[2], +parts[1])) === parts[3]; } catch (e) { return false; }
+  }
   const h = await sha256hex(user.salt + p);
-  return h === user.ph;
+  return h === ph;
 }
 
 export default {
@@ -176,12 +203,37 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     try {
+      if (ctx) ctx.waitUntil(dailySnap(env));   // 每日 users 快照（当天首次请求触发，不挡响应）
       // 全路由串行化（审计 G15）：读改写型操作（pub/pubsync/admin/save/myimgs…）不再有并发丢更新
       return await withLock(() => route(request, env, path, ctx));
     }
     catch (e) { return jerr("服务异常：" + e.message, 500); }
   }
 };
+
+// 每日快照（2026-10-13，免费兜底）：当天第一个请求把 users 整包写进 snap_YYYYMMDD，
+// 只留最近 7 份（按键名日期清旧的）。写量 1-2 次/天，对 KV 1000 写/天额度无压力。
+// 模块级 _snapDay 缓存：同 isolate 当天只读一次 snap_last，不反复耗读额度。
+// 就算忘了手动 /admin/backup，也永远有一周的滚动恢复点。
+let _snapDay = null;
+async function dailySnap(env) {
+  const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  if (_snapDay === today) return;
+  _snapDay = today;
+  try {
+    if ((await env.KV.get("snap_last")) === today) return;
+    const users = await env.KV.get(K_USERS);
+    if (users == null) return;                        // 还没 init 过，没得备
+    await env.KV.put("snap_" + today, users);
+    await env.KV.put("snap_last", today);
+    const cutoff = new Date(Date.now() - 8 * 86400000).toISOString().slice(0, 10).replaceAll("-", "");
+    const lst = await env.KV.list({ prefix: "snap_" });
+    for (const k of (lst.keys || [])) {
+      const d = k.name.slice(5);
+      if (/^\d{8}$/.test(d) && d <= cutoff) await env.KV.delete(k.name);   // snap_last 不匹配 8 位日期，天然不动
+    }
+  } catch (e) { console.error("每日快照失败：" + e.message); }
+}
 
 async function route(request, env, path, ctx) {
   // 2026-10-12 修复：/appcheck /appdl 用 url.searchParams 取 ?plat=，但 url 从未在
@@ -202,8 +254,8 @@ async function route(request, env, path, ctx) {
     }
     const salt = crypto.randomUUID().replaceAll("-", "");
     users[env.ADMIN_USER] = {
-      ph: await sha256hex(salt + env.ADMIN_PASS), salt, role: "admin",
-      note: "管理号", disabled: false, perm: {}, pv: 0,
+      ph: "pbkdf2$" + PBKDF2_ITER + "$" + salt + "$" + (await pbkdf2hex(env.ADMIN_PASS, salt, PBKDF2_ITER)),
+      salt, role: "admin", note: "管理号", disabled: false, perm: {}, pv: 0,
     };
     await putUsers(env, users);
     await env.KV.put("inited", "1");
@@ -235,6 +287,10 @@ async function route(request, env, path, ctx) {
       return jerr("密码不对", 403);
     }
     try { await env.KV.delete(fk); } catch (e) {}   // 登录成功清失败计数
+    /* 密码加固（2026-10-13）：老格式（裸 SHA-256）登录成功这一次静默升级成 PBKDF2，用户无感 */
+    if (!String(user.ph || "").startsWith("pbkdf2$")) {
+      try { await upgradePw(env, users, u, p); } catch (e) { console.error("密码升级失败：" + e.message); }
+    }
     const token = await makeToken(env, u, user.pv);
     return J({ ok: true, token, u, role: user.role || "sub",
                perm: user.role === "admin" ? {} : migratePerm(user.perm) });
@@ -256,6 +312,25 @@ async function route(request, env, path, ctx) {
       if (!v0) return jerr("手机端数据还没上云", 404);
       return new Response(v0, { headers: { "Content-Type": "application/json; charset=utf-8", ...CORS } });
     }
+  }
+
+  // ---------- 救火通道（2026-10-13）：users 账本整包恢复 ----------
+  // POST /admin/restore，鉴权走 X-Cloud-Key（CI 同款，范本就是上面的 /mpayload）。
+  // 故意不用登录态：要用它的场景恰恰是「账本坏了谁都登不进去」，要求先登录等于
+  // 把钥匙锁在屋里。配套 GET /admin/backup（登录态，在下面门禁之后）导出快照。
+  if (path === "/admin/restore" && request.method === "POST") {
+    const ck = env.CLOUD_KEY || env.SECRET;
+    if (!ck || (request.headers.get("X-Cloud-Key") || "") !== ck) return jerr("没有权限", 403);
+    const snap = await request.json().catch(() => null);
+    if (!snap || typeof snap !== "object" || Array.isArray(snap)) return jerr("body 应为 users 对象");
+    for (const [u0, x] of Object.entries(snap)) {
+      if (!String(u0).trim() || !x || typeof x !== "object" ||
+          !String(x.ph || "") || !String(x.salt || ""))
+        return jerr("快照里「" + u0 + "」缺 ph/salt，拒绝整包恢复（不覆盖现有账本）");
+    }
+    await env.KV.put(K_USERS, JSON.stringify(snap));
+    await env.KV.put("inited", "1");
+    return J({ ok: true, msg: "已恢复 " + Object.keys(snap).length + " 个账号，inited 已重设" });
   }
 
   const token = request.headers.get("X-Token") || "";
@@ -309,10 +384,25 @@ async function route(request, env, path, ctx) {
     if (!(await verifyPw(user, String(b.old || "")))) return jerr("旧密码不对", 403);
     const np = String(b.new || "");
     if (np.length < 4) return jerr("新密码至少 4 位");
-    user.ph = await sha256hex(user.salt + np);
+    await upgradePw(env, users, who, np);   // 新密码直接存 PBKDF2 新格式（2026-10-13）
     user.pv = (user.pv || 0) + 1;      // 审计（静态2）：密码版本号 +1，旧 token 全部作废，客户端自动重新登录
     await putUsers(env, users);
     return J({ ok: true });
+  }
+
+  // ---------- 救火通道（2026-10-13）：users 账本整包导出 ----------
+  // GET /admin/backup，管理号登录态。导出的文件配合 POST /admin/restore 用；
+  // 平时也可以直接对着每日快照 snap_* 键（见 dailySnap）手动抄。
+  if (path === "/admin/backup" && request.method === "GET") {
+    const me = usersGate[who];
+    if (!me || me.role !== "admin") return jerr("只有管理号能导出", 403);
+    return new Response(JSON.stringify(usersGate, null, 2), {
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="users-backup-' + new Date().toISOString().slice(0, 10) + '.json"',
+        ...CORS,
+      },
+    });
   }
 
   // ---------- 管理号：批量保存 ----------
@@ -416,7 +506,7 @@ async function route(request, env, path, ctx) {
   if (path === "/pub" && request.method === "GET") {
     return J({ ok: true, marks: await getPubN(who), prices: await getPubP(who) });
   }
-  // 标记/取消一条：{c, on, k: 'l'|'s', p: 闲鱼定价(可选), xy: 闲鱼号(可选，缺省=默认)}
+  // 标记/取消一条：{c, on, k: 'l'|'s', p: 闲鱼定价(可选), xy: 闲鱼号(可选，缺省=默认), cs: {l,v} 成本口径(可选，2026-10-13)}
   if (path === "/pub" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     const c = safeKey(b.c, 100);                       // 审计（G1/S4）：长度上限 + 键名黑名单
@@ -446,12 +536,21 @@ async function route(request, env, path, ctx) {
       const now = Date.now();
       const k = b.k === "s" ? "s" : "l";
       const cur = normMark(marks[c], (await getPubP(who))[c]);
-      cur.xys[xy] = { t: now, k, p: isFinite(+b.p) ? +b.p : null };
+      // 成本口径跟发布记录走（2026-10-13 用户定稿）：搭车存，旧客户端发的没这字段自动跳过
+      if (b.cs && typeof b.cs === "object" && !Array.isArray(b.cs))
+        cur.cs = { l: safeKey(b.cs.l, 40) || "", v: isFinite(+b.cs.v) ? +b.cs.v : null };
+      // 2026-10-13 修「价格乱跳」：请求没带 p（客户端本地没价，绝不能发 null 抹价）
+      // → 保留该号现价；明确带了数字才盖，显式 null 才清（弹窗必填价路径不受影响）
+      const oldE = cur.xys[xy];
+      const np = b.p === undefined
+        ? (oldE && isFinite(+oldE.p) ? +oldE.p : null)
+        : (isFinite(+b.p) ? +b.p : null);
+      cur.xys[xy] = { t: now, k, p: np };
       markTop(cur);
       marks[c] = cur;
-      if (isFinite(+b.p)) {
+      if (isFinite(np)) {
         const pp = await getPubP(who);
-        pp[c] = +b.p;
+        pp[c] = +np;
         await env.KV.put("pubp_" + who, JSON.stringify(pp));
       }
     }
@@ -478,6 +577,8 @@ async function route(request, env, path, ctx) {
           if (!cur.xys[x] || (+cur.xys[x].t || 0) < (+e.t || 0))
             cur.xys[x] = { t: +e.t || Date.now(), k: e.k === "s" ? "s" : "l", p: isFinite(+e.p) ? +e.p : null };
         }
+        if (v.cs && typeof v.cs === "object" && !Array.isArray(v.cs))
+          cur.cs = { l: safeKey(v.cs.l, 40) || "", v: isFinite(+v.cs.v) ? +v.cs.v : null };
         markTop(cur);
         if (JSON.stringify(marks[c]) !== JSON.stringify(cur)) { marks[c] = cur; chM = true; }
       } else {
@@ -496,6 +597,40 @@ async function route(request, env, path, ctx) {
     // KV 省额度（2026-10-10）：只有真的并进来了发布标记才写 pub_——
     // 打价场景每次 /pubsync 只带 prices，pub_ 原来被无条件整包重写，白烧一倍写额度
     if (chM) await env.KV.put("pub_" + who, JSON.stringify(marks));
+    // cs/bn/nat 通道（2026-10-13）：口径 cs、出库奖励点击状态 bn、发全国勾选 nat
+    // 跟发布记录走。只动各自字段，不碰 xys/时间戳/pubp_；旧客户端没这些字段自动跳过
+    let chC = false;
+    if (b.cs && typeof b.cs === "object" && !Array.isArray(b.cs)) {
+      for (const [c0, v] of Object.entries(b.cs)) {
+        const c = safeKey(c0, 100);
+        if (!c || !v || typeof v !== "object" || Array.isArray(v)) continue;
+        if (!marks[c] || typeof marks[c] !== "object" || !marks[c].xys) continue;   // 只改已发布的
+        const cur = marks[c];
+        const ncs = { l: safeKey(v.l, 40) || "", v: isFinite(+v.v) ? +v.v : null };
+        if (JSON.stringify(cur.cs || {}) !== JSON.stringify(ncs)) { cur.cs = ncs; chC = true; }
+      }
+    }
+    if (b.bn && typeof b.bn === "object" && !Array.isArray(b.bn)) {
+      for (const [c0, v] of Object.entries(b.bn)) {
+        const c = safeKey(c0, 100);
+        if (!c || !v || typeof v !== "object" || Array.isArray(v)) continue;
+        if (!marks[c] || typeof marks[c] !== "object" || !marks[c].xys) continue;
+        const cur = marks[c];
+        const nb = { lb: isFinite(+v.lb) ? +v.lb : 0, sb: isFinite(+v.sb) ? +v.sb : 0 };
+        if (JSON.stringify(cur.bn || {}) !== JSON.stringify(nb)) { cur.bn = nb; chC = true; }
+      }
+    }
+    if (b.nat && typeof b.nat === "object" && !Array.isArray(b.nat)) {
+      for (const [c0, v] of Object.entries(b.nat)) {
+        const c = safeKey(c0, 100);
+        if (!c || v == null) continue;
+        if (!marks[c] || typeof marks[c] !== "object" || !marks[c].xys) continue;
+        const cur = marks[c];
+        const nv = +v === 1 ? 1 : 0;
+        if (cur.nat !== nv) { cur.nat = nv; chC = true; }
+      }
+    }
+    if (chC) await env.KV.put("pub_" + who, JSON.stringify(marks));
     // xyp 增量（2026-10-12 多闲鱼号）：改某号某型的价，只对已存在的标记改，不造新标记
     if (b.xyp && typeof b.xyp === "object" && !Array.isArray(b.xyp)) {
       let chX = false;
