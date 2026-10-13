@@ -143,6 +143,12 @@ def merge_records(allrecs):
             r["mo"] = rec["mo"]
         if rec.get("nat") is not None:
             r["nat"], r["natk"] = rec["nat"], rec.get("natk")
+        # 全国可发按口径分开存（2026-10-13 用户定稿业务口径：滞销机不可发全国、样机可发全国
+        # ——同一型号两个 sheet 各写各的，卡上两行都留，前端按当前成本口径显示/算运费）
+        if rec["kind"] == "l":
+            r["natl"], r["natkl"] = rec["nat"], rec.get("natk")
+        else:
+            r["nats"], r["natks"] = rec["nat"], rec.get("natk")
 
     # ---- 第二批：价格表
     #   精准归卡（2026-10-10 两轮定稿）：

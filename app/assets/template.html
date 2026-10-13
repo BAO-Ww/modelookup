@@ -789,6 +789,7 @@ function saveCostSel(k, opt){
   MARKED[k].cs = { l: String(opt.l || '').slice(0, 40), v: isFinite(+opt.v) ? +opt.v : null };
   saveMarks();
   pubMetaPush(k);           /* 搭 /pubsync 的 cs 通道上云（旧 worker 忽略未知字段不炸） */
+  updateLossBanner();       // 实时黄条（2026-10-13）：口径变了当场重算
 }
 /* 口径 cs / 出库奖励 bn / 发全国勾选 nat 三个「核算状态」统一搭 /pubsync 上云
    （2026-10-13 用户问「改了怎么存的」：都要跟账号走，换电脑也在）。
@@ -813,6 +814,7 @@ function saveBonusSel(k, isLb, v, on){
   else MARKED[k].bn.sb = on ? (+v || 0) : 0;
   saveMarks();
   pubMetaPush(k);
+  updateLossBanner();       // 实时黄条（2026-10-13）：奖励点了/取消了当场重算
 }
 /* 2026-10-10 新规矩（用户拍板）：定价只属于「已标记发布」的型号——
    没点标记已发布的，点价格格/手输的价都只是当场算账，离开界面就不留。
@@ -1241,9 +1243,10 @@ function calcHTML(it){
     + (isNum(saved) ? ' value="' + saved + '"' : '') + '>'
     + sel
     /* 发全国要加 100 运费（卖家出），默认算上；只卖深惠广莞就把勾去掉。
-       ⚠ 「可发全国」和「问过才能发全国」的型号都渲染（canNationwide），
-         铁定只发深惠广莞的不出。2026-10-13：勾选状态已发布的跟记录走（nat） */
-    + (canNationwide(it)
+       ⚠ 2026-10-13 定稿：滞销/样机口径各判各的（滞销机不可发、样机可发），渲染时
+         只要有一个口径可发就先出勾选框，calcUpdate 按当前口径显隐+勾选；
+         含税/全新机口径走卡级老规则。勾选状态已发布的跟记录走（nat） */
+    + ((canNationwide(it) || canNationwide(it, 'l') || canNationwide(it, 's'))
        ? '<label class="cfr" title="发深惠广莞以外要加 100 运费，勾上就在利润里扣掉；本地卖可以取消勾选">'
          + '<input type="checkbox" class="cfrbox"' + (_nat ? ' checked' : '') + '> 发全国 −100运费</label>'
        : '')
@@ -1257,6 +1260,21 @@ function calcUpdate(box){
   var cost = parseFloat(sel.value);
   var price = parseFloat(inp.value);
   var feeEl = box.querySelector('.p-fee'), outEl = box.querySelector('.p-out');
+  // 发全国勾选框跟口径走（2026-10-13 定稿：滞销机不可发、样机可发）——
+  // 放在早退前面：没填价也要跟着口径切显隐，别等算出账才变
+  var cfr = box.querySelector('.cfrbox');
+  var _cit = itemOf(box.dataset.key);
+  if (cfr && _cit && !_cit._md && sel && sel.selectedIndex >= 0){
+    var _so = sel.options[sel.selectedIndex];
+    var _kind = kindOfBasis(_so ? _so.getAttribute('data-l') : '');
+    var _cfl = cfr.closest('.cfr');
+    if (canNationwide(_cit, _kind)){
+      if (_cfl) _cfl.hidden = false;
+    } else {
+      cfr.checked = false;
+      if (_cfl) _cfl.hidden = true;
+    }
+  }
   if (!isFinite(price) || price <= 0 || !isFinite(cost)){
     feeEl.textContent = '—'; outEl.textContent = '—'; outEl.className = 'p-out'; return;
   }
@@ -1265,7 +1283,6 @@ function calcUpdate(box){
   var bn = (parseFloat(box.getAttribute('data-bnlb')) || 0)
          + (parseFloat(box.getAttribute('data-bnsb')) || 0);
   // 发全国运费 100（卖家承担）：勾上就扣；只发深惠广莞的本地单取消勾选
-  var cfr = box.querySelector('.cfrbox');
   var freight = (cfr && cfr.checked) ? 100 : 0;
   var fee = round2(price * FEE), profit = round2(price - price * FEE - cost + bn - freight);
   var tags = [];
@@ -2082,7 +2099,7 @@ var PH_SVG = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none">'
    · 找品类报备确认 / 一单一询是否能发外地                       → 要问过才知道（natk 2）
    以后表里冒出没见过的写法 → 保守当「要问过才知道」，原文照显。 */
 var NAT_EXTRA = {
-  '可以': 'y', '报备可发全国': 'y',
+  '可以': 'y', '可以发': 'y', '报备可发全国': 'y',
   '找品类报备确认': 'q', '一单一询是否能发外地': 'q',
   '进货大于3年可以发外区': 's', '进货小于3年不能发外区': 's'
 };
@@ -2112,11 +2129,32 @@ function shipTextOf(it){
    勾上就按保守算；只有铁定只发深惠广莞的不出。
    命中条件：全国可发列「可以 / 报备可发全国（y）」或「找品类报备确认 / 一单一询（q）」，
    或发货区域是「可发全国加运费100 / 询问是否可发全国加运费100」这一族。 */
-function canNationwide(it){
+function canNationwide(it, kind){
+  /* 2026-10-13 用户定稿：全国可发按口径分开——滞销机不可发全国、样机可发全国。
+     kind: 'l'=滞销口径 's'=样机口径 null=卡级老规则（nat 原文/发货区域） */
+  if (kind){
+    var kk = natkOf(it, kind);
+    if (kk === 1 || kk === 2) return true;    // 可发 / 要问过才能发 → 都出勾选框（保守）
+    if (kk === 3) return false;               // 该口径铁定只发深惠广莞
+    /* 该口径没单独数据 → 落到卡级老规则 */
+  }
   var natRaw = String(it.nat == null ? '' : it.nat).replace(/^[\s\-—－–]+/, '').trim();
   if (natRaw && (NAT_EXTRA[natRaw] === 'y' || NAT_EXTRA[natRaw] === 'q')) return true;
   var ship = it.ship == null ? '' : String(it.ship).trim();
   return !!(ship && SHIP_EXTRA[ship] && (SHIP_EXTRA[ship].k === 'y' || SHIP_EXTRA[ship].k === 'q'));
+}
+/* 口径 → 语义码：优先读该口径自己的 natkl/natks（新数据），没有就回退卡级 natk（老数据兼容） */
+function natkOf(it, kind){
+  if (kind === 's' && it.natks != null) return it.natks;
+  if (kind === 'l' && it.natkl != null) return it.natkl;
+  return it.natk;
+}
+/* 口径标签 → kind：'样机清理价'→s、'滞销清理价'→l、其它（价格含税/全新机）→null 走老规则 */
+function kindOfBasis(label){
+  var s = String(label || '');
+  if (s.indexOf('样机') >= 0) return 's';
+  if (s.indexOf('滞销') >= 0) return 'l';
+  return null;
 }
 /* 「发全国」筛选用（同日另一口径）：这台**能不能发往外区**——
    natk=1/2、发货里写了「全国」（全国，含运费那族 natk 是空）、可发全国加运费100（y/q）都算。
@@ -2126,6 +2164,11 @@ function canSendNationwide(it){
   /* 表里冒出的否定/省内写法（不可发/不能发/广东省内可发/工贸覆盖区域…）铁定不是全国，
      就算解析端兜底给了 natk=2 也要拦掉（2026-10-12 实锤：不可发×214 曾全混进发全国筛选） */
   var _nat = String(it.nat == null ? '' : it.nat).replace(/^[\s\-—－–]+/, '').trim();
+  /* 2026-10-13 定稿：滞销/样机口径各判各的——任一口径能发就算这卡能发全国
+     （JSQ31-16FQ6FPTGU1：滞销=不可以、样机=可以发 → 进发全国筛选）。
+     ⚠ 先判口径再判卡级否定词，不然「滞销不可以」会把「样机可发」一票否决 */
+  if (it.natkl === 1 || it.natkl === 2 || it.natks === 1 || it.natks === 2) return true;
+  if (it.natkl === 3 && it.natks === 3) return false;
   if (_nat && (_nat.indexOf('不可') === 0 || _nat.indexOf('不能') === 0 || _nat.indexOf('省内') >= 0 || _nat.indexOf('覆盖') >= 0)) return false;
   if (it.natk === 1 || it.natk === 2) return true;
   var _sship = String(it.ship == null ? '' : it.ship).trim();
@@ -2202,9 +2245,19 @@ function renderItem(it){
   var natRaw = String(it.nat == null ? '' : it.nat).replace(/^[\s\-—－–]+/, '').trim();
   // 深惠广莞是所有型号的底线，而且**只有这里包邮**（用户口径）；外区要发就得加运费
   var natHTML = '<span class="pill loc">深惠广莞 · 包邮</span> ';
-  /* 表里光写「可以」的其实说的是「能发全国，但要加 100 运费」——按用户口径写明白 */
-  var NAT_LABEL = { '可以': '可发全国 · 加100运费' };
-  if (natRaw && NAT_LOCAL.indexOf(natRaw) < 0){
+  /* 表里光写「可以/可以发」的其实说的是「能发全国，但要加 100 运费」——按用户口径写明白 */
+  var NAT_LABEL = { '可以': '可发全国 · 加100运费', '可以发': '可发全国 · 加100运费' };
+  /* 2026-10-13 定稿：滞销/样机两行各写各的（滞销机不可发、样机可发）→ 两行口径不一致时
+     各挂一个牌，标明哪个口径可发；一致（或老数据没分开）照旧单牌 */
+  if (it.natkl != null && it.natks != null && it.natkl !== it.natks){
+    var _KN = { l: '滞销机', s: '样机' }, _KV = { l: it.natkl, s: it.natks };
+    ['l', 's'].forEach(function(_k){
+      var _v = _KV[_k];
+      var _t = _v === 1 ? '可发全国 · 加100运费' : (_v === 2 ? '发全国要问过' : '不可发全国');
+      natHTML += '<span class="pill nat-' + (_v === 1 ? 'y' : (_v === 2 ? 'q' : 's')) + '" title="'
+               + esc(_KN[_k]) + '口径的发货范围">' + esc(_KN[_k] + ' · ' + _t) + '</span> ';
+    });
+  } else if (natRaw && NAT_LOCAL.indexOf(natRaw) < 0){
     natHTML += '<span class="pill nat-' + (NAT_EXTRA[natRaw] || 'q') + '">' + esc(NAT_LABEL[natRaw] || natRaw) + '</span> ';
   }
 
@@ -3402,6 +3455,7 @@ listEl.addEventListener('input', function(e){
     }
   }
   savePrices();
+  updateLossBanner();                  // 2026-10-13 用户要求实时：改价打字当场重算黄条，不用再搜一次
 });
 listEl.addEventListener('change', function(e){
   /* 2026-10-13「改了怎么存」：发全国勾选也落库——已发布的存 MARKED[k].nat（0/1）
@@ -3416,6 +3470,7 @@ listEl.addEventListener('change', function(e){
       pubMetaPush(_ck);
     }
     if (_cb) calcUpdate(_cb);
+    updateLossBanner();                  // 实时黄条：发全国勾选影响运费核算
     return;
   }
   var sel = e.target.closest ? e.target.closest('.costsel') : null;
@@ -3915,11 +3970,7 @@ function pubStockWarn(){
   if (!lost.length){ box.hidden = true; box.innerHTML = ''; PUBWARN_LOST = []; return; }
   PUBWARN_LOST = lost;
   box.hidden = false;
-  box.innerHTML = '⚠ ' + (who ? '「' + esc(who) + '」已发布的型号' : '这些你已发布的型号') + '已经没库存了，记得下架（<b>共 ' + lost.length + ' 个</b>）：'
-    + lost.map(function(o){
-      /* 2026-10-12 用户定稿：点红条任意位置 = 一次性列出全部缺货商品卡 */
-      return '<a class="lchip pubwarn-chip" data-c="' + esc(o.c) + '" title="点击直接查看缺货商品">' + esc(o.s) + '</a>';
-    }).join('')
+  box.innerHTML = '⚠ ' + (who ? '「' + esc(who) + '」已发布的型号' : '这些你已发布的型号') + '已经没库存了，记得下架（<b>共 ' + lost.length + ' 个</b>，点击本条全部列出）'
     + '<a id="pubwarnx">知道了</a>';
   var x = box.querySelector('#pubwarnx');
   if (x) x.onclick = function(){ box.hidden = true; };
@@ -3976,7 +4027,8 @@ function lossList(){
        2026-10-13：奖励 bn（点了才算）和发全国勾选 nat 都跟发布记录走，黄条按同一套账核算。
        多闲鱼号逐号核：哪个号的价亏了就报哪个（号名带上） */
     var _bn = MARKED[k].bn, bon = _bn ? ((+_bn.lb || 0) + (+_bn.sb || 0)) : 0;
-    var fr = (canNationwide(it) && MARKED[k].nat !== 0) ? 100 : 0;
+    var _kind = kindOfBasis(cs && cs.l);           // 运费跟口径走：滞销不可发→不扣，样机可发→扣100
+    var fr = (canNationwide(it, _kind) && MARKED[k].nat !== 0) ? 100 : 0;
     var xs = markXys(k), missPushed = false;
     for (var x = 0; x < xs.length; x++){
       var p = xs[x].p;
@@ -4012,9 +4064,9 @@ function lossSetView(){
         if (opts[j].l === cs.l){ cost = opts[j].v; break; }
       }
     } else if (opts.length){ cost = opts[0].v; }
-    /* 净利口径（2026-10-12 跟 lossList 同款）：扣 1.6% 平台费 + 发全国运费 */
+    /* 净利口径（2026-10-12 跟 lossList 同款）：扣 1.6% 平台费 + 发全国运费（口径跟 cs 走） */
     if (cost != null){
-      var net = info.p * (1 - 0.016) - (it ? (canNationwide(it) ? 100 : 0) : 0) - cost;
+      var net = info.p * (1 - 0.016) - (it ? (canNationwide(it, kindOfBasis(cs && cs.l)) ? 100 : 0) : 0) - cost;
       if (net < 0) out[c] = 1;
     }
     else if (hasBasis) out[c] = 1;
@@ -4029,14 +4081,8 @@ function updateLossBanner(){
   if (sig === LOSS_DISMISS || bar.hidden === false && bar.dataset.sig === sig) return;
   bar.dataset.sig = sig; LOSS_DISMISS = '';
   window.LOSS_ITEMS = L;               // 黄条点击一次性列出全部亏本卡用（2026-10-13 对齐缺货红条）
-  var h = '<b>⚠ 有 ' + L.length + ' 条已发布按你选的口径算是亏本的（已扣平台费/运费），快改价（点击黄条全部列出）：</b>';
-  L.forEach(function(x){
-    h += '<a class="lchip" data-c="' + esc(x.c) + '" title="点击黄条一次性列出全部亏本型号">' + esc(x.mo)
-       + (x.xy && x.xy !== '默认' ? '·' + esc(x.xy) : '')
-       + (x.cost != null
-            ? '（定价¥' + x.price + '，净亏¥' + (Math.round(Math.abs(x.net) * 10) / 10) + '，成本¥' + x.cost + '）'
-            : '（口径「' + esc(x.l) + '」表里没了）') + '</a> ';
-  });
+  /* 2026-10-13 用户定稿：不再逐个列型号，只报条数（点击黄条仍一次性列出全部亏本卡） */
+  var h = '<b>⚠ 有 ' + L.length + ' 条已发布按你选的口径算是亏本的（已扣平台费/运费），快改价（点击本条全部列出）</b>';
   bar.innerHTML = h + '<button class="close" title="这批先不提醒">×</button>';
   bar.hidden = false;
 }
