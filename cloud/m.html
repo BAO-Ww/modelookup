@@ -347,17 +347,49 @@ var SHIP_EXTRA = {
   '报备可发全国加运费100':     { t:'报备可发全国 · 加100运费', k:'y' },
   '询问是否可发全国加运费100':  { t:'加100运费可发全国', k:'q' }
 };
+/* 「发货区域」写成城市清单（广州/韶关/…/东莞）的解析（2026-10-13 用户口径，照电脑端）：
+   深莞惠三城包邮底线（广州也不包邮），清单多出来的城市可发但要加 100 运费 */
+function shipCityExtra(ship){
+  var s = String(ship==null?'':ship).trim();
+  if (s.indexOf('/')<0) return null;
+  var base = {'深圳':1,'东莞':1,'惠州':1};
+  var out=[], seen={};
+  s.split('/').forEach(function(c){
+    c = c.replace(/^\s+|\s+$/g,'');
+    if (!c || seen[c]) return;
+    seen[c]=1;
+    if (!base[c]) out.push(c);
+  });
+  return out;
+}
+/* 公布版「全国可发」原文覆盖区域解析（照电脑端）：工贸覆盖区域那族 → 城市清单 */
+function natRegionCities(raw){
+  var s = String(raw==null?'':raw).replace(/\s+/g,' ').trim();
+  var m = s.indexOf('工贸覆盖区域');
+  if (m<0) return null;
+  s = s.slice(m+6);
+  var out=[], seen={};
+  s.split(/[，,、\/ ]+/).forEach(function(c){
+    c = c.replace(/^可发/,'');
+    if (!c || seen[c]) return;
+    seen[c]=1;
+    out.push(c);
+  });
+  return out.length ? out : null;
+}
 function canNationwide(it, kind){
-  /* 2026-10-13 定稿：全国可发按口径分开——滞销机不可发全国、样机可发全国（照搬电脑端） */
-  if (kind){
+  /* 2026-10-13 三改（照电脑端）：所有产品都能发，包邮只有深莞惠，其余可达区域一律+100
+     → 除「全国，含运费」族（运费已包）外都出 −100 勾选框 */
+  if (kind==='l' || kind==='s'){
     var kk = natkOf(it, kind);
-    if (kk===1 || kk===2) return true;
-    if (kk===3) return false;
+    if (kk!=null) return true;
   }
-  var natRaw = String(it.nat==null?'':it.nat).replace(/^[\s\-—－–]+/,'').trim();
-  if (natRaw && (NAT_EXTRA[natRaw]==='y' || NAT_EXTRA[natRaw]==='q')) return true;
   var ship = it.ship==null?'':String(it.ship).trim();
-  return !!(ship && SHIP_EXTRA[ship] && (SHIP_EXTRA[ship].k==='y' || SHIP_EXTRA[ship].k==='q'));
+  if (ship){
+    var m0 = SHIP_EXTRA[ship];
+    if (m0) return m0.k==='y' || m0.k==='q';
+  }
+  return true;
 }
 /* 口径 → 语义码：优先该口径自己的 natkl/natks，老数据回退卡级 natk */
 function natkOf(it, kind){
@@ -373,19 +405,17 @@ function kindOfBasis(label){
   return null;
 }
 function canSendNationwide(it){
-  /* 表里冒出的否定/省内写法（不可发/不能发/广东省内可发/工贸覆盖区域…）铁定不是全国，
-     就算解析端兜底给了 natk=2 也要拦掉（2026-10-12 实锤：不可发×214 曾全混进发全国筛选） */
+  /* 2026-10-13 二次定稿（照搬电脑端）：任一口径能发全国就算——
+     正品看价格表「发货区域」，滞销/样机各看公布版自己的格 */
+  var s = String(it.ship==null?'':it.ship).trim();
+  var m = SHIP_EXTRA[s];
+  if (s.indexOf('全国')>=0 || (m && (m.k==='y' || m.k==='q' || m.k==='f'))) return true;
+  if (it.natkl===1 || it.natkl===2) return true;
+  if (it.natks===1 || it.natks===2) return true;
   var _nat = String(it.nat==null?'':it.nat).replace(/^[\s\-—－–]+/,'').trim();
-  /* 2026-10-13：口径分开判——任一口径能发就算能发全国；先判口径再判否定词，
-     不然「滞销不可以」会把「样机可发」一票否决 */
-  if (it.natkl===1 || it.natkl===2 || it.natks===1 || it.natks===2) return true;
-  if (it.natkl===3 && it.natks===3) return false;
   if (_nat && (_nat.indexOf('不可')===0 || _nat.indexOf('不能')===0 || _nat.indexOf('省内')>=0 || _nat.indexOf('覆盖')>=0)) return false;
   if (it.natk===1 || it.natk===2) return true;
-  var s = String(it.ship==null?'':it.ship).trim();
-  if (s.indexOf('全国')>=0) return true;
-  var m = SHIP_EXTRA[s];
-  return !!(m && (m.k==='y' || m.k==='q'));
+  return false;
 }
 
 /* ============ 云端调用 ============ */
@@ -522,7 +552,7 @@ function buildIndex(){
   });
 }
 
-/* ============ 价格类型（六型，同电脑端 ptypeOf） ============ */
+/* ============ 价格类型（七型，同电脑端 ptypeOf） ============ */
 function ptypeOf(it){
   var pt = isNum(it.pt) && it.pt > 0,
       lz = (isNum(it.lpz) && it.lpz > 0) || it.lpz === '送',
@@ -533,6 +563,7 @@ function ptypeOf(it){
   if (pt && !lz &&  sj) return 'tax_s';
   if (!pt && lz && !sj) return 'l';
   if (!pt && sj && !lz) return 's';
+  if (!pt && lz &&  sj) return 'l_s';   /* 滞销+样机（2026-10-13 补齐） */
   return '';
 }
 function lowPrice(it){
@@ -611,7 +642,7 @@ function showItems(items, label){
   switchTab('home');
   window.scrollTo(0,0);
 }
-var PTYPE_TXT = { tax:'含税', l:'滞销价', s:'样机价', tax_l:'含税+滞销', tax_s:'含税+样机', tax_l_s:'含税+滞销+样机' };
+var PTYPE_TXT = { tax:'含税', l:'滞销价', s:'样机价', tax_l_s:'含税+滞销+样机', tax_l:'含税+滞销', tax_s:'含税+样机', l_s:'滞销+样机' };
 
 /* ============ 价格格（照电脑端 prCell 样式与顺序） ============ */
 function prCell(label, v, cls, pick){
@@ -699,19 +730,16 @@ function livePills(it){
   return out;
 }
 function shipPills(it){
+  /* 2026-10-13 二次定稿（照电脑端）：原「发货」改叫货源，只标货源名不显区域——
+     发哪里归「发往」行按口径判；滞销机/样机货源全是隆阳电器 */
   var out = '';
   if (it.srcs && it.srcs.length>1){
     it.srcs.forEach(function(sc){
-      if (!sc.ship) return;
-      var m = SHIP_EXTRA[String(sc.ship).trim()];
-      out += '<span class="pill ship ' + (m ? 'ship-'+m.k : '') + '">' + esc(m ? m.t : sc.ship) + (sc.sfrom ? ' · ' + esc(sc.sfrom) : '') + '</span> ';
+      out += '<span class="pill src">货源 ' + esc(sc.sfrom || '未标货源') + '</span> ';
     });
   } else {
-    if (it.ship){
-      var m2 = SHIP_EXTRA[String(it.ship).trim()];
-      out += '<span class="pill ship ' + (m2 ? 'ship-'+m2.k : '') + '">' + esc(m2 ? m2.t : it.ship) + '</span> ';
-    }
-    if (it.sfrom) out += '<span class="pill src">货源 ' + esc(it.sfrom) + '</span> ';
+    var _src = String(it.sfrom||'').trim() || ((it.k && (it.k.indexOf('l')>=0 || it.k.indexOf('s')>=0)) ? '隆阳电器' : '');
+    if (_src) out += '<span class="pill src">货源 ' + esc(_src) + '</span>';
   }
   return out;
 }
@@ -735,18 +763,46 @@ function sumPills(it){
   }).join(' ');
 }
 function natPills(it){
-  var out = '<span class="pill wh ok">深惠广莞 · 包邮</span>';
-  var natRaw = String(it.nat==null?'':it.nat).replace(/^[\s\-—－–]+/,'').trim();
-  /* 2026-10-13 定稿：滞销/样机口径各写各的且不一致 → 各挂各的牌 */
-  if (it.natkl!=null && it.natks!=null && it.natkl!==it.natks){
-    var _KN={l:'滞销机',s:'样机'}, _KV={l:it.natkl,s:it.natks};
-    ['l','s'].forEach(function(_k){
-      var _v=_KV[_k];
-      var _t = _v===1 ? '可发全国 · 加100运费' : (_v===2 ? '发全国要问过' : '不可发全国');
-      out += ' <span class="pill ship">' + esc(_KN[_k] + ' · ' + _t) + '</span>';
-    });
-  } else if (natRaw && NAT_LOCAL.indexOf(natRaw)<0){
-    out += ' <span class="pill ship">' + esc((natRaw==='可以'||natRaw==='可以发') ? '可发全国 · 加100运费' : natRaw) + '</span>';
+  /* 2026-10-13 三改（照电脑端）：包邮只有深莞惠；各口径各判各的——正品→价格表发货区域、
+     滞销/样机→公布版各自格（广东省内/工贸覆盖城市都注明），一致并一块牌，不一致单独注明 */
+  var out = '<span class="pill wh ok">深莞惠 · 包邮</span>';
+  function _zTok(){
+    var s = String(it.ship==null?'':it.ship).trim();
+    if (!s) return null;
+    var m = SHIP_EXTRA[s];
+    if (m) return m.t;
+    var ex = shipCityExtra(s);
+    if (ex && ex.length) return ex.length===1 ? '另可发'+ex[0]+' · 加100运费' : '另可发' + ex.length + '城 · 加100运费';
+    if (s.indexOf('全国')<0 && /深圳|惠州|广州|东莞|省内/.test(s)) return null;
+    return s;
+  }
+  function _bTok(kk, raw){
+    if (kk==null) return null;
+    if (kk===1) return '可发全国 · 加100运费';
+    if (kk===2) return '发全国要问过';
+    if (raw && raw.indexOf('广东省内')>=0) return '广东省内可发 · 加100运费';
+    var cities = natRegionCities(raw);
+    if (cities) return '工贸覆盖' + cities.length + '城 · 加100运费';
+    return '不可发全国 · 广州可发+100';
+  }
+  var _toks = [['正品',_zTok()],['滞销机',_bTok(it.natkl, it.natl)],['样机',_bTok(it.natks, it.nats)]]
+    .filter(function(x){ return x[1]; });
+  if (_toks.length===1){
+    out += ' <span class="pill ship">' + esc(_toks[0][1]) + '</span>';
+  } else if (_toks.length>1){
+    var _allSame = _toks.every(function(x){ return x[1]===_toks[0][1]; });
+    if (_allSame){
+      out += ' <span class="pill ship">' + esc(_toks[0][1]) + '</span>';
+    } else {
+      _toks.forEach(function(x){
+        out += ' <span class="pill ship">' + esc(x[0] + ' · ' + x[1]) + '</span>';
+      });
+    }
+  } else {
+    var natRaw = String(it.nat==null?'':it.nat).replace(/^[\s\-—－–]+/,'').trim();
+    if (natRaw && NAT_LOCAL.indexOf(natRaw)<0){
+      out += ' <span class="pill ship">' + esc((natRaw==='可以'||natRaw==='可以发') ? '可发全国 · 加100运费' : natRaw) + '</span>';
+    }
   }
   return out;
 }
@@ -805,7 +861,7 @@ function calcHTML(it){
     + '<div class="l1"><span class="cl">闲鱼定价</span>'
     + '<input type="number" min="0" step="1" inputmode="decimal" placeholder="输入定价"' + (isNum(saved)?' value="'+saved+'"':'') + '>'
     + sel
-    + ((canNationwide(it) || canNationwide(it,'l') || canNationwide(it,'s')) ? '<label class="cfr"><input type="checkbox" class="cfrbox" checked> 发全国 −100</label>' : '')
+    + ((canNationwide(it) || canNationwide(it,'l') || canNationwide(it,'s')) ? '<label class="cfr"><input type="checkbox" class="cfrbox" checked> 发外地 −100</label>' : '')
     + '</div>'
     + '<div class="l2"><span>平台费1.6% <b class="p-fee">—</b></span><span>挣 <b class="p-out">—</b></span></div>'
     + '</div>';
@@ -901,7 +957,7 @@ function cardHTML(it){
     + (pok('calc') || (AUTH && AUTH.role==='admin') ? calcHTML(it) : '')
     + (rowWrap('汇总', pok('sum') ? sumPills(it) : '')
     +  rowWrap('库存', pok('live') ? livePills(it) : '')
-    +  rowWrap('发货', pok('supplier') ? shipPills(it) : '')
+    +  rowWrap('货源', pok('supplier') ? shipPills(it) : '')
     +  (!it._md ? rowWrap('发往', pok('nat') ? natPills(it) : '') : '')
     +  rowWrap('补贴', pok('subsidy') ? subPills(it) : '')
     +  (pok('code') && it.code ? '<div class="crow"><label>物料编码</label><span class="vs mono">' + esc(it.code) + '</span></div>' : ''))
