@@ -121,6 +121,64 @@ class ApiPostMixin:
             threading.Thread(target=_updateall_bg, args=(state.LOG.append, wf), daemon=True).start()
             self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
             return
+        if u.path in ("/api/copypolish", "/api/copyqa", "/api/copypick"):
+            # 文案生成增强（2026-10-13 对齐闲鱼配文pro，纯追加）：
+            #   copypolish  AI 润色（target=titles|desc）
+            #   copyqa      AI 自检（标题+卖点+描述整体挑毛病）
+            #   copypick    图片勾选发布顺序 → 按顺序复制进 copy/<型号>/精选/
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            except Exception:
+                d = {}
+            model = str(d.get("model") or "").strip()
+            kind = 's' if d.get("kind") == 's' else 'l'
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            import copywriter
+            logf = lambda s: state.LOG.append("[文案] " + s)
+            try:
+                if u.path == "/api/copypolish":
+                    tgt = 'titles' if d.get("target") == 'titles' else 'desc'
+                    self._send(200, json.dumps(
+                        copywriter.polish(model, kind, tgt, d.get("text") or "", logf),
+                        ensure_ascii=False))
+                    return
+                if u.path == "/api/copyqa":
+                    self._send(200, json.dumps(
+                        copywriter.qa_copy(model, kind, d.get("text") or "", logf),
+                        ensure_ascii=False))
+                    return
+                # copypick：勾选发布顺序落精选文件夹
+                files = [str(x) for x in (d.get("files") or [])
+                         if str(x) and ".." not in str(x) and "/" not in str(x) and "\\" not in str(x)]
+                if not files:
+                    self._send(400, json.dumps({"ok": False, "msg": "没勾选图片"}, ensure_ascii=False))
+                    return
+                root = copywriter.copy_root()
+                src_dir = os.path.join(root, copywriter.norm_model(model) or model)
+                dst = os.path.join(src_dir, "精选")
+                os.makedirs(dst, exist_ok=True)
+                cnt = 0
+                for i, fn in enumerate(files):
+                    sp = os.path.join(src_dir, fn)
+                    if not (os.path.isfile(sp) and os.path.abspath(sp).startswith(os.path.abspath(root))):
+                        continue
+                    ext = os.path.splitext(fn)[1].lower() or ".jpg"
+                    import shutil
+                    shutil.copyfile(sp, os.path.join(dst, "%02d%s" % (i + 1, ext)))
+                    cnt += 1
+                try:
+                    os.startfile(dst)  # noqa 仅 Windows
+                except Exception:
+                    pass
+                self._send(200, json.dumps({"ok": True, "count": cnt, "dir": "精选"},
+                                           ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+            return
+
         if u.path != "/api/upload":
             self._send(404, json.dumps({"ok": False, "msg": "not found"}, ensure_ascii=False))
             return
