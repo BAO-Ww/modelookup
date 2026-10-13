@@ -599,13 +599,16 @@ async function route(request, env, path, ctx) {
     if (chM) await env.KV.put("pub_" + who, JSON.stringify(marks));
     // cs/bn/nat 通道（2026-10-13）：口径 cs、出库奖励点击状态 bn、发全国勾选 nat
     // 跟发布记录走。只动各自字段，不碰 xys/时间戳/pubp_；旧客户端没这些字段自动跳过
-    let chC = false;
+    // 2026-10-13 修「改好了刷新就没」：10-12 之前标的老记录是 {t,k} 没 xys，下面四通道
+    // 原来直接 continue 静默丢——先 normMark 归一化（包 xys['默认']，价从 pubp_ 带）再改
+    let chC = false, chN = false;
     if (b.cs && typeof b.cs === "object" && !Array.isArray(b.cs)) {
       for (const [c0, v] of Object.entries(b.cs)) {
         const c = safeKey(c0, 100);
         if (!c || !v || typeof v !== "object" || Array.isArray(v)) continue;
-        if (!marks[c] || typeof marks[c] !== "object" || !marks[c].xys) continue;   // 只改已发布的
-        const cur = marks[c];
+        if (!marks[c] || typeof marks[c] !== "object") continue;   // 只改已发布的
+        let cur = marks[c];
+        if (!cur.xys || typeof cur.xys !== "object") { cur = normMark(cur, pp0[c]); marks[c] = cur; chN = true; }
         const ncs = { l: safeKey(v.l, 40) || "", v: isFinite(+v.v) ? +v.v : null };
         if (JSON.stringify(cur.cs || {}) !== JSON.stringify(ncs)) { cur.cs = ncs; chC = true; }
       }
@@ -614,8 +617,9 @@ async function route(request, env, path, ctx) {
       for (const [c0, v] of Object.entries(b.bn)) {
         const c = safeKey(c0, 100);
         if (!c || !v || typeof v !== "object" || Array.isArray(v)) continue;
-        if (!marks[c] || typeof marks[c] !== "object" || !marks[c].xys) continue;
-        const cur = marks[c];
+        if (!marks[c] || typeof marks[c] !== "object") continue;
+        let cur = marks[c];
+        if (!cur.xys || typeof cur.xys !== "object") { cur = normMark(cur, pp0[c]); marks[c] = cur; chN = true; }
         const nb = { lb: isFinite(+v.lb) ? +v.lb : 0, sb: isFinite(+v.sb) ? +v.sb : 0 };
         if (JSON.stringify(cur.bn || {}) !== JSON.stringify(nb)) { cur.bn = nb; chC = true; }
       }
@@ -624,8 +628,9 @@ async function route(request, env, path, ctx) {
       for (const [c0, v] of Object.entries(b.nat)) {
         const c = safeKey(c0, 100);
         if (!c || v == null) continue;
-        if (!marks[c] || typeof marks[c] !== "object" || !marks[c].xys) continue;
-        const cur = marks[c];
+        if (!marks[c] || typeof marks[c] !== "object") continue;
+        let cur = marks[c];
+        if (!cur.xys || typeof cur.xys !== "object") { cur = normMark(cur, pp0[c]); marks[c] = cur; chN = true; }
         const nv = +v === 1 ? 1 : 0;
         if (cur.nat !== nv) { cur.nat = nv; chC = true; }
       }
@@ -637,8 +642,9 @@ async function route(request, env, path, ctx) {
       for (const [c0, xs] of Object.entries(b.xyp)) {
         const c = safeKey(c0, 100);
         if (!c || !xs || typeof xs !== "object" || Array.isArray(xs)) continue;
-        const cur = marks[c];
-        if (!cur || typeof cur !== "object" || !cur.xys) continue;
+        let cur = marks[c];
+        if (!cur || typeof cur !== "object") continue;
+        if (!cur.xys || typeof cur.xys !== "object") { cur = normMark(cur, pp0[c]); marks[c] = cur; chN = true; }
         for (const [x0, p] of Object.entries(xs)) {
           const x = safeKey(x0, 24);
           if (!x || !cur.xys[x] || !isFinite(+p) || cur.xys[x].p === +p) continue;
@@ -646,7 +652,10 @@ async function route(request, env, path, ctx) {
         }
       }
       if (chX) await env.KV.put("pub_" + who, JSON.stringify(marks));
+      var _chX = true;   // 标记 xyp 通道跑过（给下面的归一化落库判断用）
     }
+    // 老格式归一化落库：chC/chX 的写已顺带把升级带上；只有归一化没别的变更时补这一刀
+    if (chN && !chC && !_chX) await env.KV.put("pub_" + who, JSON.stringify(marks));
     if (b.prices && typeof b.prices === "object" && !Array.isArray(b.prices)) {
       const pp = await getPubP(who);
       for (const [c0, p] of Object.entries(b.prices)) {

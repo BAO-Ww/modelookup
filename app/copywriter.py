@@ -203,10 +203,11 @@ def parse_sellpoints(html):
 
 
 IMG_RE = re.compile(r'<img[^>]+(?:data-src|data-original|lazy-src|src)="([^"]+\.(?:jpg|jpeg|png|webp))"', re.I)
-# 背面图过滤（2026-10-13 用户定稿：只要机图正面图）——URL 带背/back/rear/后 视角的直接跳过
+# 2026-10-13 用户定稿「官网有多少张下多少张」：只剔真垃圾（logo/图标/占位/1px），
+# 背面/侧面/细节图全要（之前删 back/rear/背面的规则废除）
 BAD_IMG = re.compile(r'logo|icon|erweima|qrcode|sprite|placeholder|banner|bitmap|homePage|'
                      r'productDetail_phone|_bg_|nocomment|headSet|mask|template|1x1|pixel'
-                     r'|back(?!ground|drop|up)|rear|_hou\d?|背面|后视|背部', re.I)
+                     r'|favicon|weibo|weixin|share|avatar', re.I)
 
 
 def extract_images(html):
@@ -366,7 +367,7 @@ PROMPT = """你是闲鱼/小红书家电卖家文案写手。产品：{pname}（
    全新未拆封 {brand} 226L 三门冰箱 风冷无霜 {model} 原厂正品联保
    {brand}三门冰箱 226L 风冷无霜 {model} 全新原封全国联保
    {kk_titles}
-3) points：正好8-10条加厚卖点（宁可写满10条，不许偷懒只给3条）。每条20-45字，格式＝「核心功能（括号里带具体参数/数字）＋给用户的好处」，一条只讲一个卖点，从【真实数据】的参数表里逐项提炼（压缩机/制冷方式/能效/容量分储/面板材质/尺寸/噪音/冷冻能力/净化除菌/智能功能…有什么写什么）。
+3) points：正好12-15条加厚卖点（宁可写满15条，绝不许偷懒只给几条）。每条20-45字，格式＝「核心功能（括号里带具体参数/数字）＋给用户的好处」，一条只讲一个卖点，从【真实数据】的参数表里逐项提炼（总容积/耗电/能效等级/压缩机/制冷方式/变温区/面板材质/尺寸/重量/噪音/冷冻能力/净化除菌/智能功能/开门方式/搁物架/照明……有什么写什么，参数表里每一行都尽量用上）。
    绝对禁止「智能生活新选择」「品质生活从XX开始」「高效XX利器」这类官网空洞口号。
    参考口吻（照这个密度写，具体参数数字必须换成【真实数据】里的）：
    一级双变频（变频压缩机+变频离心风机），省电节能运行平稳降噪
@@ -374,7 +375,7 @@ PROMPT = """你是闲鱼/小红书家电卖家文案写手。产品：{pname}（
    中门全变温区（果蔬/珍品/零度/软冻/冷冻五种模式），一台顶多台
 4) xhs：正好5组，每组是 {{"t":"标题","txt":"配文"}} 两个键。t：小红书标题≤20字、可带emoji、但绝对不能带#话题；txt：100-160字真实买家分享口吻，必须分成2-3个自然段（每段以一个emoji开头，如 ✨/🧊/💪），至少引用2个【真实数据】里的具体参数或功能（越具体越像真用过的人），txt 末尾另起一行带3-6个#话题（如 #海尔 #冰箱 #家电分享）——#话题只能出现在 txt 末尾，绝不放进 t；5组必须是5个不同角度（价格惊喜/成色/功能亮点/使用场景/情绪共鸣），禁止同一句换emoji充数，禁止空话套话堆砌。
 5) 输出纯 JSON（不要 markdown 代码块）：
-{{"titles":["","",""],"points":["","","","","","","","","",""],"xhs":[{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}}]}}
+{{"titles":["","",""],"points":["","","","","","","","","","","","","","",""],"xhs":[{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}}]}}
 
 【真实数据】
 {facts}"""
@@ -424,7 +425,7 @@ def _verify(ai, facts, nums_set):
 
     out = {}
     out['titles'] = [t for t in ai.get('titles') or [] if isinstance(t, str) and ok(t)][:3]
-    out['points'] = [p for p in ai.get('points') or [] if isinstance(p, str) and ok(p)][:10]
+    out['points'] = [p for p in ai.get('points') or [] if isinstance(p, str) and ok(p)][:15]
     xh = []
     for x in (ai.get('xhs') or []):
         if isinstance(x, dict) and isinstance(x.get('t'), str) and isinstance(x.get('txt'), str):
@@ -469,11 +470,11 @@ def glm_copy(model, kind, data, log):
         score = len(res['xhs']) * 10 + len(res['points']) + len(res['titles'])
         if score > best_score:
             best, best_score = res, score
-        if len(res['xhs']) >= 4 and len(res['points']) >= 8:
+        if len(res['xhs']) >= 4 and len(res['points']) >= 12:
             break
-        log("第 %d 次生成质量不够（配文 %d/5、卖点 %d），自动重试" % (attempt + 1, len(res['xhs']), len(res['points'])))
+        log("第 %d 次生成质量不够（配文 %d/5、卖点 %d/15），自动重试" % (attempt + 1, len(res['xhs']), len(res['points'])))
     res = best or {'titles': [], 'points': [], 'xhs': []}
-    dropped = ((3 - len(res['titles'])) + (10 - len(res['points'])) + (5 - len(res['xhs'])))
+    dropped = ((3 - len(res['titles'])) + (15 - len(res['points'])) + (5 - len(res['xhs'])))
     if dropped > 0:
         log("防编造/质量闸共剔除 %d 条不合格内容" % dropped)
     return res
@@ -489,7 +490,7 @@ def build_desc(model, kk, data, pts, ship='nat'):
     head = re.sub(r'\s*' + re.escape(nm) + r'\s*', ' ', str(data.get('pname') or '')).strip()
     head = re.sub(r'\s{2,}', ' ', head) or (brand + '家电')
     L = ['【%s】型号 %s' % (head, nm), '']
-    for p in (pts or [])[:10]:
+    for p in (pts or [])[:15]:
         L.append('·' + p)
     L.append('')
     flat = []
@@ -518,9 +519,10 @@ def build_desc(model, kk, data, pts, ship='nat'):
 
 
 # ---------------------------------------------------------------- 图片落盘
-def dl_images(urls, mdir, log):
-    """配图落盘（2026-10-13 用户定稿：全部下载，不再限 10 张）：
-    copy/<型号>/01.jpg、02.jpg… 编号命名（对齐用户上货工具的原图素材）"""
+def dl_images(pairs, mdir, log):
+    """配图落盘（2026-10-13 用户定稿：官网图+欣盛图两路全下，一张不扔）：
+    pairs = [(url, 来源), ...]；copy/<型号>/01.jpg、02.jpg… 编号命名，
+    返回 [{"f":"01.jpg","src":"官网"}, ...]（前端按来源分组展示）。"""
     os.makedirs(mdir, exist_ok=True)
     for old in os.listdir(mdir):
         try:
@@ -528,7 +530,7 @@ def dl_images(urls, mdir, log):
         except Exception:
             pass
     saved = []
-    for u in urls:
+    for u, src in pairs:
         ext = os.path.splitext(urllib.parse.urlparse(u).path)[1].lower() or ".jpg"
         ext = ext if ext in ('.jpg', '.jpeg', '.png', '.webp') else '.jpg'
         try:
@@ -541,10 +543,11 @@ def dl_images(urls, mdir, log):
             name = "%02d%s" % (len(saved) + 1, ext)
             with open(os.path.join(mdir, name), "wb") as f:
                 f.write(raw)
-            saved.append(name)
+            saved.append({"f": name, "src": src or "官网"})
         except Exception:
             continue
-    log("配图落盘 %d 张" % len(saved))
+    n_off = sum(1 for x in saved if x['src'] == '官网')
+    log("配图落盘 %d 张（官网 %d + 欣盛 %d）" % (len(saved), n_off, len(saved) - n_off))
     return saved
 
 
@@ -599,7 +602,7 @@ def generate(model, kind='l', force=0, log=None):
     log = log or (lambda s: None)
     nm = norm_model(model) or model
     kk = 's' if kind == 's' else 'l'
-    cache = os.path.join(copy_root(), "%s_%s_v3.json" % (nm, kk))   # v3：卖点加厚+配文质量闸（旧缓存不读）
+    cache = os.path.join(copy_root(), "%s_%s_v4.json" % (nm, kk))   # v4：官网+欣盛双源全图（旧缓存不读）
     if not force and os.path.isfile(cache):
         try:
             with io.open(cache, encoding="utf-8") as f:
@@ -608,11 +611,18 @@ def generate(model, kind='l', force=0, log=None):
             return res
         except Exception:
             pass
-    data = fetch_official(model, log) or fetch_xinsheng(model, log)
-    if not data:
+    # 2026-10-13 用户定稿：官网图跟欣盛图都下载——两路都查，不再二选一
+    data = fetch_official(model, log)
+    xs = fetch_xinsheng(model, log)
+    if not data and not xs:
         log("官网+欣盛都没命中，AI 只按型号裸写（禁参数）")
         data = {'source': '无数据', 'brand': '', 'pname': model, 'price': '',
                 'url': '', 'groups': [], 'sellpoints': [], 'imgs': []}
+    elif not data:
+        data = xs
+        xs = None
+    elif xs and not str(data.get('price') or '').strip() and str(xs.get('price') or '').strip():
+        data['price'] = xs['price']   # 官网没挂价 → 欣盛价兜底
     # 价格统一整数显示：抓来的 "1649.0" 直接进标题会带小数尾巴（2026-10-12 实锤）
     _pr = str(data.get('price') or '').strip()
     try:
@@ -622,11 +632,22 @@ def generate(model, kind='l', force=0, log=None):
         pass
     ai = glm_copy(model, kk, data, log)
     mdir = os.path.join(copy_root(), nm)
-    images = dl_images(data.get('imgs') or [], mdir, log)
+    # 图片合并：官网图在前、欣盛图在后，URL 去重后全部落盘
+    pairs, _seen = [], set()
+    for u in (data.get('imgs') or []):
+        if u and u not in _seen:
+            _seen.add(u)
+            pairs.append((u, '官网'))
+    if xs:
+        for u in (xs.get('imgs') or []):
+            if u and u not in _seen:
+                _seen.add(u)
+                pairs.append((u, '欣盛'))
+    images = dl_images(pairs, mdir, log)
     featured = make_featured(mdir, data.get('price'), log)
     # 卖点：AI 从真实参数提炼的加厚条优先（2026-10-13 用户定稿，官网 sellpoint 是
     # 「智能生活新选择」类空洞口号不要）；AI 全被剔才拿官网卖点兜底
-    pts = ai['points'][:10] or [p for p in (data.get('sellpoints') or []) if p][:10]
+    pts = ai['points'][:15] or [p for p in (data.get('sellpoints') or []) if p][:15]
     res = {"ok": True, "cached": False, "model": model, "kind": kk,
            "source": data['source'], "source_url": data['url'],
            "pname": data['pname'], "price": data['price'],
@@ -641,3 +662,164 @@ def generate(model, kind='l', force=0, log=None):
     except Exception:
         pass
     return res
+
+
+# ------------------------------------------------ AI 润色/自检（2026-10-13 对齐闲鱼配文pro）
+POLISH_TITLES_PROMPT = """你是闲鱼标题润色师。下面是同一型号的三条备选标题，请在不改变事实的前提下重写润色：
+- 只能使用原标题和【真实数据】里出现的参数/数字，禁止编造
+- 每条≤30字、分段式（段与段之间一个空格）、不带价格、不带emoji、不带#话题
+- 三条开头语序必须各不同；保留型号全码和成色词（{kk_rule}）
+- 比原标题更顺口、更有点击欲
+输出纯 JSON（不要 markdown）：{{"titles":["","",""]}}
+
+【真实数据】
+{facts}
+
+【原标题】
+{orig}"""
+
+POLISH_DESC_PROMPT = """你是闲鱼商品描述润色师。请润色下面这段商品描述：
+- 只能使用描述原文和【真实数据】里出现的参数/数字，禁止编造任何新参数新数字
+- 保留原有版式（【产品名】行、·卖点条目、【参数】【官网价】【交易】、结尾话术、可发货地区都保留）
+- 卖点条目可以改写得更顺口更打动人，但条数不许减少
+- 不加 emoji，不加 #话题
+只输出润色后的完整描述正文，不要任何解释。
+
+【真实数据】
+{facts}
+
+【原描述】
+{orig}"""
+
+QA_PROMPT = """你是闲鱼文案审核员。对下面的文案做合规自检，逐条挑毛病：
+1) 成色口径：{kk_rule}
+2) 标题/卖点条目里不许出现人民币价格（如「1899元」「售价」字样）；型号、容量、尺寸这类参数数字不算价格
+3) 数字必须能在【真实数据】里找到（防编造）
+4) 不许出现「最好」「第一」「顶级」「国家级」「极致」等广告法极限词
+5) 不许空话套话（如「智能生活新选择」「品质生活从XX开始」）
+只挑真实存在的问题，没问题不要硬挑。输出纯 JSON（不要 markdown）：
+{{"issues":[{{"where":"标题A","level":"高","note":"问题一句话说明"}}]}}
+
+【真实数据】
+{facts}
+
+【待检文案】
+{orig}"""
+
+_AD_LIMIT = re.compile(r'最好|最佳|最强|最优|第一|顶级|国家级|世界级|极致|百分百|100%|全网最|销量第一')
+
+
+def _cache_path(model, kind):
+    nm = norm_model(model) or model
+    return os.path.join(copy_root(), "%s_%s_v4.json" % (nm, 's' if kind == 's' else 'l'))
+
+
+def _load_cache(model, kind):
+    try:
+        with io.open(_cache_path(model, kind), encoding="utf-8") as f:
+            d = json.load(f)
+        return d if d.get("ok") else None
+    except Exception:
+        return None
+
+
+def _save_cache(model, kind, d):
+    try:
+        with io.open(_cache_path(model, kind), "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _facts_of(model, kind):
+    """润色/自检用的真实数据：从缓存描述反推不够全，直接重抓一次官网（快，秒级）"""
+    d = fetch_official(model, lambda s: None)
+    return _facts_text(d or {'pname': model, 'groups': [], 'sellpoints': []}, model) or ("型号: " + model)
+
+
+def polish(model, kind, target, text, log=None):
+    """AI 润色：target='titles'（重写三选一）| 'desc'（润色描述正文）。带防编造校验。"""
+    log = log or (lambda s: None)
+    kk = 's' if kind == 's' else 'l'
+    facts = _facts_of(model, kk)
+    nums_set = set(NUM_RE.findall(norm_model(model)))
+    fl = [float(x) for x in NUM_RE.findall(facts)]
+
+    def ok_nums(line):
+        for n in NUM_RE.findall(line):
+            if n in facts or n in nums_set:
+                continue
+            try:
+                if float(n) in fl:
+                    continue
+            except ValueError:
+                pass
+            return False
+        return True
+
+    if target == 'titles':
+        cache_d = _load_cache(model, kk)
+        orig = "\n".join((cache_d.get('titles') if cache_d else []) or []) or str(text or '')
+        kk_rule = ('成色词必须用「全新未拆封/全新原封」，绝不许出现「样机」字样' if kk != 's'
+                   else '成色词必须用「展示样机/功能完好」，绝不许出现「全新」字样')
+        raw = _chat(POLISH_TITLES_PROMPT.format(kk_rule=kk_rule, facts=facts, orig=orig))
+        m = re.search(r'\{.*\}', raw, re.S)
+        titles = [t.strip() for t in (json.loads(m.group(0)).get('titles') or [])
+                  if isinstance(t, str) and t.strip()][:3]
+        titles = [re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', t) for t in titles]
+        good = [t for t in titles if ok_nums(t) and not _AD_LIMIT.search(t)]
+        if cache_d and good:
+            cache_d['titles'] = good
+            _save_cache(model, kk, cache_d)
+        return {"ok": True, "titles": good, "dropped": len(titles) - len(good)}
+    # desc：正文直出，只做数字防编造校验（不合规段落回退原文）
+    kk_rule = ('成色词必须用「全新未拆封/全新原封」，绝不许出现「样机」字样' if kk != 's'
+               else '成色词必须用「展示样机/功能完好」，绝不许出现「全新」字样')
+    new = _chat(POLISH_DESC_PROMPT.format(facts=facts, kk_rule=kk_rule, orig=str(text or ''))).strip()
+    new = re.sub(r'^```[a-z]*\s*|\s*```$', '', new).strip()
+    # 数字防编造：逐行校验，带未知数字的行回退原文对应行
+    if text:
+        old_lines = str(text).split('\n')
+        out = []
+        for i, ln in enumerate(new.split('\n')):
+            if ln.strip() and not ok_nums(ln) and i < len(old_lines) and ok_nums(old_lines[i]):
+                out.append(old_lines[i])
+            else:
+                out.append(ln)
+        new = '\n'.join(out)
+    return {"ok": True, "desc": new}
+
+
+def qa_copy(model, kind, text, log=None):
+    """AI 自检：对标题+卖点+描述整体挑毛病，另附广告法极限词本地硬扫。"""
+    log = log or (lambda s: None)
+    kk = 's' if kind == 's' else 'l'
+    facts = _facts_of(model, kk)
+    kk_rule = ('这是正品全新机——文案里必须用「全新未拆封」，绝不许出现「展示样机/样机」字样' if kk != 's'
+               else '这是展示样机——文案里必须用「展示样机」，绝不许出现「全新未拆封/全新」字样')
+    issues = []
+    # 本地硬扫：极限词 + 成色词冲突（不花钱不卡顿，必出）
+    for i, ln in enumerate(str(text or '').split('\n')):
+        if not ln.strip():
+            continue
+        mm = _AD_LIMIT.search(ln)
+        if mm:
+            issues.append({"where": "第%d行" % (i + 1), "level": "高",
+                           "note": "广告法极限词「%s」，闲鱼被投诉风险" % mm.group(0)})
+        if kk != 's' and re.search(r'样机', ln):
+            issues.append({"where": "第%d行" % (i + 1), "level": "高",
+                           "note": "正品机文案出现「样机」字样，成色口径冲突"})
+        if kk == 's' and re.search(r'全新未拆封|全新原封', ln):
+            issues.append({"where": "第%d行" % (i + 1), "level": "高",
+                           "note": "样机文案出现「全新」字样，成色口径冲突"})
+    # GLM 语义自检
+    try:
+        raw = _chat(QA_PROMPT.format(kk_rule=kk_rule, facts=facts, orig=str(text or '')))
+        m = re.search(r'\{.*\}', raw, re.S)
+        for it in (json.loads(m.group(0)).get('issues') or []):
+            if isinstance(it, dict) and it.get('note'):
+                issues.append({"where": str(it.get('where') or '?'), "level": str(it.get('level') or '中'),
+                               "note": str(it['note'])})
+    except Exception as e:
+        log("AI 自检失败（本地扫描结果仍有效）：%s" % e)
+    return {"ok": True, "issues": issues}
