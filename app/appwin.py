@@ -418,6 +418,7 @@ def run_app(httpd, port, startup_xlsx=None):
         APP_NAME,
         url=url,
         width=w, height=h, x=x, y=y,
+        # maximized 不开（2026-10-13 用户改口：打开不要默认全屏，用记忆尺寸即可）
         min_size=(900, 600),
         background_color="#f5f7fb",
         text_select=True,
