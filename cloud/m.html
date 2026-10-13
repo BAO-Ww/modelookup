@@ -338,7 +338,7 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ ret
 function nameOf(it){ return it.n || ''; }
 
 /* ============ 发货 / 全国可发口径（照搬电脑端） ============ */
-var NAT_EXTRA = { '可以':'y', '报备可发全国':'y', '找品类报备确认':'q', '一单一询是否能发外地':'q',
+var NAT_EXTRA = { '可以':'y', '可以发':'y', '报备可发全国':'y', '找品类报备确认':'q', '一单一询是否能发外地':'q',
                   '进货大于3年可以发外区':'s', '进货小于3年不能发外区':'s' };
 var NAT_LOCAL = ['不可以','不可发','不能发','不可','否','N','n','0','0.0','不','×','x','不支持'];
 var SHIP_EXTRA = {
@@ -347,16 +347,39 @@ var SHIP_EXTRA = {
   '报备可发全国加运费100':     { t:'报备可发全国 · 加100运费', k:'y' },
   '询问是否可发全国加运费100':  { t:'加100运费可发全国', k:'q' }
 };
-function canNationwide(it){
+function canNationwide(it, kind){
+  /* 2026-10-13 定稿：全国可发按口径分开——滞销机不可发全国、样机可发全国（照搬电脑端） */
+  if (kind){
+    var kk = natkOf(it, kind);
+    if (kk===1 || kk===2) return true;
+    if (kk===3) return false;
+  }
   var natRaw = String(it.nat==null?'':it.nat).replace(/^[\s\-—－–]+/,'').trim();
   if (natRaw && (NAT_EXTRA[natRaw]==='y' || NAT_EXTRA[natRaw]==='q')) return true;
   var ship = it.ship==null?'':String(it.ship).trim();
   return !!(ship && SHIP_EXTRA[ship] && (SHIP_EXTRA[ship].k==='y' || SHIP_EXTRA[ship].k==='q'));
 }
+/* 口径 → 语义码：优先该口径自己的 natkl/natks，老数据回退卡级 natk */
+function natkOf(it, kind){
+  if (kind==='s' && it.natks!=null) return it.natks;
+  if (kind==='l' && it.natkl!=null) return it.natkl;
+  return it.natk;
+}
+/* 口径标签 → kind：'样机清理价'→s、'滞销清理价'→l、其它→null */
+function kindOfBasis(label){
+  var s = String(label||'');
+  if (s.indexOf('样机')>=0) return 's';
+  if (s.indexOf('滞销')>=0) return 'l';
+  return null;
+}
 function canSendNationwide(it){
   /* 表里冒出的否定/省内写法（不可发/不能发/广东省内可发/工贸覆盖区域…）铁定不是全国，
      就算解析端兜底给了 natk=2 也要拦掉（2026-10-12 实锤：不可发×214 曾全混进发全国筛选） */
   var _nat = String(it.nat==null?'':it.nat).replace(/^[\s\-—－–]+/,'').trim();
+  /* 2026-10-13：口径分开判——任一口径能发就算能发全国；先判口径再判否定词，
+     不然「滞销不可以」会把「样机可发」一票否决 */
+  if (it.natkl===1 || it.natkl===2 || it.natks===1 || it.natks===2) return true;
+  if (it.natkl===3 && it.natks===3) return false;
   if (_nat && (_nat.indexOf('不可')===0 || _nat.indexOf('不能')===0 || _nat.indexOf('省内')>=0 || _nat.indexOf('覆盖')>=0)) return false;
   if (it.natk===1 || it.natk===2) return true;
   var s = String(it.ship==null?'':it.ship).trim();
@@ -714,8 +737,16 @@ function sumPills(it){
 function natPills(it){
   var out = '<span class="pill wh ok">深惠广莞 · 包邮</span>';
   var natRaw = String(it.nat==null?'':it.nat).replace(/^[\s\-—－–]+/,'').trim();
-  if (natRaw && NAT_LOCAL.indexOf(natRaw)<0){
-    out += ' <span class="pill ship">' + esc(natRaw==='可以' ? '可发全国 · 加100运费' : natRaw) + '</span>';
+  /* 2026-10-13 定稿：滞销/样机口径各写各的且不一致 → 各挂各的牌 */
+  if (it.natkl!=null && it.natks!=null && it.natkl!==it.natks){
+    var _KN={l:'滞销机',s:'样机'}, _KV={l:it.natkl,s:it.natks};
+    ['l','s'].forEach(function(_k){
+      var _v=_KV[_k];
+      var _t = _v===1 ? '可发全国 · 加100运费' : (_v===2 ? '发全国要问过' : '不可发全国');
+      out += ' <span class="pill ship">' + esc(_KN[_k] + ' · ' + _t) + '</span>';
+    });
+  } else if (natRaw && NAT_LOCAL.indexOf(natRaw)<0){
+    out += ' <span class="pill ship">' + esc((natRaw==='可以'||natRaw==='可以发') ? '可发全国 · 加100运费' : natRaw) + '</span>';
   }
   return out;
 }
@@ -774,7 +805,7 @@ function calcHTML(it){
     + '<div class="l1"><span class="cl">闲鱼定价</span>'
     + '<input type="number" min="0" step="1" inputmode="decimal" placeholder="输入定价"' + (isNum(saved)?' value="'+saved+'"':'') + '>'
     + sel
-    + (canNationwide(it) ? '<label class="cfr"><input type="checkbox" class="cfrbox" checked> 发全国 −100</label>' : '')
+    + ((canNationwide(it) || canNationwide(it,'l') || canNationwide(it,'s')) ? '<label class="cfr"><input type="checkbox" class="cfrbox" checked> 发全国 −100</label>' : '')
     + '</div>'
     + '<div class="l2"><span>平台费1.6% <b class="p-fee">—</b></span><span>挣 <b class="p-out">—</b></span></div>'
     + '</div>';
@@ -784,11 +815,19 @@ function calcUpdate(box){
   var sel = box.querySelector('.costsel');
   var cost = parseFloat(sel.value), price = parseFloat(inp.value);
   var feeEl = box.querySelector('.p-fee'), outEl = box.querySelector('.p-out');
+  // 发全国勾选跟口径走（2026-10-13：滞销机不可发、样机可发）——没填价也要跟口径切显隐
+  var cfr = box.querySelector('.cfrbox');
+  var it = itemOf(box.dataset.key);
+  if (cfr && it && sel && sel.selectedIndex>=0){
+    var _so = sel.options[sel.selectedIndex];
+    var _kind = kindOfBasis(_so ? _so.getAttribute('data-l') : '');
+    if (canNationwide(it, _kind)){ cfr.closest('.cfr').hidden = false; }
+    else { cfr.checked = false; cfr.closest('.cfr').hidden = true; }
+  }
   if (!isFinite(price) || price<=0 || !isFinite(cost)){
     feeEl.textContent='—'; outEl.textContent='—'; outEl.className='p-out'; return;
   }
   var bn = (parseFloat(box.getAttribute('data-bnlb'))||0) + (parseFloat(box.getAttribute('data-bnsb'))||0);
-  var cfr = box.querySelector('.cfrbox');
   var freight = (cfr && cfr.checked) ? 100 : 0;
   var fee = round2(price*FEE), profit = round2(price - price*FEE - cost + bn - freight);
   var tags = [];
@@ -955,7 +994,7 @@ function lossList(){
     /* 净挣口径（2026-10-12 用户实锤 BC-285W 案）：跟卡片计算器同式——
        定价 − 1.6%平台费 − (可发全国默认勾选−100) − 成本 < 0 = 亏钱 */
     if (cost!=null){
-      var net = PRICES[k] * (1 - 0.016) - (canNationwide(it) ? 100 : 0) - cost;
+      var net = PRICES[k] * (1 - 0.016) - (canNationwide(it, kindOfBasis(cs && cs.l)) ? 100 : 0) - cost;
       if (net < 0) out.push({ it:it, price:PRICES[k], cost:cost, net:net });
     }
   }
