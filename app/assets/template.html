@@ -1411,8 +1411,10 @@ function calcUpdate(box){
    权限由管理号在「账号管理」里逐项勾选。 */
 var AUTH = null;
 try { AUTH = JSON.parse(localStorage.getItem('ml_auth') || 'null'); } catch(e){ AUTH = null; }
-/* workers.dev 在国内被墙，必须 kdns 在前 —— 否则登录/启动都要干等它超时 */
-var AUTH_HOSTS = ['https://auth.baozang.kdns.fr',
+/* 2026-10-15 全迁新账号（老账号 zone 被 CF ToS 封锁）：de5.net 在前；
+   老域名留第二位——若申诉解封自动变备用出口；workers.dev 国内被墙垫底 */
+var AUTH_HOSTS = ['https://auth.tingjiabaobao.de5.net',
+                  'https://auth.baozang.kdns.fr',
                   'https://modelookup-auth.bao3053.workers.dev'];
 /* 权限逐项化（2026-10 五次改版）：价格格 / 计算器成本下拉 / 按钮 全部拆开，
    管理号在「账号管理」里逐个勾。第三列是分组（管理面板分组显示，只影响 UI 不影响权限 key）。
