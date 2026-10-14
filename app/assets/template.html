@@ -858,6 +858,7 @@ function pubMetaPush(k){
   if (!Object.keys(o).length) return;
   authFetch('/pubsync', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify(o) }, true)
+    .then(function(j){ if (j && j._st === 0) cloudFail('/pubsync', o); })
     .catch(function(){});
 }
 /* 出库奖励「点了才算」的开关也落库（2026-10-13）：已发布的存 MARKED[k].bn={lb,sb}；
@@ -905,13 +906,15 @@ function pubPush(c, on, xy){
      2026-10-13 修「价格乱跳」：本地没价时 p 用 undefined（JSON 化后整个字段不发），
      worker 收到没 p 就**保留该号现价**——绝不能发 null 把云端价抹了；
      只有明确带数字才盖价。真正无价标记走弹窗必填价，p 一定有。 */
+  var _pubBody = { c: c, on: on,
+                   xy: (typeof xy === 'string' && xy) ? xy : null,
+                   k: (on && MARKED[c] && MARKED[c].k) || null,
+                   p: (on && isNum(PRICES[c])) ? PRICES[c] : undefined,
+                   cs: (on && MARKED[c] && MARKED[c].cs) || null,
+                   xid: (on && typeof xy === 'string' && xy && MARKED[c] && MARKED[c].xys && MARKED[c].xys[xy] && MARKED[c].xys[xy].xid) || undefined };
   authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ c: c, on: on,
-                                             xy: (typeof xy === 'string' && xy) ? xy : null,
-                                             k: (on && MARKED[c] && MARKED[c].k) || null,
-                                             p: (on && isNum(PRICES[c])) ? PRICES[c] : undefined,
-                                             cs: (on && MARKED[c] && MARKED[c].cs) || null,
-                                             xid: (on && typeof xy === 'string' && xy && MARKED[c] && MARKED[c].xys && MARKED[c].xys[xy] && MARKED[c].xys[xy].xid) || undefined }) }, true);
+                      body: JSON.stringify(_pubBody) }, true)
+    .then(function(j){ if (j && j._st === 0) cloudFail('/pub', _pubBody); });
 }
 function syncMarks(){
   if (!AUTH || !AUTH.token) return;
@@ -961,8 +964,10 @@ function priceSyncSoon(){
   if (!AUTH || !AUTH.token) return;
   clearTimeout(_priceSyncT);
   _priceSyncT = setTimeout(function(){
+    var _b = { prices: PRICES, xyp: buildXyp() };
     authFetch('/pubsync', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ prices: PRICES, xyp: buildXyp() }) }, true);
+                            body: JSON.stringify(_b) }, true)
+      .then(function(j){ if (j && j._st === 0) cloudFail('/pubsync', _b); });
     XYP_DIRTY = {};
   }, 2500);
 }
@@ -1456,6 +1461,49 @@ function authFetch(path, opts, withRetry){
     }).catch(function(){ return tryOne(i + 1); });
   }
   return tryOne(0);
+}
+/* ---------- 云端写失败兜底（2026-10-14 体检 C3）----------
+   原来断网时 authFetch 返回 _st=0，所有写云通道都不看结果——本地已存、云端静默丢，
+   另一台机器永远看不到（「你动了我的价格」同族病）。
+   现在：写失败进补推队列 + 底部浮条提示，联网后自动按序补推。
+   /pubsync 带整包 prices 的补推时永远用当前本机数据重建（不回放过期快照）；
+   图片不进队列（体积大，syncImgs 本来就有自愈）。 */
+var _cloudQ = [], _cloudQT = null, _netToastEl = null, _netToastT = null;
+function netToast(msg){
+  if (!_netToastEl){
+    _netToastEl = document.createElement('div');
+    _netToastEl.style.cssText = 'position:fixed;left:50%;bottom:26px;transform:translateX(-50%);'
+      + 'z-index:9999;background:#1b2431;color:#fff;padding:10px 18px;border-radius:99px;font-size:13px;'
+      + 'box-shadow:0 8px 24px rgba(20,30,50,.28);transition:opacity .25s;opacity:0;pointer-events:none';
+    document.body.appendChild(_netToastEl);
+  }
+  _netToastEl.textContent = msg;
+  _netToastEl.style.opacity = '1';
+  clearTimeout(_netToastT);
+  _netToastT = setTimeout(function(){ _netToastEl.style.opacity = '0'; }, 2800);
+}
+function cloudFail(path, body){
+  _cloudQ.push({ p: path, b: body });
+  if (_cloudQ.length > 80) _cloudQ.shift();     // 兜底防无限膨胀
+  netToast('网络不通：改动已存本机，联网后自动同步');
+  if (!_cloudQT) _cloudQT = setTimeout(cloudFlush, 30000);
+}
+function cloudFlush(){
+  _cloudQT = null;
+  if (!_cloudQ.length || !AUTH || !AUTH.token) return;
+  var it = _cloudQ[0];
+  if (it.p === '/pubsync' && it.b && it.b.prices) it.b = { prices: PRICES, xyp: buildXyp() };  // 补推用当前数据
+  authFetch(it.p, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(it.b) }, true)
+    .then(function(j){
+      if (j && j._st !== 0){
+        _cloudQ.shift();
+        if (_cloudQ.length) _cloudQT = setTimeout(cloudFlush, 1200);
+        else netToast('已恢复联网，待同步的改动全部补推完成');
+      } else {
+        _cloudQT = setTimeout(cloudFlush, 30000);
+      }
+    });
 }
 /* ---------- 登录遮罩 + 账号管理面板（用到时才插进 DOM） ---------- */
 var AUTH_CSS = ''
@@ -4063,8 +4111,12 @@ listEl.addEventListener('input', function(e){
     for (var _p2 in _pxs){ var _pe = _pxs[_p2] || {}; if ((+_pe.t || 0) >= _pbt){ _pbt = +_pe.t || 0; _pxk = _p2; } }
     if (_pxk && _pxs[_pxk]) _pxs[_pxk].p = _sp;
     if (window._SUBPUB && _SUBPUB.prices && _SUBPUB.prices[SUBVIEW.u]) _SUBPUB.prices[SUBVIEW.u][k] = _sp;
-    if (_sp != null) authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ u: SUBVIEW.u, c: k, on: true, ponly: true, p: _sp, xy: _pxk }) }, true);
+    if (_sp != null){
+      var _b2 = { u: SUBVIEW.u, c: k, on: true, ponly: true, p: _sp, xy: _pxk };
+      authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(_b2) }, true)
+        .then(function(j){ if (j && j._st === 0) cloudFail('/pub', _b2); });
+    }
     updateLossBanner();
     return;
   }
@@ -4087,8 +4139,10 @@ listEl.addEventListener('input', function(e){
       var _pk1 = k, _pxy1 = _ax.key;
       listEl._pricePushT = setTimeout(function(){
         var _e1 = MARKED[_pk1] && MARKED[_pk1].xys && MARKED[_pk1].xys[_pxy1];
+        var _b1 = { c: _pk1, on: true, xy: _pxy1, p: _e1 ? _e1.p : null };
         authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ c: _pk1, on: true, xy: _pxy1, p: _e1 ? _e1.p : null }) }, true);
+                            body: JSON.stringify(_b1) }, true)
+          .then(function(j){ if (j && j._st === 0) cloudFail('/pub', _b1); });
       }, 800);
     }
   }

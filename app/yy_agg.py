@@ -120,7 +120,7 @@ def yy_finish(recs, log):
         if _m in agg:
             hit += 1
 
-    ts = time.strftime("%m-%d %H:%M")
+    ts = time.strftime("%Y-%m-%d %H:%M")   # 2026-10-14 带年份（体检 P1-A1：旧 %m-%d 跨年字典序比较必炸）
     with state.STOCK_LOCK:
         state.STOCK = {"ts": ts, "rows": len(recs), "stock": agg, "sbc": agg_code}
     state.stock_save()

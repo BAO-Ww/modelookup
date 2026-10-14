@@ -375,7 +375,7 @@ def fetch_model_set():
 
 
 def main():
-    ts = time.strftime("%m-%d %H:%M", time.localtime(time.time() + 8 * 3600))
+    ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + 8 * 3600))   # 2026-10-14 带年份（跨年修复，与 app/yy_agg.py 同步改）
     log("== 云端用友库存拉取 %s ==" % ts)
     recs = login_and_fetch()
     log("拉取完成：%d 行" % len(recs))
