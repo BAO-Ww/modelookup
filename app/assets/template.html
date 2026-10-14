@@ -522,6 +522,9 @@ footer a:hover{text-decoration:underline}
                 style="max-width:130px;padding:5px 8px;border:1px solid #d7dce6;border-radius:8px;font-size:12.5px;background:#fff;outline:0;color:#333">
           <option value="">全部</option>
         </select>
+        <!-- 状态栏「管理」键（2026-10-14）：不用进发布弹窗，这里直达「管理我的闲鱼号」 -->
+        <button id="xymgrbtn" title="管理我的闲鱼号：改名（同步所有发布记录）/ 修复旧号名 / 一键全部取消标记发布"
+                style="padding:4px 10px;border:1px solid #c6d8ff;border-radius:8px;font-size:12px;background:#eaf1ff;color:#2e6be6;cursor:pointer;font-weight:600;white-space:nowrap;flex:none">管理</button>
         <span class="tsep"></span>
         <span class="tlbl">价格类型</span>
         <button class="chip" data-pt="tax"     title="只有价格含税，没有滞销/样机清理价">含税</button>
@@ -916,6 +919,29 @@ function pubPush(c, on, xy){
                       body: JSON.stringify(_pubBody) }, true)
     .then(function(j){ if (j && j._st === 0) cloudFail('/pub', _pubBody); });
 }
+/* 批量 /pub 串行队列（2026-10-14 深夜实锤）：迁移/改名这类一次几十条的批量操作，
+   原来 forEach 一瞬间全发出去——每个 /pub 在 worker 端都是「读 pub_B→改→写回」，
+   并发时拿着旧快照写回互相覆盖（删旧键的请求把写新键的修改抹掉），一晚丢了 16 条记录。
+   铁律：批量必须排队，**等上一条的响应回来再发下一条**（间隔 250ms 再加保险）。
+   单发场景（改价/标记/取消）不受影响，继续直接 pubPush。 */
+function pubQueue(tasks){
+  var i = 0;
+  function step(){
+    if (i >= tasks.length) return;
+    var t = tasks[i++];
+    var _b = { c: t.c, on: t.on,
+               xy: (typeof t.xy === 'string' && t.xy) ? t.xy : null,
+               k: (t.on && MARKED[t.c] && MARKED[t.c].k) || null,
+               p: (t.on && isNum(PRICES[t.c])) ? PRICES[t.c] : undefined,
+               cs: (t.on && MARKED[t.c] && MARKED[t.c].cs) || null,
+               xid: (t.on && typeof t.xy === 'string' && t.xy && MARKED[t.c] && MARKED[t.c].xys && MARKED[t.c].xys[t.xy] && MARKED[t.c].xys[t.xy].xid) || undefined };
+    authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(_b) }, true)
+      .then(function(){ setTimeout(step, 250); })
+      .catch(function(){ setTimeout(step, 900); });
+  }
+  step();
+}
 function syncMarks(){
   if (!AUTH || !AUTH.token) return;
   /* 2026-10-10 修「串号阴魂不散」：登录合并原来是本地整包推 + 云端按时间戳只增不删，
@@ -1005,8 +1031,15 @@ function refreshXySel(){
   if (!sel) return;
   var opts = xyOptions();
   var cur = selXy;
+  /* 2026-10-14 用户实锤「默认改了名，商品数量不对」：改名前标的老号名（孤儿）记录还在，
+     修复前也得能筛到——追加进下拉并标明条数；修完 xyRenameSync 会刷新下拉自然消失 */
+  var _orph = xyOrphans();
+  Object.keys(_orph).forEach(function(n){ if (opts.indexOf(n) < 0) opts.push(n); });
   sel.innerHTML = '<option value="">全部</option>'
-    + opts.map(function(x){ return '<option value="' + esc(x) + '"' + (x === cur ? ' selected' : '') + '>' + esc(x) + '</option>'; }).join('');
+    + opts.map(function(x){
+        var _lbl = x + (_orph[x] ? ('（旧名 · ' + _orph[x] + ' 条）') : '');
+        return '<option value="' + esc(x) + '"' + (x === cur ? ' selected' : '') + '>' + esc(_lbl) + '</option>';
+      }).join('');
   if (cur && opts.indexOf(cur) < 0){ selXy = ''; sel.value = ''; }
 }
 
@@ -2065,7 +2098,21 @@ function subHeaderHTML(){
          + (on ? 'background:#b42318;color:#fff;' : 'background:#eef1f6;color:#475467;') + '">' + label + '</a>';
   }
   /* 退出胶囊（2026-10-10 用户要求：去掉 ✕，做成跟筛选胶囊同款） */
-  var h = '<b>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（' + Object.keys(SUBVIEW.set).length + ' 个型号）</b>'
+  /* 2026-10-14 用户实锤：标题里的型号数要跟顶部「闲鱼号」筛选联动——选了号就数那个号名下的 */
+  function _countSet(){
+    var n = 0;
+    Object.keys(SUBVIEW.set).forEach(function(k){
+      var xs = SUBVIEW.info[k] && SUBVIEW.info[k].xs;
+      if (!selXy){ n++; return; }
+      if (!xs){ if (selXy === '默认') n++; return; }   // 老格式记录只挂「默认」
+      var hit = false;
+      Object.keys(xs).forEach(function(key){ if ((String(key).split('|')[0] || key) === selXy) hit = true; });
+      if (hit) n++;
+    });
+    return n;
+  }
+  var h = '<b>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（'
+       + (selXy ? esc(selXy) + ' ' : '') + _countSet() + ' 个型号' + (selXy ? ' / 共 ' + Object.keys(SUBVIEW.set).length + ' 个' : '') + '）</b>'
        + '<a href="javascript:void 0" id="subexit" title="退出查看" style="display:inline-block;margin-left:8px;padding:1px 9px;border-radius:9px;font-size:12px;cursor:pointer;background:#eef1f6;color:#475467;">退出</a>'
        + _chip('', '全部') + _chip('l', '正品') + _chip('s', '样机')
        + _tchip('fns', '没库存', '只看没库存的（正品看正品仓、样机看样机仓）')
@@ -2697,19 +2744,14 @@ function renderItem(it){
        + _xids.map(function(_xi){
            return '<span data-xidcopy="' + esc(_xi.xid) + '" title="点一下复制这个闲鱼ID" style="cursor:pointer">'
                 + (_xi.xy ? esc(_xi.xy) + '·' : '') + esc(_xi.xid) + '</span>'
-           /* 2026-10-14 用户加需求定稿：ID 后面跟四个键——「编辑宝贝」（卖家中心编辑页）+
-              「查看宝贝」（买家页 goofish.com/item?id=）+「改价」「下架」（软件里 mtop 直改，不打开网页）。
-              前两个是 <a> 弹系统浏览器；后两个是 data-* 动作键（CSP 安全，无 inline 事件） */
+           /* 2026-10-14 定稿（晚间用户改口）：ID 后面只跟两个纯链接——「编辑宝贝」（卖家
+              中心编辑页）+「查看宝贝」（买家页 goofish.com/item?id=）。mtop 直改的
+              「改价/下架」键整个下掉（用户不要了），后端 /api/xyprice|xyoff|xycookie 留着没删 */
                 + (_xi.xid && /^\d{6,}$/.test(_xi.xid)
                    ? ' <a href="https://seller.goofish.com/?site=COMMONPRO#/seller-item/publish?itemId=' + encodeURIComponent(_xi.xid) + '" target="_blank" rel="noopener"'
                    + ' title="在浏览器打开卖家中心编辑页" style="margin-left:4px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px">编辑宝贝</a>'
                    + ' <a href="https://www.goofish.com/item?id=' + encodeURIComponent(_xi.xid) + '" target="_blank" rel="noopener"'
                    + ' title="在浏览器打开买家页（买家搜到看到的样子）" style="margin-left:4px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px">查看宝贝</a>'
-                   + ' <span data-xyprice="' + esc(_xi.xid) + '" data-acc="' + esc(_xi.acc || '默认') + '"'
-                   + (_xi.p != null ? ' data-curp="' + esc(_xi.p) + '"' : '')
-                   + ' title="不打开网页，软件里直接把这个宝贝的闲鱼价改掉" style="margin-left:4px;font-size:11px;font-weight:600;color:#0f7b3a;cursor:pointer;border:1px solid rgba(15,123,58,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px">改价</span>'
-                   + ' <span data-xyoff="' + esc(_xi.xid) + '" data-acc="' + esc(_xi.acc || '默认') + '"'
-                   + ' title="直接下架这个宝贝（买家就看不到了，之后还能重新上架）" style="margin-left:4px;font-size:11px;font-weight:600;color:#d92d20;cursor:pointer;border:1px solid rgba(217,45,32,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px">下架</span>'
                    : '');
          }).join(' · ')
        + '</span></div>' : '')
@@ -3221,6 +3263,15 @@ ptEl.addEventListener('click', function(e){
 ptEl.addEventListener('change', function(e){
   if (e.target && e.target.id === 'xysel'){ selXy = e.target.value || ''; run(); }
 });
+/* 状态栏「管理」键（2026-10-14）：闲鱼号下拉旁直达「管理我的闲鱼号」——
+   改名同步 / 旧号名修复 / 一键全部取消标记发布。onchg 在号列表每次变动后触发，
+   这里补 run() 让卡片胶囊/商品数量当场跟上（refreshXySel persist 里已带） */
+(function(){
+  var mb = document.getElementById('xymgrbtn');
+  if (mb) mb.addEventListener('click', function(){
+    openXyMgr(function(){ run(); });
+  });
+})();
 /* 进入「看自己的发布」：拉自己的云端记录塞进 SUBVIEW（u='0'=自己），复用子用户发布的
    顶栏/筛选/卡片渲染；管理号和子账号同一条路（/pub 按登录账号走，天然各看各的） */
 function enterSelfPub(chip){
@@ -3249,6 +3300,251 @@ function exitSelfPub(){
   run();
 }
 
+/* 改名同步发布记录（2026-10-14 用户实锤「默认改了名，胶囊还挂着默认」）：
+   记录键 = 号名|口径（更老的记录是裸号名），本地 MARKED.xys / ACTXY 一起重映射；
+   云端按「写新键 + 删旧键」各推一条 /pub（单条写，记录内容原样搬家——不动价、不动口径、不动ID）。
+   目标键撞车时留时间戳新的那条。改完 run() 让胶囊/发布行立刻跟上。 */
+function xyRenameSync(oldn, nn){
+  if (!oldn || !nn || oldn === nn) return;
+  function nk(key){
+    if (key === oldn) return nn;
+    if (String(key).indexOf(oldn + '|') === 0) return nn + String(key).slice(oldn.length);
+    return null;
+  }
+  var touched = [];                 // [卡, 新键, 旧键]
+  Object.keys(MARKED).forEach(function(c){
+    var cur = MARKED[c];
+    if (!cur) return;
+    if (!cur.xys){
+      /* 老格式（顶层 {t,k} 无 xys，markXys 合成叫「默认」）：改名的是默认才搬，顺手升成 xys 结构。
+         老格式卡只有顶层这一条记录（没有 xys），cur.xys={} 不会覆盖任何已有键，迁移复用安全 */
+      if (oldn === '默认' && (cur.k === 'l' || cur.k === 's')){
+        cur.xys = {};
+        cur.xys[nn] = { t: +cur.t || 0, k: cur.k === 's' ? 's' : 'l', p: (isNum(PRICES[c]) ? PRICES[c] : null) };
+        touched.push([c, nn, '默认']);
+      }
+      return;
+    }
+    var moved = false;
+    Object.keys(cur.xys).forEach(function(key){
+      var to = nk(key);
+      if (!to || to === key) return;
+      if (cur.xys[to] && (+cur.xys[to].t || 0) >= (+cur.xys[key].t || 0)){
+        delete cur.xys[key];        // 撞键且已有的更新：旧键直接删
+      } else {
+        cur.xys[to] = cur.xys[key];
+        delete cur.xys[key];
+      }
+      moved = true;
+      touched.push([c, to, key]);
+    });
+    if (moved && ACTXY[c]){
+      var na = nk(ACTXY[c]);
+      if (na) ACTXY[c] = na; else delete ACTXY[c];
+    }
+  });
+  if (!touched.length) return;
+  saveMarks();
+  try { if (localStorage.getItem('ml_lastxy') === oldn) localStorage.setItem('ml_lastxy', nn); } catch(e){}
+  /* 展平成单队列：所有「写新键+删旧键」排队走，一次只有一个请求在飞 */
+  var _qt = [];
+  touched.forEach(function(t){ _qt.push({ c: t[0], on: true, xy: t[1] }, { c: t[0], on: false, xy: t[2] }); });
+  pubQueue(_qt);
+  refreshXySel();                        // 孤儿条目/旧名条数当场跟上（筛选下拉）
+  run();
+  updateLossBanner();
+}
+
+/* 孤儿号名检测：发布记录里挂着「号列表里没有」的名字（2026-10-14 之前改的名都不同步，
+   存量记录全留旧名——比如把「默认」改成了新名，胶囊还挂着默认）。返回 {旧名: 条数} */
+function xyOrphans(){
+  var names = {};
+  xyOptions().forEach(function(x){ names[x] = 1; });
+  var cnt = {};
+  Object.keys(MARKED).forEach(function(c){
+    var cur = MARKED[c];
+    if (!cur) return;
+    if (!cur.xys){
+      if ((cur.k === 'l' || cur.k === 's') && !names['默认']) cnt['默认'] = (cnt['默认'] || 0) + 1;
+      return;
+    }
+    Object.keys(cur.xys).forEach(function(key){
+      var nm = String(key).split('|')[0] || String(key);
+      if (!names[nm]) cnt[nm] = (cnt[nm] || 0) + 1;
+    });
+  });
+  return cnt;
+}
+
+/* 迁移来源统计（2026-10-14 用户「没有迁移功能嘛」）：每个号名（含孤儿名）名下有几条发布记录。
+   跟 xyOrphans 不同：不筛「在不在号列表」，列表里的号之间也能互相搬。返回 {名: 条数} */
+function xySources(){
+  var cnt = {};
+  Object.keys(MARKED).forEach(function(c){
+    var cur = MARKED[c];
+    if (!cur) return;
+    if (!cur.xys){
+      if (cur.k === 'l' || cur.k === 's') cnt['默认'] = (cnt['默认'] || 0) + 1;
+      return;
+    }
+    Object.keys(cur.xys).forEach(function(key){
+      var nm = String(key).split('|')[0] || String(key);
+      if (nm) cnt[nm] = (cnt[nm] || 0) + 1;
+    });
+  });
+  return cnt;
+}
+
+/* 迁移：把 src 号名下的所有发布记录搬进 dst（2026-10-14）——记录键「src|口径」→「dst|口径」，
+   价/口径/闲鱼ID原样带走，撞键留时间戳新的；云端逐条「写新键+删旧键」。
+   核心 = xyRenameSync(src, dst)（它不动号列表，只搬记录，正合迁移语义）。
+   迁完 src 名下就空了，号还在列表里，想清掉自己去点「删除」。 */
+function openXyMergeIn(dst){
+  var cnt = xySources();
+  delete cnt[dst];
+  var names = Object.keys(cnt);
+  if (!names.length){ netToast('其它号名下没有任何发布记录，没得搬'); return; }
+  var old = document.getElementById('xymrgmask'); if (old) old.remove();
+  var m = document.createElement('div'); m.id = 'xymrgmask';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.35);z-index:65;display:flex;align-items:center;justify-content:center';
+  m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px;min-width:360px;max-width:440px">'
+    + '<div style="font-weight:700;margin-bottom:4px">把哪个号的记录搬进「' + esc(dst) + '」？</div>'
+    + '<div style="font-size:12px;color:#8a94a6;margin-bottom:10px">价、口径、闲鱼ID原样带走；两边都有同口径记录时留时间戳新的那条。搬完旧号名下就空了。</div>'
+    + '<div id="xymrglist" style="max-height:240px;overflow:auto;margin-bottom:12px">'
+    + names.map(function(n){
+        return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed #eef1f6">'
+          + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(n)
+          + ' <span style="color:#8a94a6;font-size:12px">· ' + cnt[n] + ' 条</span></span>'
+          + '<button class="achip" data-mgsrc="' + esc(n) + '" style="background:#eaf1ff;border-color:#c6d8ff">搬过去</button></div>';
+      }).join('')
+    + '</div>'
+    + '<div style="text-align:right"><button class="achip" id="xymrgno">算了</button></div></div>';
+  document.body.appendChild(m);
+  m.addEventListener('click', function(e){
+    if (e.target.closest ? e.target.closest('#xymrgno') : null){ m.remove(); return; }
+    if (e.target === m){ m.remove(); return; }
+    var b = e.target.closest ? e.target.closest('[data-mgsrc]') : null;
+    if (!b) return;
+    var src = b.getAttribute('data-mgsrc');
+    if (!confirm('把「' + src + '」名下的 ' + cnt[src] + ' 条发布记录全部搬进「' + dst + '」？\n（价、口径、闲鱼ID原样带走，云端同步，不可自动撤销）')) return;
+    b.disabled = true; b.textContent = '搬运中…';
+    xyRenameSync(src, dst);
+    m.remove();
+    netToast('✅ 已把「' + src + '」的记录搬进「' + dst + '」——旧号名下空了，不要就去点它的「删除」');
+  });
+}
+
+/* 一键全部取消标记发布（2026-10-14 用户要求）：清空当前登录账号的整份 MARKED，
+   定价、闲鱼ID一起没，云端 pub_/pubp_ 逐条整删（worker on=false 连镜像一起清）。
+   破坏性大 → 必须输当前账号的登录密码，走 /login 真验证，过了才动第一条。 */
+function openUnmarkAll(){
+  if (!AUTH || !AUTH.u){ alert('先登录再操作'); return; }
+  var cards = Object.keys(MARKED);
+  if (!cards.length){ alert('现在没有任何发布记录，不用清'); return; }
+  /* 2026-10-14 用户定稿：清空要能按号来，不是只能整个账号清——弹窗里选范围（全部/某个号）。
+     号选项带各自条数（xySources），选号后下面统计跟着变 */
+  var _src = xySources();
+  var _names = Object.keys(_src);
+  function countOf(scope){        // scope ''=全部，否则号名
+    if (!scope) { var n0 = 0; cards.forEach(function(c){ n0 += markXys(c).length; }); return [cards.length, n0]; }
+    var nc = 0, nr = 0;
+    cards.forEach(function(c){
+      var cur = MARKED[c]; if (!cur) return;
+      var hit = 0;
+      if (!cur.xys){ if (cur.k === 'l' || cur.k === 's') hit = 1; }
+      else Object.keys(cur.xys).forEach(function(key){ if ((String(key).split('|')[0] || key) === scope) hit++; });
+      if (hit){ nc++; nr += hit; }
+    });
+    return [nc, nr];
+  }
+  var oldm = document.getElementById('unallmask'); if (oldm) oldm.remove();
+  var m = document.createElement('div'); m.id = 'unallmask';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.45);z-index:63;display:flex;align-items:center;justify-content:center';
+  m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px;min-width:380px;max-width:470px">'
+    + '<div style="font-weight:700;color:#d92d20;margin-bottom:8px">取消标记发布</div>'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'
+    + '<span style="font-size:13px;color:#5a6478;flex:none">清空哪个号的发布？</span>'
+    + '<select id="unallscope" style="flex:1;min-width:0;padding:7px 10px;border:1px solid #d7dce6;border-radius:8px;font-size:13px;background:#fff;outline:0;color:#333">'
+    + '<option value="">全部（整个账号）</option>'
+    + _names.map(function(n){ return '<option value="' + esc(n) + '">' + esc(n) + '（' + _src[n] + ' 条）</option>'; }).join('')
+    + '</select></div>'
+    + '<div id="unallstat" style="font-size:13px;color:#5a6478;line-height:1.8;margin-bottom:12px"></div>'
+    + '<div style="font-size:13px;color:#b45309;margin-bottom:12px">所选范围的发布记录（含闲鱼ID、定价）会清掉，<b>云端同步删除，不可恢复</b>。确认请输入 <b>' + esc(AUTH.u) + '</b> 的登录密码：</div>'
+    + '<input id="unallpw" type="password" placeholder="登录密码" style="width:100%;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:13.5px;margin-bottom:6px">'
+    + '<div id="unallerr" style="font-size:12.5px;color:#d92d20;min-height:18px"></div>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end">'
+    + '<button class="achip" id="unallno">算了</button>'
+    + '<button class="achip" id="unallgo" style="background:#d92d20;border-color:#d92d20;color:#fff">确认取消</button></div></div>';
+  document.body.appendChild(m);
+  setTimeout(function(){ var _p = m.querySelector('#unallpw'); if (_p) _p.focus(); }, 60);
+  function stat(){
+    var sc = m.querySelector('#unallscope').value || '';
+    var r = countOf(sc);
+    m.querySelector('#unallstat').innerHTML = '将清掉 <b>' + r[0] + '</b> 个型号、<b>' + r[1] + '</b> 条发布记录' + (sc ? ('（「' + esc(sc) + '」名下）') : '（整个账号全部）');
+  }
+  stat();
+  m.querySelector('#unallscope').addEventListener('change', stat);
+  var busy = false;
+  function close(){ m.remove(); }
+  m.querySelector('#unallno').addEventListener('click', close);
+  function go(){
+    if (busy) return;
+    var pw = m.querySelector('#unallpw').value;
+    if (!pw){ m.querySelector('#unallerr').textContent = '先输入登录密码'; return; }
+    busy = true;
+    var gob = m.querySelector('#unallgo'); gob.textContent = '验证中…';
+    m.querySelector('#unallerr').textContent = '';
+    /* ⚠ 显式 Content-Type：WebView2 里 POST 缺它实际请求会静默丢（踩坑实录） */
+    authFetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ u: AUTH.u, p: pw }) }, false)
+      .then(function(j){
+        if (!j || !j.ok){
+          busy = false; gob.textContent = '确认取消';
+          m.querySelector('#unallerr').textContent = (j && j.msg) || '密码不对，再试试';
+          return;
+        }
+        gob.textContent = '正在清除…';
+        /* 密码验证过才到这里：本地逐条清 + 云端逐键删。
+           按记录键删（不整条）——老格式裸键「默认」和新键「号名|口径」可能同卡混存，
+           整条删会被 worker 的「多条只删一条」分支留尾巴；逐键删最后一条自动整删+清镜像。
+           2026-10-14 两改：①按所选号过滤（只删那个号名下的键）；②批量删走 pubQueue
+           串行单队列——forEach 并发全是「读旧写新」互相覆盖，迁移丢 16 条的同款病。 */
+        var scope = m.querySelector('#unallscope').value || '';
+        var _tasks = [], nDel = 0, nCard = 0;
+        cards.forEach(function(c){
+          var cur = MARKED[c]; if (!cur) return;
+          var killAll = !scope;
+          var keys = (cur.xys) ? Object.keys(cur.xys) : null;
+          if (scope && keys && keys.length){
+            /* 选了号：删该号名下的键；删空了整卡清 */
+            var mine = keys.filter(function(kk){ return (String(kk).split('|')[0] || kk) === scope; });
+            if (!mine.length) return;
+            mine.forEach(function(kk){ delete cur.xys[kk]; _tasks.push({ c: c, on: false, xy: kk }); nDel++; });
+            if (!Object.keys(cur.xys).length) killAll = true;
+            else { nCard++; if (ACTXY[c] && mine.indexOf(ACTXY[c]) >= 0) delete ACTXY[c]; return; }
+          }
+          if (killAll){
+            if (keys && keys.length) keys.forEach(function(kk){ _tasks.push({ c: c, on: false, xy: kk }); nDel++; });
+            else _tasks.push({ c: c, on: false, xy: null }), nDel++;
+            delete MARKED[c]; delete PRICES[c]; delete ACTXY[c]; nCard++;
+          }
+        });
+        saveMarks(); savePrices();
+        pubQueue(_tasks);
+        try { localStorage.setItem('ml_lastxy', '默认'); } catch(e){}
+        close();
+        run(); pubStockWarn(); updateLossBanner();
+        netToast('已取消标记发布：' + nCard + ' 个型号 ' + nDel + ' 条记录' + (scope ? ('（「' + scope + '」）') : '') + '——云端逐条排队删除中');
+      })
+      .catch(function(e){
+        busy = false; gob.textContent = '确认取消';
+        m.querySelector('#unallerr').textContent = '网络问题：' + e + '（密码没验证过，一条都没动）';
+      });
+  }
+  m.querySelector('#unallgo').addEventListener('click', go);
+  m.querySelector('#unallpw').addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
+}
+
 /* 闲鱼号管理小窗（2026-10-13 用户反馈：选号弹窗里只能选不能管，重命名/删除都得有）。
    改的是自己名下那份（worker KV xy_<u>）；管理号代管子账号的仍走「账号管理」面板。
    重命名用内联输入框（WebView2 不支持 window.prompt，别换回去） */
@@ -3266,13 +3562,16 @@ function openXyMgr(onchg){
     }
     return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed #eef1f6">'
       + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x) + '</span>'
+      + '<button class="achip" data-mgin="' + i + '" title="把其它号名下的发布记录搬进「' + esc(x) + '」（价/口径/闲鱼ID原样带走）">迁入</button>'
       + '<button class="achip" data-rn="' + i + '">重命名</button>'
       + '<button class="achip" data-del="' + i + '" style="color:#d92d20">删除</button></div>';
   }
   function render(editing){
+    var _orph = xyOrphans();
+    var _okn = Object.keys(_orph);
     m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px;min-width:360px;max-width:440px">'
       + '<div style="font-weight:700;margin-bottom:4px">管理我的闲鱼号</div>'
-      + '<div style="font-size:12px;color:#8a94a6;margin-bottom:10px">改名/删除只影响这份号列表，已用它标记的发布记录不受影响</div>'
+      + '<div style="font-size:12px;color:#8a94a6;margin-bottom:10px">改名会同步更新所有已标记发布记录上的号名；删除号不影响已有发布记录</div>'
       + '<div id="xymlist" style="max-height:260px;overflow:auto;margin-bottom:10px">'
       + (list.length ? list.map(function(x, i){ return rowHTML(x, i, editing === i); }).join('')
                      : '<div style="color:#8a94a6;font-size:12.5px;padding:8px 0">还没有配置，在下面添加一个</div>')
@@ -3280,6 +3579,24 @@ function openXyMgr(onchg){
       + '<div style="display:flex;gap:8px;margin-bottom:14px">'
       + '<input id="xymnew" maxlength="24" placeholder="新闲鱼号名称，如：小号B" style="flex:1;min-width:0;border:1px solid #d7dce6;border-radius:8px;padding:7px 10px;font-size:13px">'
       + '<button class="achip" id="xymadd" style="background:#eaf1ff;border-color:#c6d8ff">添加</button></div>'
+      + (_okn.length
+         ? '<div style="border-top:1px dashed #f0d9d6;padding-top:10px;margin-bottom:14px">'
+           + '<div style="font-size:12px;color:#b3261e;margin-bottom:6px">旧号名修复（这些记录还挂着列表里没有的号名，选个新名搬过去）：</div>'
+           + _okn.map(function(onm){
+               return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0">'
+                 + '<span style="flex:1;min-width:0;font-size:12.5px;color:#5a6478">「' + esc(onm) + '」· ' + _orph[onm] + ' 条</span>'
+                 + '<select data-orhsel="' + esc(onm) + '" style="border:1px solid #d7dce6;border-radius:8px;padding:5px 8px;font-size:12.5px;max-width:140px">'
+                 + list.map(function(x){ return '<option' + (x === onm ? ' selected' : '') + '>' + esc(x) + '</option>'; }).join('')
+                 + '</select>'
+                 + '<button class="achip" data-xyfix="' + esc(onm) + '" style="background:#eaf1ff;border-color:#c6d8ff">修复</button></div>';
+             }).join('')
+           + '</div>'
+         : '')
+      + '<div style="border-top:1px solid #f0d9d6;padding-top:12px;margin-bottom:14px">'
+      + '<div style="font-size:12px;color:#8a94a6;margin-bottom:6px">危险操作</div>'
+      + '<div style="display:flex;align-items:center;gap:8px">'
+      + '<button class="achip" id="xymunall" style="color:#d92d20;border-color:#f0b9b3">取消标记发布</button>'
+      + '<span style="font-size:11.5px;color:#b0b7c3">按号或整个账号清空发布记录，要输登录密码</span></div></div>'
       + '<div style="text-align:right"><button class="achip" id="xymok" style="background:#2e6be6;border-color:#2e6be6;color:#fff">完成</button></div></div>';
   }
   render(-1);
@@ -3300,10 +3617,23 @@ function openXyMgr(onchg){
       var i = +ok.getAttribute('data-rnok');
       var inp = m.querySelector('#xymrn');
       var nn = inp ? inp.value.trim().slice(0, 24) : '';
-      if (nn && list.indexOf(nn) < 0){ list[i] = nn; persist(); }
+      if (nn && list.indexOf(nn) < 0){
+        var _on = list[i];
+        list[i] = nn;
+        /* 2026-10-14 用户实锤「默认改名了胶囊还显示默认」：改名同步所有发布记录+云端 */
+        xyRenameSync(_on, nn);
+        persist();
+      }
       render(-1); return;
     }
     if (e.target.closest ? e.target.closest('[data-rnno]') : null){ render(-1); return; }
+    /* 迁入（2026-10-14）：把其它号名下的发布记录搬进这个号——弹二级选源层 */
+    var mg = e.target.closest ? e.target.closest('[data-mgin]') : null;
+    if (mg){
+      var _mi = +mg.getAttribute('data-mgin');
+      if (list[_mi]) openXyMergeIn(list[_mi]);
+      return;
+    }
     var rn = e.target.closest ? e.target.closest('[data-rn]') : null;
     if (rn){
       render(+rn.getAttribute('data-rn'));
@@ -3324,6 +3654,18 @@ function openXyMgr(onchg){
       if (v && list.indexOf(v) < 0){ list.push(v); persist(); }
       render(-1); return;
     }
+    var xf = e.target.closest ? e.target.closest('[data-xyfix]') : null;
+    if (xf){
+      var onm = xf.getAttribute('data-xyfix');
+      var to = '';
+      var sels = m.querySelectorAll('select[data-orhsel]');
+      for (var si = 0; si < sels.length; si++){
+        if (sels[si].getAttribute('data-orhsel') === onm){ to = sels[si].value; break; }
+      }
+      if (to && to !== onm){ xyRenameSync(onm, to); render(-1); }
+      return;
+    }
+    if (e.target.closest ? e.target.closest('#xymunall') : null){ openUnmarkAll(); return; }
     if (e.target.closest ? e.target.closest('#xymok') : null){ m.remove(); return; }
     if (e.target === m) m.remove();
   });
@@ -3339,6 +3681,7 @@ function openPickKind(k, recKey){
   /* 2026-10-13 用户实况「怎么只能点正品两个字」：从胶囊点进来的带 recKey（号|口径）——
      弹窗直接落在那条记录上（号选中、口径打勾、价预填），确认=改价，老键复用 */
   var curXy = recKey ? (String(recKey).split('|')[0] || LASTXY) : LASTXY;
+  var _prevXy = '默认';                        // 点「其它…」手输前的来路号，「返回」时切回
   /* 找卡片定价框 */
   var _inp = null;
   var _cards = document.querySelectorAll('.card');
@@ -3405,11 +3748,6 @@ function openPickKind(k, recKey){
     + '<span id="kindxiddel" data-kxdel="1" title="删掉这条记录的闲鱼ID（云端同步清掉，价格和口径不动）" hidden'
     + ' style="cursor:pointer;flex:none;width:30px;height:30px;line-height:28px;text-align:center;border-radius:8px;border:1px solid #e4b6b0;color:#c0392b;font-weight:700;font-size:16px;background:#fff">×</span>'
     + '</div>'
-    /* 顺便直改闲鱼价（2026-10-14）：编辑已有 ID 的记录才亮出来（预填逻辑里控制），默认勾上 */
-    + '<div id="kindsyncxyrow" style="display:none;align-items:center;gap:6px;margin-top:8px">'
-    + '<label style="font-size:12.5px;color:#374151;display:flex;align-items:center;gap:6px;cursor:pointer">'
-    + '<input id="kindsyncxy" type="checkbox"> 顺便把闲鱼上这个宝贝的价也改成上面这个数（软件直改，不打开网页）'
-    + '</label></div>'
     + '<div style="font-weight:700;margin:12px 0 10px">发布出去的是哪种？</div>'
     + '<div id="kindkkrow" style="display:flex;gap:10px;flex-wrap:wrap">' + kindRowHTML() + '</div>'
     + '</div></div>';
@@ -3434,13 +3772,6 @@ function openPickKind(k, recKey){
     /* 删除键（2026-10-14 用户要求）：只在编辑已有ID的记录时亮出来，新标/＋再发一号没有可删的 */
     var _kd = m.querySelector('#kindxiddel');
     if (_kd) _kd.hidden = !_x0;
-    /* 直改闲鱼价勾选亮/灭（2026-10-14）：只有这条记录已有 ID 才有意义，默认勾上（改价重标是主流） */
-    var _ksr = m.querySelector('#kindsyncxyrow');
-    if (_ksr){
-      _ksr.style.display = _x0 ? 'flex' : 'none';
-      var _ksc = m.querySelector('#kindsyncxy');
-      if (_ksc) _ksc.checked = !!_x0;
-    }
   }
   m.addEventListener('click', function(e){
     /* 弹窗里的删除键（2026-10-14）：删这条记录的闲鱼ID——本地+云端（xid:null）同步清，弹窗留着继续改价 */
@@ -3465,14 +3796,24 @@ function openPickKind(k, recKey){
         return;
       }
       if (xyb.getAttribute('data-xy') === '__new'){
-        /* 其它 = 手输新号：chips 换输入框（datalist 提示用过的） */
+        /* 其它 = 手输新号：chips 行换「输入框+返回」（datalist 提示用过的）。
+           2026-10-14 用户实锤「我的选项怎么没了」：以前点进来整排号消失回不去，
+           现在留一个「返回」随时切回点选；定价/ID/正品样机原样在下面不动 */
         m.querySelector('#kindxyrow').innerHTML =
           '<input id="kindxy" list="xydatalist" maxlength="24" placeholder="输入新闲鱼号，如：小号B" '
           + 'style="flex:1;min-width:0;border:1px solid #d7dce6;border-radius:8px;padding:7px 10px;font-size:13.5px">'
-          + '<datalist id="xydatalist">' + XY_NAMES.map(function(x){ return '<option value="' + esc(x) + '">'; }).join('') + '</datalist>';
+          + '<datalist id="xydatalist">' + XY_NAMES.map(function(x){ return '<option value="' + esc(x) + '">'; }).join('') + '</datalist>'
+          + '<button class="achip" data-xy="__back" title="不输新号了，返回点选已有号">返回</button>';
         setTimeout(function(){ var _n = m.querySelector('#kindxy'); if (_n) _n.focus(); }, 60);
+        _prevXy = curXy;                   // 记住来路，「返回」回到原来选中的号
         curXy = '__input__';
         var _kr2 = m.querySelector('#kindkkrow'); if (_kr2) _kr2.innerHTML = kindRowHTML();
+        return;
+      }
+      if (xyb.getAttribute('data-xy') === '__back'){
+        curXy = _prevXy || '默认';
+        m.querySelector('#kindxyrow').innerHTML = xyChipHTML();
+        var _kr3 = m.querySelector('#kindkkrow'); if (_kr3) _kr3.innerHTML = kindRowHTML();
         return;
       }
       curXy = xyb.getAttribute('data-xy');
@@ -3504,7 +3845,10 @@ function openPickKind(k, recKey){
     /* 2026-10-10 新规矩：标记发布这一刻才把定价落库 */
     PRICES[k] = _pv;
     /* 同型号再标 = 又发了一条：老 xys 原样保留。2026-10-13 同号双口径——
-       记录键 = 号名|口径，同号同口径复用原键（重标=改价），同号另一口径立新键并存 */
+       记录键 = 号名|口径，同号同口径复用原键（重标=改价）。
+       2026-10-14 用户实锤「我正品改样机，你不能两个都给我保留了」：从胶囊点进来的
+       （recKey）= 编辑这一条——确认落在别的键上（换口径/换号）就把老键当场搬走
+       （本地+云端），卡片只剩一枚胶囊；想同号两条并存走「＋再发一号」（不带 recKey） */
     var now = Date.now();
     var cur = MARKED[k] || { t: now, k: kk, xys: {} };
     if (!cur.xys) cur.xys = { '默认': { t: cur.t || now, k: cur.k === 's' ? 's' : 'l', p: (isNum(PRICES[k]) ? PRICES[k] : null) } };
@@ -3513,29 +3857,21 @@ function openPickKind(k, recKey){
       var _e0 = cur.xys[_k0] || {};
       if (String(_k0).split('|')[0] === xy && (_e0.k === 's' ? 's' : 'l') === kk){ _rk = _k0; break; }
     }
+    var _mig = (recKey && recKey !== _rk) ? recKey : null;   // 编辑态落在别的键 = 搬家，老键要删
     /* 闲鱼ID（2026-10-13）：弹窗填了用新值；留空保留这条原本的ID（改价不抹ID） */
     var _xidv = String((m.querySelector('#kindxid') || {}).value || '').trim().slice(0, 40);
     var _oldxid = cur.xys[_rk] && cur.xys[_rk].xid != null ? String(cur.xys[_rk].xid) : null;
     cur.xys[_rk] = { t: now, k: kk, p: (isNum(PRICES[k]) ? PRICES[k] : null) };
     var _nxid = _xidv || _oldxid;
     if (_nxid) cur.xys[_rk].xid = _nxid;
+    if (_mig) delete cur.xys[_mig];      // 老口径/老号那条搬完就删，不留双胞胎
     cur.t = now; cur.k = kk;
     ACTXY[k] = _rk;                      // 当前编辑切到刚标的这条
     MARKED[k] = cur;
     saveMarks();
     savePrices();
     pubPush(k, true, _rk);               // 云端按记录键存（同号双口径各一条）
-    /* 顺便直改闲鱼价（2026-10-14）：勾了且这条有 ID → 本地服务 mtop 直改。
-       不阻塞标记流程（fire-and-forget），结果 netToast 浮条报；Cookie 没存会在 msg 里提示 */
-    var _ksy = m.querySelector('#kindsyncxy');
-    if (_ksy && _ksy.checked && _nxid && /^\d{6,}$/.test(_nxid)){
-      fetch('/api/xyprice', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ acc: xy, id: _nxid, p: _pv }) })
-        .then(function(r){ return r.json(); })
-        .then(function(j){ netToast((j && j.ok) ? ('✅ 闲鱼价已同步改成 ¥' + _pv + '（' + xy + '）')
-                                                 : ('❌ 闲鱼直改没成：' + ((j && j.msg) || '?'))); })
-        .catch(function(){});
-    }
+    if (_mig) pubPush(k, false, _mig);   // 云端同步删老键（pub_ 记录+pubp_ 价镜像一起清）
     m.remove();
     run();
     askCopy(k, kk);                      /* 2026-10-12：发布完顺手问一句要不要写文案 */
@@ -3589,100 +3925,9 @@ function openSwitchKind(k, xy){
   });
 }
 
-/* ---------- 闲鱼直连（2026-10-14 用户需求）：改价/下架不打开网页，本地服务 mtop 直调 ----------
-   Cookie 一次粘贴存本机（/api/xycookie → wp xy_cookies.json，不进云端）；没存就当场弹粘贴框。
-   改价 = PC 编辑链路 editDetail→只改 priceInCent→edit（标题图描述原样带回）；
-   下架 = mtop.taobao.idle.item.downshelf。结果统一 netToast 浮条报。 */
-function xyHave(acc, then){
-  fetch('/api/xycookie?acc=' + encodeURIComponent(acc)).then(function(r){ return r.json(); })
-    .then(function(j){ if (j && j.has){ then(); } else { openXyCookieBox(acc, then); } })
-    .catch(function(){ netToast('本地服务没响应，等一下再试'); });
-}
-function openXyCookieBox(acc, then){
-  var old = document.getElementById('xycmask'); if (old) old.remove();
-  var m = document.createElement('div'); m.id = 'xycmask';
-  m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.35);z-index:60;display:flex;align-items:center;justify-content:center';
-  m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px;min-width:340px;max-width:540px">'
-    + '<div style="font-weight:700;margin-bottom:6px">存「' + esc(acc) + '」的闲鱼 Cookie</div>'
-    + '<div style="font-size:12.5px;color:#7a8699;line-height:1.7;margin-bottom:8px">'
-    + '浏览器打开 <b>www.goofish.com</b> 登录这个号 → 按 <b>F12</b> → <b>网络(Network)</b> → 随便点一个请求 →'
-    + ' 请求标头里把整串 <b>Cookie:</b> 的值复制进来（必须含 _m_h5_tk）。只存这台电脑，不进云端。'
-    + '失效了（改价/下架报 Cookie 失效）重粘一次就行。</div>'
-    + '<textarea id="xycval" rows="5" placeholder="粘贴整串 Cookie…" '
-    + 'style="width:100%;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:12px;font-family:monospace"></textarea>'
-    + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">'
-    + '<button class="achip" data-xyc="save" style="background:#eaf1ff;border-color:#c6d8ff;font-weight:700">保存</button>'
-    + '<button class="achip" data-xyc="x">先不弄</button></div></div>';
-  document.body.appendChild(m);
-  setTimeout(function(){ var t = m.querySelector('#xycval'); if (t) t.focus(); }, 60);
-  m.addEventListener('click', function(e){
-    var b = e.target.closest ? e.target.closest('[data-xyc]') : null;
-    if (!b){ if (e.target === m) m.remove(); return; }
-    if (b.getAttribute('data-xyc') === 'x'){ m.remove(); return; }
-    var v = (m.querySelector('#xycval').value || '').trim();
-    if (v.indexOf('_m_h5_tk') < 0){ alert('这串 Cookie 里没有 _m_h5_tk——要复制整串（F12 → 网络 → 任意请求的 Cookie 请求头）'); return; }
-    b.disabled = true; b.textContent = '保存中…';
-    fetch('/api/xycookie', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                             body: JSON.stringify({ acc: acc, cookie: v }) })
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if (j && j.ok){ m.remove(); netToast('「' + acc + '」的 Cookie 已存'); if (then) then(); }
-        else { b.disabled = false; b.textContent = '保存'; netToast('存失败：' + ((j && j.msg) || '?')); }
-      }).catch(function(){ b.disabled = false; b.textContent = '保存'; netToast('本地服务没响应'); });
-  });
-}
-function openXyPrice(acc, xid, curp){
-  xyHave(acc, function(){
-    var old = document.getElementById('xyprice_mask'); if (old) old.remove();
-    var m = document.createElement('div'); m.id = 'xyprice_mask';
-    m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.35);z-index:60;display:flex;align-items:center;justify-content:center';
-    m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px;min-width:340px">'
-      + '<div style="font-weight:700;margin-bottom:4px">改闲鱼价（' + esc(acc) + '）</div>'
-      + '<div style="font-size:12.5px;color:#7a8699;margin-bottom:10px">宝贝ID <span style="font-family:monospace">' + esc(xid) + '</span>'
-      + ' · 直接改闲鱼上的价，不打开网页（标题/图/描述都不动）</div>'
-      + '<input id="xyprice_val" type="number" min="0" step="1"'
-      + (isFinite(curp) && curp > 0 ? ' value="' + esc(curp) + '"' : '')
-      + ' placeholder="填新价" style="width:100%;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:14px">'
-      + '<div id="xyprice_msg" style="font-size:12.5px;color:#c0392b;margin-top:6px"></div>'
-      + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">'
-      + '<button class="achip" data-xyp="go" style="background:#e8f7ee;border-color:#bfe6cd;color:#0f7b3a;font-weight:700">改价</button>'
-      + '<button class="achip" data-xyp="x">算了</button></div></div>';
-    document.body.appendChild(m);
-    setTimeout(function(){ var i = m.querySelector('#xyprice_val'); if (i){ i.focus(); i.select(); } }, 60);
-    m.addEventListener('click', function(e){
-      var b = e.target.closest ? e.target.closest('[data-xyp]') : null;
-      if (!b){ if (e.target === m) m.remove(); return; }
-      if (b.getAttribute('data-xyp') === 'x'){ m.remove(); return; }
-      var p = parseFloat(m.querySelector('#xyprice_val').value);
-      if (!isFinite(p) || p <= 0){ m.querySelector('#xyprice_msg').textContent = '先填个正经价格'; return; }
-      b.disabled = true; b.textContent = '改价中…';
-      m.querySelector('#xyprice_msg').textContent = '';
-      fetch('/api/xyprice', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ acc: acc, id: xid, p: p }) })
-        .then(function(r){ return r.json(); })
-        .then(function(j){
-          if (j && j.ok){ m.remove(); netToast('✅ 闲鱼价已改成 ¥' + p + '（' + acc + '）'); }
-          else {
-            b.disabled = false; b.textContent = '改价';
-            m.querySelector('#xyprice_msg').textContent = (j && j.msg) || '失败，再试一次';
-          }
-        }).catch(function(){ b.disabled = false; b.textContent = '改价'; m.querySelector('#xyprice_msg').textContent = '本地服务没响应'; });
-    });
-  });
-}
-function openXyOff(acc, xid){
-  xyHave(acc, function(){
-    if (!confirm('下架「' + acc + '」的宝贝 ' + xid + '？\n下架后买家就看不到了，之后在闲鱼里可以重新上架。')) return;
-    netToast('正在下架…');
-    fetch('/api/xyoff', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ acc: acc, id: xid }) })
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        netToast((j && j.ok) ? ('✅ 已下架（' + acc + ' · ' + xid + '）')
-                             : ('❌ 下架失败：' + ((j && j.msg) || '?')));
-      }).catch(function(){ netToast('本地服务没响应'); });
-  });
-}
+/* 闲鱼直连 UI（2026-10-14 晚间用户改口「改价/下架不要了」）已整体下掉：
+   xyHave/openXyCookieBox/openXyPrice/openXyOff 及卡上两键、发布弹窗同步勾选全删。
+   后端 app/xyops.py 与 /api/xycookie|xyprice|xyoff 保留（以后想要再接回来就是纯 UI 活）。 */
 
 /* 多闲鱼号取消发布：先问取消哪个号（各号记录独立），也可全部取消 */
 function openUnmarkPick(c){
@@ -4151,19 +4396,6 @@ listEl.addEventListener('click', function(e){
     } else { fb(_xv, xc); }
     return;
   }
-  var xpb = e.target.closest('[data-xyprice]');
-  if (xpb){
-    /* 闲鱼直连·改价（2026-10-14）：卡上「改价」键 → 弹窗填新价 → 本地服务 mtop 直改 */
-    openXyPrice(xpb.getAttribute('data-acc') || '默认', xpb.getAttribute('data-xyprice'),
-                parseFloat(xpb.getAttribute('data-curp')));
-    return;
-  }
-  var xob = e.target.closest('[data-xyoff]');
-  if (xob){
-    /* 闲鱼直连·下架（2026-10-14）：确认一下就调 downshelf */
-    openXyOff(xob.getAttribute('data-acc') || '默认', xob.getAttribute('data-xyoff'));
-    return;
-  }
   var am = e.target.closest('[data-addmark]');
   if (am){
     /* 2026-10-13 用户问「正品已发，样机还要发怎么标」：同一型号再标一条，
@@ -4469,6 +4701,22 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   }
 
   /* ---- 软件自更新：查新版 → 一键下载静默覆盖安装（2026-10-08） ---- */
+  /* 启动发现新版的提醒弹窗（2026-10-14 用户定稿：提醒而不是强更——弹窗只问一句，
+     「立即更新」才开下载，「暂不更新」就关掉照常用，侧栏按钮保持点亮下次还会提）。 */
+  window.openUpdNag = function(latest, cur, mb){
+    var oldm = document.getElementById('updnag'); if (oldm) oldm.remove();
+    var m = document.createElement('div'); m.id = 'updnag';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.45);z-index:64;display:flex;align-items:center;justify-content:center';
+    m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px;min-width:340px;max-width:430px">'
+      + '<div style="font-weight:700;margin-bottom:8px">🚀 发现新版本 v' + esc(latest) + '</div>'
+      + '<div style="font-size:13px;color:#5a6478;line-height:1.8;margin-bottom:14px">当前 v' + esc(cur) + '，新版约 ' + (mb || '?') + ' MB。<br>更新会自动下载并安装，装完软件自动重启，要不要现在更？</div>'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end">'
+      + '<button class="achip" id="updlater">暂不更新</button>'
+      + '<button class="achip" id="updgo" style="background:#2e6be6;border-color:#2e6be6;color:#fff">立即更新</button></div></div>';
+    document.body.appendChild(m);
+    m.querySelector('#updlater').addEventListener('click', function(){ m.remove(); });
+    m.querySelector('#updgo').addEventListener('click', function(){ m.remove(); if (window.openAppUpdate) window.openAppUpdate(); });
+  };
   (function(){
     var au = document.getElementById('appupd');
     if (!au) return;
@@ -4499,8 +4747,17 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
       });
     });
     // 启动时静默查一次：有新版就把按钮点亮成「⬆ 有新版本 v2.7.3」
+    // 2026-10-14 用户定稿：提醒而不是强更——1.5s 后弹「要不要更新」的小窗，
+    // 用户点「立即更新」才开下载，点「暂不更新」就照常用（按钮保持点亮，下次启动还会提）
     fetch('/api/appcheck', { cache: 'no-store' }).then(function(r){ return r.json(); }).then(function(r){
-      if (r.ok && r.newer){ au.textContent = '⬆ 有新版本 v' + r.latest; au.classList.add('hot'); }
+      if (r.ok && r.newer){
+        au.textContent = '⬆ 有新版本 v' + r.latest; au.classList.add('hot');
+        setTimeout(function(){
+          if (!window.openUpdNag) return;
+          if (document.querySelector('.amodal,#updnag')) return;   // 已经有弹窗开着就别叠
+          window.openUpdNag(r.latest, r.cur, Math.round((r.size || 0) / 1048576));
+        }, 1500);
+      }
     }).catch(function(){});
   })();
 
