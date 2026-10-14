@@ -1411,11 +1411,10 @@ function calcUpdate(box){
    权限由管理号在「账号管理」里逐项勾选。 */
 var AUTH = null;
 try { AUTH = JSON.parse(localStorage.getItem('ml_auth') || 'null'); } catch(e){ AUTH = null; }
-/* 2026-10-15 全迁新账号（老账号 zone 被 CF ToS 封锁）：de5.net 在前；
-   老域名留第二位——若申诉解封自动变备用出口；workers.dev 国内被墙垫底 */
+/* 2026-10-15 全迁新账号（老账号 zone 被 CF ToS 封锁，老域名/老 workers.dev 已废弃）：
+   de5.net 在前；workers.dev 国内被墙垫底兜底 */
 var AUTH_HOSTS = ['https://auth.tingjiabaobao.de5.net',
-                  'https://auth.baozang.kdns.fr',
-                  'https://modelookup-auth.bao3053.workers.dev'];
+                  'https://modelookup-auth.tingjiabaobao.workers.dev'];
 /* 权限逐项化（2026-10 五次改版）：价格格 / 计算器成本下拉 / 按钮 全部拆开，
    管理号在「账号管理」里逐个勾。第三列是分组（管理面板分组显示，只影响 UI 不影响权限 key）。
    分组按「这权限控制哪里」归类：界面上显示什么 / 卡片价格列 / 定价参考 / 计算器与奖励 / 操作按钮 */
