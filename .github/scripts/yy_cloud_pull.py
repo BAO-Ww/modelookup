@@ -27,7 +27,7 @@ def log(*a):
 
 USER = os.environ["YY_USER"]
 PASS = os.environ["YY_PASS"]
-CLOUD = "https://auth.baozang.kdns.fr"
+CLOUD = "https://auth.tingjiabaobao.de5.net"
 TOKEN = os.environ["CLOUD_TOKEN"]           # 管理号登录态（worker 鉴权用）
 
 YY_CAS = ("https://euc.yonyoucloud.com/cas/login?sysid=diwork&multiCas=true"

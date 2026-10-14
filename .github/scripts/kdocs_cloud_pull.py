@@ -27,7 +27,7 @@ def log(*a):
     OUT.flush()
 
 
-CLOUD = "https://auth.baozang.kdns.fr"
+CLOUD = "https://auth.tingjiabaobao.de5.net"
 TOKEN = (os.environ.get("CLOUD_TOKEN") or "").strip()
 SECRET = (os.environ.get("KX_SECRET") or "").strip()
 if not TOKEN and not SECRET:

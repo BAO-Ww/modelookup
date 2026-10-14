@@ -49,7 +49,7 @@ SUBSIDY_FID_CACHE = "subsidy_fileid.txt"
 # 2026-10-08 用户口径：用友库存「我更新了全员跟着更新」——
 #   管理号的机器拉用友 → 整包上传 worker（KV stocklive）；子账号不碰用友，直接从云端取。
 #   子账号从此**不用登用友**；管理号机器仍是唯一的用友登录点。
-CLOUD_HOST = "https://auth.baozang.kdns.fr"
+CLOUD_HOST = "https://auth.tingjiabaobao.de5.net"   # 2026-10-15 迁新账号（老账号 zone 被 CF ToS 封锁）
 _CLOUD_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
              " (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 
