@@ -114,6 +114,15 @@ class ApiGetMixin:
                 self._send(200, f.read(), "text/html; charset=utf-8")
             return
 
+        if path == "/api/xycookie":
+            # 闲鱼直连配套（2026-10-14）：这个号存没存 Cookie——只回有没有，绝不回内容
+            import xyops
+            q = urllib.parse.parse_qs(u.query)
+            acc = (q.get("acc") or [""])[0].strip()[:24]
+            self._send(200, json.dumps({"ok": True, "has": xyops.has_cookie(acc)},
+                                       ensure_ascii=False))
+            return
+
         if path == "/api/ping":
             self._send(200, json.dumps({"app": APP_ID, "ver": APP_VERSION}, ensure_ascii=False))
             return

@@ -90,3 +90,6 @@ _cf_token.txt
 _cf_deploy.txt
 glm_key.txt
 yy_auth.json
+
+# 闲鱼直连 Cookie（只存本机，绝不进仓库）
+xy_cookies.json

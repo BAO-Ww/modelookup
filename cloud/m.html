@@ -977,7 +977,9 @@ function cardHTML(it){
          if (!_x) return '';
          var _link = (/^\d{6,}$/.test(_x)
            ? ' <a href="https://seller.goofish.com/?site=COMMONPRO#/seller-item/publish?itemId=' + encodeURIComponent(_x) + '" target="_blank" rel="noopener"'
-           + ' style="margin-left:6px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:1px 8px;display:inline-block;vertical-align:1px">打开宝贝</a>'
+           + ' style="margin-left:6px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:1px 8px;display:inline-block;vertical-align:1px">编辑宝贝</a>'
+           + ' <a href="https://www.goofish.com/item?id=' + encodeURIComponent(_x) + '" target="_blank" rel="noopener"'
+           + ' style="margin-left:6px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:1px 8px;display:inline-block;vertical-align:1px">查看宝贝</a>'
            : '');
          return '<div class="crow"><label>闲鱼ID</label><span class="vs mono" style="font-weight:600;color:#0f7b3a">'
            + '<span data-xidcopy="' + esc(_x) + '" style="cursor:pointer">' + esc(_x) + '</span>' + _link
