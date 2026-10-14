@@ -83,3 +83,10 @@ installer/*.log
 *.xlsx
 *.xls
 !requirements.txt
+
+# ---- 凭据 / 密钥（2026-10-14 体检 P0-7：绝不入库）----
+_pat.txt
+_cf_token.txt
+_cf_deploy.txt
+glm_key.txt
+yy_auth.json

@@ -9,6 +9,7 @@ ditto 解压到 /tmp staging → 独立 bash 帮助进程（detach，不依赖�
 才打）。本更新器程序内 HTTP 下载 + ditto 解压，落盘文件不带 quarantine → 替换后
 直接能跑，不弹任何拦截。首次安装（DMG 拖拽）才有 Gatekeeper 提示。
 """
+import hashlib
 import io
 import os
 import shutil
@@ -84,6 +85,18 @@ def _app_install_bg(log):
             state.set_state("error", "更新包不完整（收到 %.1f MB / 应为 %.1f MB），重试一次"
                             % (got / 1048576.0, exp / 1048576.0))
             return
+        # 2026-10-14 体检 P0-3：SHA-256 完整性校验（与 Windows 端同款，worker 透传 GitHub digest）
+        want_sha = str(j.get("sha256") or "")
+        if want_sha:
+            h = hashlib.sha256()
+            with io.open(zipf, "rb") as f:
+                for chunk in iter(lambda: f.read(1048576), b""):
+                    h.update(chunk)
+            if h.hexdigest() != want_sha:
+                shutil.rmtree(work, ignore_errors=True)
+                state.set_state("error", "更新包校验失败（SHA-256 不匹配，已丢弃），未安装")
+                return
+            log("自更新(Mac)：SHA-256 校验通过")
         log("自更新(Mac)：下载完成（%.1f MB），解压校验…" % (got / 1048576.0))
         state.set_state("running", "正在解压新版本…")
         rc = subprocess.run(["/usr/bin/ditto", "-x", "-k", zipf, work],

@@ -112,6 +112,15 @@ def stock_push_cloud(log):
         log("库存已上传云端（%.1f MB），子账号自动共享" % (j.get("mb") or 0))
 
 
+def _ts_key(ts):
+    """时间戳统一成可字典序比较的键（2026-10-14 体检 P1-A1 跨年修复）：
+    旧格式 %m-%d %H:%M 无年份，12 月的 "12-31" 和 1 月的 "01-02" 裸比较会判成
+    「云端没更新」→ 库存同步从元旦起全部静默失效。旧格式一律视为最旧，
+    第一次云端带新年份的数据来时就强制同步一次，之后双方都是新格式。"""
+    s = str(ts or "")
+    return s if (len(s) > 5 and s[4:5] == "-") else "0000-" + s
+
+
 def stock_cloud_peek():
     """轻量探云端库存时间戳（给自动轮询用，不拉大数据）。
     返回云端 ts 字符串 / None（网络或数据问题）。"""
@@ -131,8 +140,8 @@ def stock_pull_cloud(log, force=True):
             return                        # 探测失败：静默，下轮再说
         with state.STOCK_LOCK:
             local_ts = state.STOCK.get("ts") or ""
-        if cloud_ts <= local_ts:
-            return                        # 云端没有比本地更新的东西（2026-10-09 改成比先后，防止本机新的被云端旧的覆盖）
+        if _ts_key(cloud_ts) <= _ts_key(local_ts):
+            return                        # 云端没有比本地更新的东西（2026-10-09 改成比先后；2026-10-14 兼容跨年）
         log("云端库存有更新（%s → %s），自动同步…" % (local_ts or "无", cloud_ts))
     log("正在从云端同步库存（管理号共享的用友实时数据）…")
     state.set_state("running", "正在从云端同步库存…")
@@ -187,7 +196,7 @@ def sync_xlsx_cloud(log, touch=False):
             pass
         if ts == local:
             if touch:
-                state.set_state(price_at=time.strftime("%m-%d %H:%M"))
+                state.set_state(price_at=time.strftime("%Y-%m-%d %H:%M"))
             return "unchanged"
         if not state._update_lock.acquire(blocking=False):
             return "busy"                # 别的更新正在跑，这轮先不动
@@ -218,7 +227,7 @@ def sync_xlsx_cloud(log, touch=False):
             with io.open(wp("xlsx_ts.txt"), "w", encoding="utf-8") as f:
                 f.write(ts)
             state.set_state("done", "数据已自动同步（云端表格 · %s…）" % ts[:8],
-                            price_at=time.strftime("%m-%d %H:%M"))
+                            price_at=time.strftime("%Y-%m-%d %H:%M"))
             log("云端表格同步完成：%s" % ", ".join(saved))
             return "synced"
         finally:

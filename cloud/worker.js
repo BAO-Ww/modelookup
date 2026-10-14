@@ -212,9 +212,11 @@ export default {
   }
 };
 
-// 每日快照（2026-10-13，免费兜底）：当天第一个请求把 users 整包写进 snap_YYYYMMDD，
-// 只留最近 7 份（按键名日期清旧的）。写量 1-2 次/天，对 KV 1000 写/天额度无压力。
-// 模块级 _snapDay 缓存：同 isolate 当天只读一次 snap_last，不反复耗读额度。
+// 每日快照（2026-10-13 起做 users；2026-10-14 体检 P1-D4 扩到业务核心）：
+// 当天第一个请求把 users + 全部 pub_/pubp_/xy_（发布记录/价格镜像/闲鱼号配置）整包
+// 写进 snap_YYYYMMDD，只留最近 7 份（按键名日期清旧的）。写量 2 次/天，额度无压力。
+// myimgs 不进快照（~18MB 逼近 KV 单值 25MB 上限，且客户端 syncImgs 自愈）。
+// 兼容：旧快照是 users 裸串、新快照是 {users:..., pub_B:...} 对象，恢复口两样都认。
 // 就算忘了手动 /admin/backup，也永远有一周的滚动恢复点。
 let _snapDay = null;
 async function dailySnap(env) {
@@ -225,7 +227,17 @@ async function dailySnap(env) {
     if ((await env.KV.get("snap_last")) === today) return;
     const users = await env.KV.get(K_USERS);
     if (users == null) return;                        // 还没 init 过，没得备
-    await env.KV.put("snap_" + today, users);
+    const snap = { users };
+    for (const pre of ["pub_", "pubp_", "xy_"]) {     // 业务核心：丢了没有找回渠道的三类键
+      const lst = await env.KV.list({ prefix: pre });
+      for (const k of (lst.keys || [])) {
+        try {
+          const v = await env.KV.get(k.name);
+          if (v != null) snap[k.name] = v;
+        } catch (e) {}                                // 单键读失败跳过，别拖垮整个快照
+      }
+    }
+    await env.KV.put("snap_" + today, JSON.stringify(snap));
     await env.KV.put("snap_last", today);
     const cutoff = new Date(Date.now() - 8 * 86400000).toISOString().slice(0, 10).replaceAll("-", "");
     const lst = await env.KV.list({ prefix: "snap_" });
@@ -323,15 +335,35 @@ async function route(request, env, path, ctx) {
     const ck = env.CLOUD_KEY || env.SECRET;
     if (!ck || (request.headers.get("X-Cloud-Key") || "") !== ck) return jerr("没有权限", 403);
     const snap = await request.json().catch(() => null);
-    if (!snap || typeof snap !== "object" || Array.isArray(snap)) return jerr("body 应为 users 对象");
-    for (const [u0, x] of Object.entries(snap)) {
+    if (!snap || typeof snap !== "object" || Array.isArray(snap))
+      return jerr("body 应为 users 对象，或每日快照整包 {users:..., pub_B:...}");
+    // 2026-10-14 兼容两种快照形态：旧=users 裸对象；新={users:..., pub_/pubp_/xy_ 各键}
+    let usersObj = snap, extra = null;
+    if (snap.users != null) {
+      try {
+        usersObj = typeof snap.users === "string" ? JSON.parse(snap.users) : snap.users;
+      } catch (e) { return jerr("快照 users 字段解析失败"); }
+      extra = snap;
+    }
+    if (!usersObj || typeof usersObj !== "object" || Array.isArray(usersObj))
+      return jerr("快照里没有合法的 users 对象");
+    for (const [u0, x] of Object.entries(usersObj)) {
       if (!String(u0).trim() || !x || typeof x !== "object" ||
           !String(x.ph || "") || !String(x.salt || ""))
         return jerr("快照里「" + u0 + "」缺 ph/salt，拒绝整包恢复（不覆盖现有账本）");
     }
-    await env.KV.put(K_USERS, JSON.stringify(snap));
+    await env.KV.put(K_USERS, JSON.stringify(usersObj));
     await env.KV.put("inited", "1");
-    return J({ ok: true, msg: "已恢复 " + Object.keys(snap).length + " 个账号，inited 已重设" });
+    let nBiz = 0;
+    if (extra) {
+      for (const [k, v] of Object.entries(extra)) {
+        if (k === "users") continue;
+        if (!/^(pub_|pubp_|xy_)/.test(k) || typeof v !== "string") continue;
+        try { await env.KV.put(k, v); nBiz++; } catch (e) {}
+      }
+    }
+    return J({ ok: true, msg: "已恢复 " + Object.keys(usersObj).length + " 个账号"
+      + (nBiz ? " + " + nBiz + " 个业务键（发布/定价/闲鱼号）" : "") + "，inited 已重设" });
   }
 
   const token = request.headers.get("X-Token") || "";
@@ -680,8 +712,9 @@ async function route(request, env, path, ctx) {
     }
     if (chC) await env.KV.put("pub_" + who, JSON.stringify(marks));
     // xyp 增量（2026-10-12 多闲鱼号）：改某号某型的价，只对已存在的标记改，不造新标记
+    let chPP = false;   // pubp_ 镜像有变更（2026-10-14 体检 P1-1：xyp 改价也要跟镜像）
     if (b.xyp && typeof b.xyp === "object" && !Array.isArray(b.xyp)) {
-      let chX = false;
+      let chX = false; const xypC = {};   // 有价变更的型号 → 镜像要重算
       for (const [c0, xs] of Object.entries(b.xyp)) {
         const c = safeKey(c0, 100);
         if (!c || !xs || typeof xs !== "object" || Array.isArray(xs)) continue;
@@ -691,25 +724,38 @@ async function route(request, env, path, ctx) {
         for (const [x0, p] of Object.entries(xs)) {
           const x = safeKey(x0, 24);
           if (!x || !cur.xys[x] || !isFinite(+p) || cur.xys[x].p === +p) continue;
-          cur.xys[x].p = +p; chX = true;
+          cur.xys[x].p = +p; chX = true; xypC[c] = true;
         }
       }
-      if (chX) await env.KV.put("pub_" + who, JSON.stringify(marks));
+      if (chX) {
+        await env.KV.put("pub_" + who, JSON.stringify(marks));
+        // 2026-10-14 修「手机端价格漂移」：原来 xyp 通道只改 pub_ 从不碰 pubp_，
+        // 手机端/老客户端（看的是 pubp_ 镜像）一直显示旧价。口径与 /pub ponly 同款：
+        // 镜像 = 该型号最新一条记录的价
+        for (const c of Object.keys(xypC)) {
+          const lt = Object.values(marks[c].xys || {}).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
+          if (lt && isFinite(+lt.p) && pp0[c] !== +lt.p) { pp0[c] = +lt.p; chPP = true; }
+        }
+      }
       var _chX = true;   // 标记 xyp 通道跑过（给下面的归一化落库判断用）
     }
     // 老格式归一化落库：chC/chX 的写已顺带把升级带上；只有归一化没别的变更时补这一刀
     if (chN && !chC && !_chX) await env.KV.put("pub_" + who, JSON.stringify(marks));
     if (b.prices && typeof b.prices === "object" && !Array.isArray(b.prices)) {
-      const pp = await getPubP(who);
       for (const [c0, p] of Object.entries(b.prices)) {
         const c = safeKey(c0, 100);
         if (!c) continue;
         // 2026-10-08：全量收价 —— 没点「标记发布」的型号定价也要存（用户要求）
-        if (isFinite(+p)) pp[c] = +p;
+        if (isFinite(+p) && pp0[c] !== +p) { pp0[c] = +p; chPP = true; }
       }
-      await env.KV.put("pubp_" + who, JSON.stringify(pp));
+      chPP = true;   // prices 通道保持原行为：带了 prices 就落一次镜像（幂等，串行区内安全）
     }
-    return J({ ok: true, marks: await getPubN(who), prices: await getPubP(who) });
+    if (chPP) await env.KV.put("pubp_" + who, JSON.stringify(pp0));
+    // 2026-10-14 体检 P1-4：返回直接用内存组装（marks/pp0 都在手上），
+    // 省掉结尾 getPubN+getPubP 的 2 次重复读——免费版 KV 读额度的大头之一
+    const outM = {};
+    for (const [c, v] of Object.entries(marks)) outM[c] = normMark(v, pp0[c]);
+    return J({ ok: true, marks: outM, prices: pp0 });
   }
   // 管理号看所有**子账号**各发布了什么（带各自的闲鱼定价；管理号自己不在这份名单里）
   if (path === "/puball" && request.method === "GET") {
@@ -1047,8 +1093,12 @@ async function route(request, env, path, ctx) {
     if (rel.__fail) return jerr(rel.__fail, 502);
     if (!rel.tag_name) return jerr("GitHub 上没有 Release（检查 GH_TOKEN 配置）", 502);
     const a = setupAsset(rel, url.searchParams.get("plat") || "");
+    // 2026-10-14 体检 P0-3：透传 GitHub 资产的 SHA-256（GitHub 自动算），客户端下载后
+    // 流式校验——更新链上任一环被篡改，装包前就能拦下。旧资产没有 digest 字段时不带。
+    const dg = (a && typeof a.digest === "string" && a.digest.indexOf("sha256:") === 0)
+      ? a.digest.slice(7) : "";
     return J({ ok: true, tag: rel.tag_name, ver: String(rel.tag_name).replace(/^v/i, ""),
-               name: a ? a.name : "", size: a ? a.size : 0 });
+               name: a ? a.name : "", size: a ? a.size : 0, sha256: dg || undefined });
   }
   if (path === "/appdl" && request.method === "GET") {
     const rel = await ghLatest();

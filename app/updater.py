@@ -2,6 +2,7 @@
 """更新编排域（2026-10-11 拆分一期：从 main.py 原样搬出，纯搬运零行为变化）。
 云端跟随线程 / 软件自更新 / 全部更新 / do_update / do_stock_update（已退役编排）。
 依赖方向：updater 在 kdocs/yyclient/cloud 之上、server 之下。"""
+import hashlib
 import io
 import os
 import subprocess
@@ -125,6 +126,26 @@ def _app_install_bg(log):
         if got < 1048576:
             state.set_state("error", "安装包下载不完整（%d 字节），重试一次" % got)
             return
+        # 2026-10-14 体检 P0-3：SHA-256 完整性校验（worker /appcheck 透传 GitHub 资产 digest）。
+        # 更新链上任一环被篡改，这里装包前就拦下——先 taskkill 再 /SILENT 的链路容不得坏包。
+        want_sha = str(j.get("sha256") or "")
+        if want_sha:
+            h = hashlib.sha256()
+            with io.open(dest, "rb") as f:
+                for chunk in iter(lambda: f.read(1048576), b""):
+                    h.update(chunk)
+            got_sha = h.hexdigest()
+            if got_sha != want_sha:
+                try:
+                    os.remove(dest)
+                except Exception:
+                    pass
+                log("自更新：SHA-256 校验失败！want=%s got=%s，已丢弃不安装" % (want_sha, got_sha))
+                state.set_state("error", "安装包校验失败（SHA-256 不匹配，已删除下载），未安装")
+                return
+            log("自更新：SHA-256 校验通过")
+        else:
+            log("自更新：云端未提供校验值（旧资产），跳过完整性校验")
         log("自更新：下载完成 %s（%.1f MB），准备退出并静默安装…" % (dest, got / 1048576.0))
         state.set_state("running", "下载完成，软件将自动关闭并安装新版，装完会自动重新打开…")
         # 2026-10-09 修复「下载了但静默安装没落地」：原来是先起安装器、自己 2.5 秒后再退，
@@ -159,7 +180,10 @@ def _app_install_bg(log):
             "if exist " + q(newexe) + ' start "" ' + q(newexe),
             "echo [%date% %time%] update helper done >> " + q(logf),
         ]
-        with io.open(bat, "w", encoding="ascii", errors="ignore") as f:
+        # 2026-10-14 体检 P1-C1：不能再用 ascii+ignore 写 bat——中文用户名机器上
+        # TEMP/安装路径里的中文字符会被 errors="ignore" 静默剥掉，taskkill/setup 变无效命令，
+        # 自更新从此永远失败且无感知。mbcs（Windows ANSI/GBK）cmd 才认。
+        with io.open(bat, "w", encoding="mbcs", errors="strict") as f:
             f.write("\r\n".join(batlines) + "\r\n")
         # 2026-10-09 修「更新时弹黑色 ping 窗口」：CREATE_NO_WINDOW 让 cmd 带一个
         # 隐藏控制台，所有子程序继承它，全程无窗口。（父进程 os._exit 后帮助进程
@@ -272,7 +296,7 @@ def _updateall_bg(log, wf="all"):
                     parts.append("库存：云端已更新，本机已同步（%s）" % after)
                     state._STK_DETAIL[0] = "从云端同步 %s 行（云端定时共享）" % (state.STOCK.get("rows") or 0)
                 else:
-                    state.set_state(stock_at=time.strftime("%m-%d %H:%M"))
+                    state.set_state(stock_at=time.strftime("%Y-%m-%d %H:%M"))
                     parts.append("库存：云端确认过最新（内容无变化，时间已刷新）")
                     state._STK_DETAIL[0] = "云端库存确认最新"
     except Exception as e:
@@ -382,7 +406,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
             state._UPD_DETAIL[0] = "%s，重建 %d 个型号" % ("、".join(_upd_parts), len(_pl["rows"]))
         else:
             state._UPD_DETAIL[0] = "本地文件导入，重建 %d 个型号" % len(_pl["rows"])
-        state.set_state("done", "更新完成", price_at=time.strftime("%m-%d %H:%M"))
+        state.set_state("done", "更新完成", price_at=time.strftime("%Y-%m-%d %H:%M"))
         return True, state._UPD_DETAIL[0]
     except Exception as e:
         msg = str(e) or repr(e)

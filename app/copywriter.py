@@ -21,7 +21,25 @@ from normalize import norm_model
 from paths import wp
 
 API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-API_KEY = os.environ.get("ML_GLM_KEY") or "eedf0a7a971d4a46823185dbabf8b04a.4AraKMykpsOerINf"
+# 2026-10-14 用户拍板：key 打进 exe（子账号机器零配置，放 key 文件不现实）。
+# 三级链：环境变量 ML_GLM_KEY → 本机 glm_key.txt（想换新 key 不用重装就改它）→ 内置兜底。
+# 内置 key 会随 exe 分发（用户知情接受：单机自用+子账号小圈子，风险换省心）。
+_BUILTIN_GLM_KEY = "eedf0a7a971d4a46823185dbabf8b04a.4AraKMykpsOerINf"
+def _load_glm_key():
+    k = os.environ.get("ML_GLM_KEY") or ""
+    if k:
+        return k.strip()
+    try:
+        p = wp("glm_key.txt")
+        if os.path.isfile(p):
+            with io.open(p, encoding="utf-8-sig") as f:
+                t = (f.read() or "").strip()
+                if t:
+                    return t
+    except Exception:
+        pass
+    return _BUILTIN_GLM_KEY
+API_KEY = _load_glm_key()
 GLM_MODEL = "glm-4-flash"
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -349,6 +367,8 @@ def fetch_xinsheng(model, log):
 
 # ---------------------------------------------------------------- GLM 文案
 def _chat(prompt):
+    if not API_KEY:
+        raise RuntimeError("未配置 GLM key（软件数据目录放 glm_key.txt，或环境变量 ML_GLM_KEY）")
     body = json.dumps({"model": GLM_MODEL, "messages": [{"role": "user", "content": prompt}],
                        "temperature": 0.7}).encode("utf-8")
     req = urllib.request.Request(API_URL, data=body, headers={
@@ -448,6 +468,8 @@ def glm_copy(model, kind, data, log):
     # 2026-10-13 用户反馈「小红书/闲鱼拉胯」整改：质量闸（剔空洞口号/一句话配文）
     # + 质量不够自动重试一次（两次取分高那次），AI 解析失败也不再炸整单
     best, best_score = None, -1
+    if not API_KEY:
+        log("未配置 GLM key（glm_key.txt）：AI 裸写跳过，只用官网实抓 + 欣盛兜底")
     for attempt in range(2):
         try:
             raw = _chat(PROMPT.format(model=model, pname=data.get('pname') or model, brand=brand,
