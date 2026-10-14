@@ -111,6 +111,44 @@ async function getJSON(env, key, fallback) {
     return fallback;
   }
 }
+// ---------------- D1：pub_/pubp_ 存取层（2026-10-15 迁移） ----------------
+// KV 免费版写 1000/天被批量操作打爆（10-14 迁移 32 并发丢 16 条实锤），且 KV 无原子读改写。
+// pub_/pubp_（发布记录/价格镜像，高频写）迁 D1：免费 10 万行写/天（KV 的 100 倍），
+// 单行 UPSERT 强一致，同 isolate 还有 withLock 串行 —— 并发覆盖从根上治掉。
+// users/xy_/myimgs/snap_ 留 KV（低频写 + 登录态不动）。
+// 表结构：store(k TEXT PRIMARY KEY, v TEXT, updated_at INTEGER)，k 与 KV 键名同构（pub_B/pubp_B…）。
+// env.DB 未绑（部署漏 binding）→ 退回 KV 不炸；D1 已绑但读写失败 → 抛错，绝不退 KV 读旧数据。
+let _d1ok = null;   // null=没试过，true/false=建表结果（每 isolate 一次）
+async function d1Init(env) {
+  if (_d1ok !== null) return _d1ok;
+  _d1ok = false;
+  if (!env.DB) return false;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS store (k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER)").run();
+  _d1ok = true;
+  return true;
+}
+async function d1Get(env, key, fallback) {
+  if (!(await d1Init(env))) return getJSON(env, key, fallback);
+  const r = await env.DB.prepare("SELECT v FROM store WHERE k = ?").bind(key).first();
+  return r && r.v != null ? JSON.parse(r.v) : fallback;
+}
+async function d1Put(env, key, obj) {
+  const body = JSON.stringify(obj);
+  if (!(await d1Init(env))) { await env.KV.put(key, body); return; }
+  await env.DB.prepare(
+    "INSERT INTO store (k,v,updated_at) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at"
+  ).bind(key, body, Date.now()).run();
+}
+async function d1Del(env, key) {
+  if (!(await d1Init(env))) { await env.KV.delete(key); return; }
+  await env.DB.prepare("DELETE FROM store WHERE k = ?").bind(key).run();
+}
+// 快照用：D1 全表平铺（键就 pub_/pubp_ 每账号一个，量小）；失败返回空数组让快照降级
+async function d1List(env) {
+  if (!(await d1Init(env))) return [];
+  const r = await env.DB.prepare("SELECT k, v FROM store").all();
+  return (r.results || []).map((x) => ({ name: x.k, v: x.v }));
+}
 // 2026-10-10 审计修复（G15/并发）：进程内 async 锁——同 isolate 的读改写操作串行化，消并发丢更新。
 // Cloudflare Worker 同一 isolate 串行处理请求，但 fetch 是异步交错执行的，全路由套一把锁最稳。
 let _lock = Promise.resolve();
@@ -228,7 +266,7 @@ async function dailySnap(env) {
     const users = await env.KV.get(K_USERS);
     if (users == null) return;                        // 还没 init 过，没得备
     const snap = { users };
-    for (const pre of ["pub_", "pubp_", "xy_"]) {     // 业务核心：丢了没有找回渠道的三类键
+    for (const pre of ["xy_"]) {                      // xy_ 留 KV（低频写）；pub_/pubp_ 已迁 D1，从下面补进来
       const lst = await env.KV.list({ prefix: pre });
       for (const k of (lst.keys || [])) {
         try {
@@ -237,6 +275,11 @@ async function dailySnap(env) {
         } catch (e) {}                                // 单键读失败跳过，别拖垮整个快照
       }
     }
+    try {
+      for (const k of await d1List(env)) {            // pub_/pubp_ 从 D1 进快照（同构键名，快照格式不变）
+        if (k.v != null) snap[k.name] = k.v;
+      }
+    } catch (e) { console.error("快照取 D1 失败（降级只备 KV）：" + e.message); }
     await env.KV.put("snap_" + today, JSON.stringify(snap));
     await env.KV.put("snap_last", today);
     const cutoff = new Date(Date.now() - 8 * 86400000).toISOString().slice(0, 10).replaceAll("-", "");
@@ -359,7 +402,11 @@ async function route(request, env, path, ctx) {
       for (const [k, v] of Object.entries(extra)) {
         if (k === "users") continue;
         if (!/^(pub_|pubp_|xy_)/.test(k) || typeof v !== "string") continue;
-        try { await env.KV.put(k, v); nBiz++; } catch (e) {}
+        try {
+          if (/^(pub_|pubp_)/.test(k)) await d1Put(env, k, JSON.parse(v));   // 已迁 D1：恢复口同步分流
+          else await env.KV.put(k, v);                                        // xy_ 留 KV
+          nBiz++;
+        } catch (e) {}
       }
     }
     return J({ ok: true, msg: "已恢复 " + Object.keys(usersObj).length + " 个账号"
@@ -480,8 +527,8 @@ async function route(request, env, path, ctx) {
       return jerr("本次保存将删除子账号：" + doomed.join(", ") + "。如果是误操作请检查面板；确认要删请带 confirm:true", 400);
     for (const u of doomed) {
       delete users[u];
-      await env.KV.delete("pub_" + u);
-      await env.KV.delete("pubp_" + u);
+      await d1Del(env, "pub_" + u);
+      await d1Del(env, "pubp_" + u);
     }
     await putUsers(env, users);
     return J({ ok: true, deleted: doomed });
@@ -505,10 +552,10 @@ async function route(request, env, path, ctx) {
   const DEF_XY = "默认";
   const pubTs = (v) => (typeof v === "object" && v ? (+v.t || 0) : (+v || 0));
   async function getPub(u) {
-    return getJSON(env, "pub_" + u, {});
+    return d1Get(env, "pub_" + u, {});
   }
   async function getPubP(u) {
-    return getJSON(env, "pubp_" + u, {});
+    return d1Get(env, "pubp_" + u, {});
   }
   // 顶层镜像重算：取 xys 里最新一条的 t/k/p
   function markTop(m) {
@@ -567,12 +614,12 @@ async function route(request, env, path, ctx) {
         const rest = Object.values(cur.xys).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0] || null;
         if (rest && isFinite(+rest.p)) pp0[c] = +rest.p;
         else if (c in pp0) delete pp0[c];
-        await env.KV.put("pubp_" + target, JSON.stringify(pp0));
+        await d1Put(env, "pubp_" + target, pp0);
       } else {
         delete marks[c];
         // 2026-10-10 新规矩：取消发布，定价一并清掉（旧的「价格跟型号走」作废）
         const pp0 = await getPubP(target);
-        if (c in pp0) { delete pp0[c]; await env.KV.put("pubp_" + target, JSON.stringify(pp0)); }
+        if (c in pp0) { delete pp0[c]; await d1Put(env, "pubp_" + target, pp0); }
       }
     } else {
       const now = Date.now();
@@ -584,7 +631,7 @@ async function route(request, env, path, ctx) {
         if (!e) return jerr("没有这条发布记录");
         if (b.xid) e.xid = String(b.xid).trim().slice(0, 40); else delete e.xid;
         marks[c] = cur;
-        await env.KV.put("pub_" + target, JSON.stringify(marks));
+        await d1Put(env, "pub_" + target, marks);
         return J({ ok: true });
       }
       // 只改价（2026-10-14 管理号在子用户发布视图里改价）：不动口径、不动记录时间
@@ -598,8 +645,8 @@ async function route(request, env, path, ctx) {
         const pp = await getPubP(target);
         const lt = Object.values(cur.xys).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
         if (lt && isFinite(+lt.p)) pp[c] = +lt.p;
-        await env.KV.put("pubp_" + target, JSON.stringify(pp));
-        await env.KV.put("pub_" + target, JSON.stringify(marks));
+        await d1Put(env, "pubp_" + target, pp);
+        await d1Put(env, "pub_" + target, marks);
         return J({ ok: true });
       }
       // 成本口径跟发布记录走（2026-10-13 用户定稿）：搭车存，旧客户端发的没这字段自动跳过
@@ -623,10 +670,10 @@ async function route(request, env, path, ctx) {
       if (isFinite(np)) {
         const pp = await getPubP(target);
         pp[c] = +np;
-        await env.KV.put("pubp_" + target, JSON.stringify(pp));
+        await d1Put(env, "pubp_" + target, pp);
       }
     }
-    await env.KV.put("pub_" + target, JSON.stringify(marks));
+    await d1Put(env, "pub_" + target, marks);
     return J({ ok: true });
   }
   // 整包合并（登录后把本机旧记录并上云端）：{marks: {c: {t,k} | {t,k,xys}}, prices: {c: 价}, xyp: {c: {号: 价}}}
@@ -671,7 +718,7 @@ async function route(request, env, path, ctx) {
     }
     // KV 省额度（2026-10-10）：只有真的并进来了发布标记才写 pub_——
     // 打价场景每次 /pubsync 只带 prices，pub_ 原来被无条件整包重写，白烧一倍写额度
-    if (chM) await env.KV.put("pub_" + who, JSON.stringify(marks));
+    if (chM) await d1Put(env, "pub_" + who, marks);
     // cs/bn/nat 通道（2026-10-13）：口径 cs、出库奖励点击状态 bn、发全国勾选 nat
     // 跟发布记录走。只动各自字段，不碰 xys/时间戳/pubp_；旧客户端没这些字段自动跳过
     // 2026-10-13 修「改好了刷新就没」：10-12 之前标的老记录是 {t,k} 没 xys，下面四通道
@@ -710,7 +757,7 @@ async function route(request, env, path, ctx) {
         if (cur.nat !== nv) { cur.nat = nv; chC = true; }
       }
     }
-    if (chC) await env.KV.put("pub_" + who, JSON.stringify(marks));
+    if (chC) await d1Put(env, "pub_" + who, marks);
     // xyp 增量（2026-10-12 多闲鱼号）：改某号某型的价，只对已存在的标记改，不造新标记
     let chPP = false;   // pubp_ 镜像有变更（2026-10-14 体检 P1-1：xyp 改价也要跟镜像）
     if (b.xyp && typeof b.xyp === "object" && !Array.isArray(b.xyp)) {
@@ -728,7 +775,7 @@ async function route(request, env, path, ctx) {
         }
       }
       if (chX) {
-        await env.KV.put("pub_" + who, JSON.stringify(marks));
+        await d1Put(env, "pub_" + who, marks);
         // 2026-10-14 修「手机端价格漂移」：原来 xyp 通道只改 pub_ 从不碰 pubp_，
         // 手机端/老客户端（看的是 pubp_ 镜像）一直显示旧价。口径与 /pub ponly 同款：
         // 镜像 = 该型号最新一条记录的价
@@ -740,7 +787,7 @@ async function route(request, env, path, ctx) {
       var _chX = true;   // 标记 xyp 通道跑过（给下面的归一化落库判断用）
     }
     // 老格式归一化落库：chC/chX 的写已顺带把升级带上；只有归一化没别的变更时补这一刀
-    if (chN && !chC && !_chX) await env.KV.put("pub_" + who, JSON.stringify(marks));
+    if (chN && !chC && !_chX) await d1Put(env, "pub_" + who, marks);
     if (b.prices && typeof b.prices === "object" && !Array.isArray(b.prices)) {
       for (const [c0, p] of Object.entries(b.prices)) {
         const c = safeKey(c0, 100);
@@ -750,7 +797,7 @@ async function route(request, env, path, ctx) {
       }
       chPP = true;   // prices 通道保持原行为：带了 prices 就落一次镜像（幂等，串行区内安全）
     }
-    if (chPP) await env.KV.put("pubp_" + who, JSON.stringify(pp0));
+    if (chPP) await d1Put(env, "pubp_" + who, pp0);
     // 2026-10-14 体检 P1-4：返回直接用内存组装（marks/pp0 都在手上），
     // 省掉结尾 getPubN+getPubP 的 2 次重复读——免费版 KV 读额度的大头之一
     const outM = {};
@@ -811,7 +858,7 @@ async function route(request, env, path, ctx) {
     const pp = await getPubP(u);
     const removed = [];
     for (const k of keys) { if (k in pp) { delete pp[k]; removed.push(k); } }
-    await env.KV.put("pubp_" + u, JSON.stringify(pp));
+    await d1Put(env, "pubp_" + u, pp);
     return J({ ok: true, u, removed, prices: pp });
   }
 
