@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>型号查询</title>
+<style>
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+       font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+       background:#f2f5fa;color:#2e6be6;}
+  .box{text-align:center;padding:32px}
+  .t{font-size:20px;font-weight:700;margin:16px 0 8px}
+  .s{font-size:14px;color:#7a8699;line-height:1.6}
+  button{margin-top:20px;padding:10px 28px;border:0;border-radius:22px;background:#2e6be6;
+         color:#fff;font-size:15px;}
+  .spin{width:34px;height:34px;margin:0 auto;border-radius:50%;
+        border:3px solid rgba(46,107,230,.25);border-top-color:#2e6be6;
+        animation:sp 0.9s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="spin"></div>
+  <div class="t">正在连接云端…</div>
+  <div class="s">数据实时读取云端，不在本机存储</div>
+  <button id="retry" style="display:none">重新连接</button>
+</div>
+<script>
+  // 纯云壳：不烤任何数据，进入即跳云端 /m（数据全部实时读云端）
+  // 若连不上，本页停留显示「正在连接云端」，可点重新连接
+  var URL = "https://auth.baozang.kdns.fr/m";
+  setTimeout(function(){
+    location.replace(URL);
+    // 8 秒还没跳走（网络断了，WebView 报错页也可能被拦），亮出重试按钮
+    setTimeout(function(){
+      var b = document.getElementById('retry');
+      if (b) b.style.display = '';
+      var s = document.querySelector('.s');
+      if (s) s.innerHTML = '连不上云端<br>请检查网络后重试';
+    }, 8000);
+  }, 300);
+  document.getElementById('retry').addEventListener('click', function(){ location.replace(URL); });
+</script>
+</body>
+</html>

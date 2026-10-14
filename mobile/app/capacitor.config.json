@@ -1,0 +1,11 @@
+{
+  "appId": "com.lydq.modelookup",
+  "appName": "型号查询",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}
