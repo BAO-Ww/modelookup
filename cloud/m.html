@@ -931,6 +931,16 @@ function refreshImgs(){
   }
 }
 function kindTxt(it){ return it.k && it.k.indexOf('s')>=0 && it.k.indexOf('l')>=0 ? '滞+样' : (it.k && it.k.indexOf('l')>=0 ? '滞销' : (it.k && it.k.indexOf('s')>=0 ? '样机' : '正品')); }
+/* 闲鱼ID（2026-10-14 手机端对齐电脑端）：取该型号发布记录 xys 里最新一条备了 xid 的（多号时跟电脑端同源） */
+function xidOf(c){
+  var m = MARKED[c]; if (!m || !m.xys) return null;
+  var best = null, bt = 0;
+  for (var key in m.xys){
+    var e = m.xys[key];
+    if (e && e.xid != null && String(e.xid) && (+e.t || 0) >= bt){ best = String(e.xid); bt = +e.t || 0; }
+  }
+  return best;
+}
 function cardHTML(it){
   var canPub = !!AUTH;   /* 2026-10-13 用户定稿：标记发布/定价不要权限，谁登了都能用（要权限的只有补图/删图，手机端没这功能） */
   var marked = !!MARKED[it.c];
@@ -960,7 +970,19 @@ function cardHTML(it){
     +  rowWrap('货源', pok('supplier') ? shipPills(it) : '')
     +  (!it._md ? rowWrap('发往', pok('nat') ? natPills(it) : '') : '')
     +  rowWrap('补贴', pok('subsidy') ? subPills(it) : '')
-    +  (pok('code') && it.code ? '<div class="crow"><label>物料编码</label><span class="vs mono">' + esc(it.code) + '</span></div>' : ''))
+    +  (pok('code') && it.code ? '<div class="crow"><label>物料编码</label><span class="vs mono">' + esc(it.code) + '</span></div>' : '')
+    /* 闲鱼ID行（2026-10-14 用户要求手机端同步）：ID 点一下复制，旁边「打开宝贝」直达闲鱼卖家中心编辑页 */
+    +  (function(){
+         var _x = marked ? xidOf(it.c) : null;
+         if (!_x) return '';
+         var _link = (/^\d{6,}$/.test(_x)
+           ? ' <a href="https://seller.goofish.com/?site=COMMONPRO#/seller-item/publish?itemId=' + encodeURIComponent(_x) + '" target="_blank" rel="noopener"'
+           + ' style="margin-left:6px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:1px 8px;display:inline-block;vertical-align:1px">打开宝贝</a>'
+           : '');
+         return '<div class="crow"><label>闲鱼ID</label><span class="vs mono" style="font-weight:600;color:#0f7b3a">'
+           + '<span data-xidcopy="' + esc(_x) + '" style="cursor:pointer">' + esc(_x) + '</span>' + _link
+           + '</span></div>';
+       })())
     + pubbar
     + btns + '</div>';
 }
@@ -1106,6 +1128,15 @@ function updateBdg(){
 }
 
 /* ============ 交互 ============ */
+/* 复制兜底（老 WebView 没有 navigator.clipboard 时）：临时 textarea + execCommand */
+function _copyFallback(t){
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove();
+  } catch(e){}
+}
 var toastTimer;
 function toast(m){
   var el = document.getElementById('toast');
@@ -1198,6 +1229,16 @@ function wire(){
   var onCardClick = function(e){
     var card = e.target.closest('.card'); if (!card) return;
     var it = itemOf(card.dataset.c); if (!it) return;
+    /* 点闲鱼ID = 复制（2026-10-14 手机端同步电脑端）；navigator.clipboard 要 https，兜底 execCommand */
+    var xc = e.target.closest('[data-xidcopy]');
+    if (xc){
+      var _id = xc.getAttribute('data-xidcopy');
+      var done = function(){ toast('已复制 ' + _id); };
+      if (navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(_id).then(done, function(){ _copyFallback(_id); done(); });
+      } else { _copyFallback(_id); done(); }
+      return;
+    }
     var btn = e.target.closest('button');
     if (btn){
       if (btn.dataset.act==='pub'){
