@@ -2203,7 +2203,6 @@ function openSelf(){
   m.innerHTML = '<div class="amodal" style="width:min(420px,94vw)"><h3>我的账号 <button class="achip" id="aclose" style="float:right">关闭</button></h3>'
     + '<div class="auser"><div class="arow">'
     + '<span class="uname">' + esc(AUTH.u) + '</span>'
-    + '<span style="font-size:12.5px;color:#7b8494">子账号 · 权限由管理员分配，要调整请联系管理员</span>'
     + '</div></div>'
     + '<div class="auser"><div class="arow">'
     + '<input type="password" class="upw" id="oldpw" placeholder="旧密码" style="flex:1">'
@@ -2615,14 +2614,16 @@ function renderItem(it){
       var _xp = [];
       for (var _xk in _svxs){
         var _xe = _svxs[_xk];
-        if (_xe && _xe.xid != null) _xp.push([+_xe.t || 0, String(_xk).split('|')[0], String(_xe.xid)]);
+        /* 2026-10-14 闲鱼直连：带 acc（操作用号名）+ p（改价弹窗预填现价） */
+        if (_xe && _xe.xid != null) _xp.push([+_xe.t || 0, String(_xk).split('|')[0], String(_xe.xid), _xe.p]);
       }
       _xp.sort(function(a, b){ return b[0] - a[0]; });
-      _xids = _xp.map(function(p){ return { xy: p[1], xid: p[2], key: null }; });
+      _xids = _xp.map(function(p){ return { xy: p[1], xid: p[2], key: null, acc: p[1], p: (isNum(p[3]) ? p[3] : null) }; });
     }
   } else {
     var _ax2 = actXY(it.c);
-    if (_ax2 && _ax2.xid != null) _xids = [{ xy: null, xid: _ax2.xid, key: _ax2.key }];
+    if (_ax2 && _ax2.xid != null) _xids = [{ xy: null, xid: _ax2.xid, key: _ax2.key,
+                                             acc: _ax2.xy || '默认', p: (isNum(_ax2.p) ? _ax2.p : null) }];
   }
   /* 2026-10-13 用户实况「筛选里怎么编辑」：看自己的发布（子用户发布选「自己」）也照样摆
      胶囊 +「＋再发一号」，点开就能就地加一条/切价/改口径（编辑的是自己的记录，
@@ -2696,10 +2697,19 @@ function renderItem(it){
        + _xids.map(function(_xi){
            return '<span data-xidcopy="' + esc(_xi.xid) + '" title="点一下复制这个闲鱼ID" style="cursor:pointer">'
                 + (_xi.xy ? esc(_xi.xy) + '·' : '') + esc(_xi.xid) + '</span>'
-           /* 2026-10-14 用户加需求：ID 后面跟「打开宝贝」——闲鱼网页版直链，点开就是这件（官网按钮同款外链，弹系统浏览器） */
+           /* 2026-10-14 用户加需求定稿：ID 后面跟四个键——「编辑宝贝」（卖家中心编辑页）+
+              「查看宝贝」（买家页 goofish.com/item?id=）+「改价」「下架」（软件里 mtop 直改，不打开网页）。
+              前两个是 <a> 弹系统浏览器；后两个是 data-* 动作键（CSP 安全，无 inline 事件） */
                 + (_xi.xid && /^\d{6,}$/.test(_xi.xid)
                    ? ' <a href="https://seller.goofish.com/?site=COMMONPRO#/seller-item/publish?itemId=' + encodeURIComponent(_xi.xid) + '" target="_blank" rel="noopener"'
-                   + ' title="在浏览器打开卖家中心这件宝贝" style="margin-left:4px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px">打开宝贝</a>'
+                   + ' title="在浏览器打开卖家中心编辑页" style="margin-left:4px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px">编辑宝贝</a>'
+                   + ' <a href="https://www.goofish.com/item?id=' + encodeURIComponent(_xi.xid) + '" target="_blank" rel="noopener"'
+                   + ' title="在浏览器打开买家页（买家搜到看到的样子）" style="margin-left:4px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px">查看宝贝</a>'
+                   + ' <span data-xyprice="' + esc(_xi.xid) + '" data-acc="' + esc(_xi.acc || '默认') + '"'
+                   + (_xi.p != null ? ' data-curp="' + esc(_xi.p) + '"' : '')
+                   + ' title="不打开网页，软件里直接把这个宝贝的闲鱼价改掉" style="margin-left:4px;font-size:11px;font-weight:600;color:#0f7b3a;cursor:pointer;border:1px solid rgba(15,123,58,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px">改价</span>'
+                   + ' <span data-xyoff="' + esc(_xi.xid) + '" data-acc="' + esc(_xi.acc || '默认') + '"'
+                   + ' title="直接下架这个宝贝（买家就看不到了，之后还能重新上架）" style="margin-left:4px;font-size:11px;font-weight:600;color:#d92d20;cursor:pointer;border:1px solid rgba(217,45,32,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px">下架</span>'
                    : '');
          }).join(' · ')
        + '</span></div>' : '')
@@ -3395,16 +3405,23 @@ function openPickKind(k, recKey){
     + '<span id="kindxiddel" data-kxdel="1" title="删掉这条记录的闲鱼ID（云端同步清掉，价格和口径不动）" hidden'
     + ' style="cursor:pointer;flex:none;width:30px;height:30px;line-height:28px;text-align:center;border-radius:8px;border:1px solid #e4b6b0;color:#c0392b;font-weight:700;font-size:16px;background:#fff">×</span>'
     + '</div>'
+    /* 顺便直改闲鱼价（2026-10-14）：编辑已有 ID 的记录才亮出来（预填逻辑里控制），默认勾上 */
+    + '<div id="kindsyncxyrow" style="display:none;align-items:center;gap:6px;margin-top:8px">'
+    + '<label style="font-size:12.5px;color:#374151;display:flex;align-items:center;gap:6px;cursor:pointer">'
+    + '<input id="kindsyncxy" type="checkbox"> 顺便把闲鱼上这个宝贝的价也改成上面这个数（软件直改，不打开网页）'
+    + '</label></div>'
     + '<div style="font-weight:700;margin:12px 0 10px">发布出去的是哪种？</div>'
     + '<div id="kindkkrow" style="display:flex;gap:10px;flex-wrap:wrap">' + kindRowHTML() + '</div>'
     + '</div></div>';
   document.body.appendChild(m);
-  /* 弹窗里的价预填：当前号的现价 → 定价框 → 卡片缓存价（再发一号时改一个数字就行） */
+  /* 弹窗里的价预填（2026-10-14 二改）：定价框现值优先——用户眼睛看着的那口价就是它，
+     弹窗跟着它走，绝不再出现「卡片 6399、弹窗还是旧价」的两张皮；
+     框里没数才退回 当前号的现价 → 卡片缓存价（再发一号时改一个数字就行） */
   var _kp = m.querySelector('#kindprice');
   if (_kp){
     var _pre = NaN, _ax0 = actXY(k);
-    if (_ax0 && isNum(_ax0.p)) _pre = _ax0.p;
-    else if (isFinite(_iv) && _iv > 0) _pre = _iv;
+    if (isFinite(_iv) && _iv > 0) _pre = _iv;
+    else if (_ax0 && isNum(_ax0.p)) _pre = _ax0.p;
     else if (isNum(PRICES[k]) && PRICES[k] > 0) _pre = PRICES[k];
     if (isFinite(_pre) && _pre > 0) _kp.value = _pre;
     setTimeout(function(){ try{ _kp.focus(); _kp.select(); }catch(e){} }, 60);
@@ -3417,6 +3434,13 @@ function openPickKind(k, recKey){
     /* 删除键（2026-10-14 用户要求）：只在编辑已有ID的记录时亮出来，新标/＋再发一号没有可删的 */
     var _kd = m.querySelector('#kindxiddel');
     if (_kd) _kd.hidden = !_x0;
+    /* 直改闲鱼价勾选亮/灭（2026-10-14）：只有这条记录已有 ID 才有意义，默认勾上（改价重标是主流） */
+    var _ksr = m.querySelector('#kindsyncxyrow');
+    if (_ksr){
+      _ksr.style.display = _x0 ? 'flex' : 'none';
+      var _ksc = m.querySelector('#kindsyncxy');
+      if (_ksc) _ksc.checked = !!_x0;
+    }
   }
   m.addEventListener('click', function(e){
     /* 弹窗里的删除键（2026-10-14）：删这条记录的闲鱼ID——本地+云端（xid:null）同步清，弹窗留着继续改价 */
@@ -3501,6 +3525,17 @@ function openPickKind(k, recKey){
     saveMarks();
     savePrices();
     pubPush(k, true, _rk);               // 云端按记录键存（同号双口径各一条）
+    /* 顺便直改闲鱼价（2026-10-14）：勾了且这条有 ID → 本地服务 mtop 直改。
+       不阻塞标记流程（fire-and-forget），结果 netToast 浮条报；Cookie 没存会在 msg 里提示 */
+    var _ksy = m.querySelector('#kindsyncxy');
+    if (_ksy && _ksy.checked && _nxid && /^\d{6,}$/.test(_nxid)){
+      fetch('/api/xyprice', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ acc: xy, id: _nxid, p: _pv }) })
+        .then(function(r){ return r.json(); })
+        .then(function(j){ netToast((j && j.ok) ? ('✅ 闲鱼价已同步改成 ¥' + _pv + '（' + xy + '）')
+                                                 : ('❌ 闲鱼直改没成：' + ((j && j.msg) || '?'))); })
+        .catch(function(){});
+    }
     m.remove();
     run();
     askCopy(k, kk);                      /* 2026-10-12：发布完顺手问一句要不要写文案 */
@@ -3551,6 +3586,101 @@ function openSwitchKind(k, xy){
     pubPush(k, true, tgt);                 // 云端即时同步（带 k=新口径，价保留）
     run();
     updateLossBanner();                    // 口径变了亏钱名单可能变，黄条跟着重算
+  });
+}
+
+/* ---------- 闲鱼直连（2026-10-14 用户需求）：改价/下架不打开网页，本地服务 mtop 直调 ----------
+   Cookie 一次粘贴存本机（/api/xycookie → wp xy_cookies.json，不进云端）；没存就当场弹粘贴框。
+   改价 = PC 编辑链路 editDetail→只改 priceInCent→edit（标题图描述原样带回）；
+   下架 = mtop.taobao.idle.item.downshelf。结果统一 netToast 浮条报。 */
+function xyHave(acc, then){
+  fetch('/api/xycookie?acc=' + encodeURIComponent(acc)).then(function(r){ return r.json(); })
+    .then(function(j){ if (j && j.has){ then(); } else { openXyCookieBox(acc, then); } })
+    .catch(function(){ netToast('本地服务没响应，等一下再试'); });
+}
+function openXyCookieBox(acc, then){
+  var old = document.getElementById('xycmask'); if (old) old.remove();
+  var m = document.createElement('div'); m.id = 'xycmask';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.35);z-index:60;display:flex;align-items:center;justify-content:center';
+  m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px;min-width:340px;max-width:540px">'
+    + '<div style="font-weight:700;margin-bottom:6px">存「' + esc(acc) + '」的闲鱼 Cookie</div>'
+    + '<div style="font-size:12.5px;color:#7a8699;line-height:1.7;margin-bottom:8px">'
+    + '浏览器打开 <b>www.goofish.com</b> 登录这个号 → 按 <b>F12</b> → <b>网络(Network)</b> → 随便点一个请求 →'
+    + ' 请求标头里把整串 <b>Cookie:</b> 的值复制进来（必须含 _m_h5_tk）。只存这台电脑，不进云端。'
+    + '失效了（改价/下架报 Cookie 失效）重粘一次就行。</div>'
+    + '<textarea id="xycval" rows="5" placeholder="粘贴整串 Cookie…" '
+    + 'style="width:100%;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:12px;font-family:monospace"></textarea>'
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">'
+    + '<button class="achip" data-xyc="save" style="background:#eaf1ff;border-color:#c6d8ff;font-weight:700">保存</button>'
+    + '<button class="achip" data-xyc="x">先不弄</button></div></div>';
+  document.body.appendChild(m);
+  setTimeout(function(){ var t = m.querySelector('#xycval'); if (t) t.focus(); }, 60);
+  m.addEventListener('click', function(e){
+    var b = e.target.closest ? e.target.closest('[data-xyc]') : null;
+    if (!b){ if (e.target === m) m.remove(); return; }
+    if (b.getAttribute('data-xyc') === 'x'){ m.remove(); return; }
+    var v = (m.querySelector('#xycval').value || '').trim();
+    if (v.indexOf('_m_h5_tk') < 0){ alert('这串 Cookie 里没有 _m_h5_tk——要复制整串（F12 → 网络 → 任意请求的 Cookie 请求头）'); return; }
+    b.disabled = true; b.textContent = '保存中…';
+    fetch('/api/xycookie', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                             body: JSON.stringify({ acc: acc, cookie: v }) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (j && j.ok){ m.remove(); netToast('「' + acc + '」的 Cookie 已存'); if (then) then(); }
+        else { b.disabled = false; b.textContent = '保存'; netToast('存失败：' + ((j && j.msg) || '?')); }
+      }).catch(function(){ b.disabled = false; b.textContent = '保存'; netToast('本地服务没响应'); });
+  });
+}
+function openXyPrice(acc, xid, curp){
+  xyHave(acc, function(){
+    var old = document.getElementById('xyprice_mask'); if (old) old.remove();
+    var m = document.createElement('div'); m.id = 'xyprice_mask';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.35);z-index:60;display:flex;align-items:center;justify-content:center';
+    m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px;min-width:340px">'
+      + '<div style="font-weight:700;margin-bottom:4px">改闲鱼价（' + esc(acc) + '）</div>'
+      + '<div style="font-size:12.5px;color:#7a8699;margin-bottom:10px">宝贝ID <span style="font-family:monospace">' + esc(xid) + '</span>'
+      + ' · 直接改闲鱼上的价，不打开网页（标题/图/描述都不动）</div>'
+      + '<input id="xyprice_val" type="number" min="0" step="1"'
+      + (isFinite(curp) && curp > 0 ? ' value="' + esc(curp) + '"' : '')
+      + ' placeholder="填新价" style="width:100%;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:14px">'
+      + '<div id="xyprice_msg" style="font-size:12.5px;color:#c0392b;margin-top:6px"></div>'
+      + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">'
+      + '<button class="achip" data-xyp="go" style="background:#e8f7ee;border-color:#bfe6cd;color:#0f7b3a;font-weight:700">改价</button>'
+      + '<button class="achip" data-xyp="x">算了</button></div></div>';
+    document.body.appendChild(m);
+    setTimeout(function(){ var i = m.querySelector('#xyprice_val'); if (i){ i.focus(); i.select(); } }, 60);
+    m.addEventListener('click', function(e){
+      var b = e.target.closest ? e.target.closest('[data-xyp]') : null;
+      if (!b){ if (e.target === m) m.remove(); return; }
+      if (b.getAttribute('data-xyp') === 'x'){ m.remove(); return; }
+      var p = parseFloat(m.querySelector('#xyprice_val').value);
+      if (!isFinite(p) || p <= 0){ m.querySelector('#xyprice_msg').textContent = '先填个正经价格'; return; }
+      b.disabled = true; b.textContent = '改价中…';
+      m.querySelector('#xyprice_msg').textContent = '';
+      fetch('/api/xyprice', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ acc: acc, id: xid, p: p }) })
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (j && j.ok){ m.remove(); netToast('✅ 闲鱼价已改成 ¥' + p + '（' + acc + '）'); }
+          else {
+            b.disabled = false; b.textContent = '改价';
+            m.querySelector('#xyprice_msg').textContent = (j && j.msg) || '失败，再试一次';
+          }
+        }).catch(function(){ b.disabled = false; b.textContent = '改价'; m.querySelector('#xyprice_msg').textContent = '本地服务没响应'; });
+    });
+  });
+}
+function openXyOff(acc, xid){
+  xyHave(acc, function(){
+    if (!confirm('下架「' + acc + '」的宝贝 ' + xid + '？\n下架后买家就看不到了，之后在闲鱼里可以重新上架。')) return;
+    netToast('正在下架…');
+    fetch('/api/xyoff', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ acc: acc, id: xid }) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        netToast((j && j.ok) ? ('✅ 已下架（' + acc + ' · ' + xid + '）')
+                             : ('❌ 下架失败：' + ((j && j.msg) || '?')));
+      }).catch(function(){ netToast('本地服务没响应'); });
   });
 }
 
@@ -4021,6 +4151,19 @@ listEl.addEventListener('click', function(e){
     } else { fb(_xv, xc); }
     return;
   }
+  var xpb = e.target.closest('[data-xyprice]');
+  if (xpb){
+    /* 闲鱼直连·改价（2026-10-14）：卡上「改价」键 → 弹窗填新价 → 本地服务 mtop 直改 */
+    openXyPrice(xpb.getAttribute('data-acc') || '默认', xpb.getAttribute('data-xyprice'),
+                parseFloat(xpb.getAttribute('data-curp')));
+    return;
+  }
+  var xob = e.target.closest('[data-xyoff]');
+  if (xob){
+    /* 闲鱼直连·下架（2026-10-14）：确认一下就调 downshelf */
+    openXyOff(xob.getAttribute('data-acc') || '默认', xob.getAttribute('data-xyoff'));
+    return;
+  }
   var am = e.target.closest('[data-addmark]');
   if (am){
     /* 2026-10-13 用户问「正品已发，样机还要发怎么标」：同一型号再标一条，
@@ -4120,36 +4263,16 @@ listEl.addEventListener('input', function(e){
     updateLossBanner();
     return;
   }
-  /* 2026-10-10 新规矩：没点「标记已发布」的型号，定价不落库（框里随便算，走了就不留） */
-  if (!MARKED[k]) return;
-  if (isFinite(v) && v > 0) PRICES[k] = v; else delete PRICES[k];
-  /* 2026-10-12 多闲鱼号：价写进「当前编辑的号」那条 xys（默认最新标记的号）。
-     2026-10-13 同号双口径：actXY 带记录键（号名|口径），按键写入才不会串到另一条 */
-  var _cur = MARKED[k];
-  if (_cur && _cur.xys){
-    var _ax = actXY(k);
-    if (_ax && _cur.xys[_ax.key]){
-      _cur.xys[_ax.key].p = (isFinite(v) && v > 0) ? v : null;
-      _cur.xys[_ax.key].t = Date.now();    // 抬时间戳：多机合并时以这次改价为准
-      XYP_DIRTY[k] = 1;
-      /* 2026-10-14 用户实锤「你动了我的价格」：改价原来只走 2.5s 防抖的 /pubsync 批量通道，
-         跟 cs/bn/nat 通道同时触发时整包读写互相覆盖（读旧写新竞争），撞上价格就丢。
-         改成 0.8s 防抖直接 /pub 单条写（跟口径/奖励同款即时上云，worker 端原子落库+抬 t） */
-      clearTimeout(listEl._pricePushT);
-      var _pk1 = k, _pxy1 = _ax.key;
-      listEl._pricePushT = setTimeout(function(){
-        var _e1 = MARKED[_pk1] && MARKED[_pk1].xys && MARKED[_pk1].xys[_pxy1];
-        var _b1 = { c: _pk1, on: true, xy: _pxy1, p: _e1 ? _e1.p : null };
-        authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(_b1) }, true)
-          .then(function(j){ if (j && j._st === 0) cloudFail('/pub', _b1); });
-      }, 800);
-    }
-  }
-  savePrices();
-  updateLossBanner();                  // 2026-10-13 用户要求实时：改价打字当场重算黄条，不用再搜一次
+  /* 2026-10-14 用户定稿「改价两段式」：定价框=草稿台——打字只当场重算「挣/平台费」
+     给自己看（calcUpdate 在上面），胶囊、发布记录、PRICES、云端一律不动；
+     提交只有两个口：①弹窗里点「正品/样机」确认（预填的就是框里现价，改一个数字就行），
+     ②亏本清单「填保本价」。此前打字即写记录+上云而胶囊不动——「哪一刻算改了」
+     说不清，正是「你动了我的价格」连环案的根源，废止。 */
 });
 listEl.addEventListener('change', function(e){
+  /* 2026-10-14 定稿「改价两段式」后：定价框失焦什么都不做——框是草稿台，
+     胶囊/记录只在弹窗确认（或保本价「填」）时动。没有定价框分支，
+     打完字紧跟着点胶囊/弹窗按钮也绝不会被吞（DOM 不重建）。 */
   /* 2026-10-13「改了怎么存」：发全国勾选也落库——已发布的存 MARKED[k].nat（0/1）
      并上云；没发布的只当场重算不落库（跟定价/奖励同一规矩） */
   var cfr = e.target.closest ? e.target.closest('.cfrbox') : null;
@@ -4215,7 +4338,8 @@ function pickCell(cell){
     }
   }
   if (inp && isFinite(parseFloat(cell.dataset.v))) inp.value = cell.dataset.v;
-  /* 走一遍 input 事件：calcUpdate + PRICES 持久化都挂在那儿，别抄第二份 */
+  /* 走一遍 input 事件：calcUpdate（挣/平台费草稿预览）挂在那儿，别抄第二份。
+     2026-10-14 定稿两段式后点格填的也是草稿——不动记录/胶囊/云端 */
   if (inp) inp.dispatchEvent(new Event('input', { bubbles: true }));
 }
 /* 看子用户发布 = 只读（2026-10-10 用户补刀）：点价格格会把价填进定价框并

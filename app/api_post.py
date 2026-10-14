@@ -179,6 +179,31 @@ class ApiPostMixin:
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
             return
 
+        if u.path in ("/api/xycookie", "/api/xyprice", "/api/xyoff"):
+            # 闲鱼直连（2026-10-14 用户需求：软件里直接改价/下架，不打开网页）。
+            # Cookie 只存本机 wp("xy_cookies.json")（不进云端，粘一次用一阵子）；
+            # mtop 调用阻塞几秒——ThreadingHTTPServer 每请求各线程，不卡别的页面请求。
+            import xyops
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            except Exception:
+                d = {}
+            acc = str(d.get("acc") or "").strip()[:24]
+            if u.path == "/api/xycookie":
+                if not acc:
+                    self._send(400, json.dumps({"ok": False, "msg": "缺闲鱼号名"}, ensure_ascii=False))
+                    return
+                r = xyops.save_cookie(acc, d.get("cookie") or "")
+            elif u.path == "/api/xyprice":
+                r = xyops.set_price(acc, d.get("id"), d.get("p"))
+            else:
+                r = xyops.off_shelf(acc, d.get("id"))
+            state.LOG.append("[闲鱼] %s id=%s acc=%s → %s" % (
+                u.path, d.get("id"), acc, (r or {}).get("msg") or (r or {}).get("ok")))
+            self._send(200, json.dumps(r, ensure_ascii=False))
+            return
+
         if u.path != "/api/upload":
             self._send(404, json.dumps({"ok": False, "msg": "not found"}, ensure_ascii=False))
             return
