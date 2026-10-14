@@ -735,7 +735,8 @@ function markXys(c){
     var e = m.xys[key] || {}; if (!e || (e.k !== 'l' && e.k !== 's')) continue;
     out.push({ xy: String(key).split('|')[0] || String(key), key: key,
                t: +e.t || 0, k: e.k === 's' ? 's' : 'l',
-               p: (e.p != null && isFinite(+e.p)) ? +e.p : null });
+               p: (e.p != null && isFinite(+e.p)) ? +e.p : null,
+               xid: e.xid != null ? String(e.xid) : null });
   }
   out.sort(function(a,b){ return b.t - a.t; });
   return out;
@@ -818,10 +819,10 @@ function xyChipsHTML(c){
   return ' ' + xs.map(function(x){
     var on = act && act.key === x.key, s = x.k === 's';
     var col = s ? '#b45309' : '#0f7b3a', bd = s ? '#f3ddb0' : '#bfe3cb';
-    return '<span data-actxy="' + esc(x.key) + '" data-key="' + esc(c) + '" title="点一下，下面定价框就显示这条的价" style="display:inline-block;cursor:pointer;border-radius:99px;padding:1px 9px;margin:1px 0 1px 5px;font-weight:600;background:#fff;border:1px solid ' + bd + ';color:' + col + ';vertical-align:1px;'
+    return '<span data-actxy="' + esc(x.key) + '" data-key="' + esc(c) + '" title="点别的胶囊=定价框切到那条；再点一下当前这条=直接改价/改口径/填闲鱼ID（整颗都能点）" style="display:inline-block;cursor:pointer;border-radius:99px;padding:1px 9px;margin:1px 0 1px 5px;font-weight:600;background:#fff;border:1px solid ' + bd + ';color:' + col + ';vertical-align:1px;'
          + (on ? 'border-color:#2e6be6;box-shadow:0 0 0 2px rgba(46,107,230,.22);' : '')
          + '">'
-         + esc(x.xy) + '·<span data-pubkind="' + esc(c) + '" data-pubxy="' + esc(x.key) + '" title="点这里改这条的口径（正品↔样机），价格不动" style="cursor:pointer;border-bottom:1px dashed currentColor">' + (s ? '样机' : '正品') + '</span>'
+         + esc(x.xy) + '·' + (s ? '样机' : '正品')
          + (isNum(x.p) ? '¥' + x.p : '') + '</span>';
   }).join('');
 }
@@ -840,6 +841,10 @@ function saveCostSel(k, opt){
   saveMarks();
   pubMetaPush(k);           /* 搭 /pubsync 的 cs 通道上云（旧 worker 忽略未知字段不炸） */
   updateLossBanner();       // 实时黄条（2026-10-13）：口径变了当场重算
+  /* 2026-10-14 用户实况「不是按我这里选择来算的嘛」：改口径只刷了黄条、卡片上的
+     保本价 chip 还是旧快照（挣已翻正、保本价还挂旧数）。run() 重渲染让
+     挣/保本价/亏本清单全部立刻跟新口径走（cs 刚存进记录，重绘不跳回） */
+  if (typeof run === 'function') run();
 }
 /* 口径 cs / 出库奖励 bn / 发全国勾选 nat 三个「核算状态」统一搭 /pubsync 上云
    （2026-10-13 用户问「改了怎么存的」：都要跟账号走，换电脑也在）。
@@ -905,7 +910,8 @@ function pubPush(c, on, xy){
                                              xy: (typeof xy === 'string' && xy) ? xy : null,
                                              k: (on && MARKED[c] && MARKED[c].k) || null,
                                              p: (on && isNum(PRICES[c])) ? PRICES[c] : undefined,
-                                             cs: (on && MARKED[c] && MARKED[c].cs) || null }) }, true);
+                                             cs: (on && MARKED[c] && MARKED[c].cs) || null,
+                                             xid: (on && typeof xy === 'string' && xy && MARKED[c] && MARKED[c].xys && MARKED[c].xys[xy] && MARKED[c].xys[xy].xid) || undefined }) }, true);
 }
 function syncMarks(){
   if (!AUTH || !AUTH.token) return;
@@ -1259,8 +1265,9 @@ function calcHTML(it){
   /* 看子用户发布时：他自己填过价就直接填进输入框（改了会存成自己的，不影响 TA） */
   var _sv = (SUBVIEW && SUBVIEW.info && SUBVIEW.info[it.c]) ? SUBVIEW.info[it.c] : null;
   if (!isNum(saved) && _sv && isNum(_sv.p)) saved = _sv.p;
-  /* 2026-10-10：看子用户发布 = 只读——TA 填的价照显示，但改不了（改价会存进全局定价表） */
-  var svRO = !!(SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0');
+  /* 2026-10-10：看子用户发布 = 只读——TA 填的价照显示，但改不了（改价会存进全局定价表）。
+     2026-10-14 用户要求「预览子用户的也要能改」：管理号代管放行（改价/下架直改 TA 的云端记录） */
+  var svRO = !!(SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0' && !(AUTH && AUTH.role === 'admin'));
   var pick = opts.length ? opts[0] : { v: '', l: '无成本价' };
   /* 口径只认云端（2026-10-13 定稿）：发布记录 MARKED[it.c].cs 记了就用它，
      没记过（老发布/没发布）= 默认第一项；本地不再有任何口径记忆 */
@@ -1284,6 +1291,23 @@ function calcHTML(it){
      渲染时把 bn 金额回填进 data 属性（calcUpdate 会自动算进挣）、勾选按 nat 回填 */
   var _bnc = MARKED[it.c] && MARKED[it.c].bn || null;
   var _nat = MARKED[it.c] ? MARKED[it.c].nat !== 0 : true;   /* 没记过默认勾（发全国） */
+  /* C（2026-10-14 用户要求）：亏本清单里当前这条显示保本价 +「填」一键改价。
+     只在黄条清单模式出现（BANNER_MODE==='loss' 且当前胶囊那条在亏本名单里） */
+  var _beHTML = '';
+  if (BANNER_MODE === 'loss'){
+    var _bcur = actXY(it.c);
+    if (_bcur && isNum(_bcur.p)){
+      var _li = window.LOSS_ITEMS || [];
+      for (var _bi = 0; _bi < _li.length; _bi++){
+        if (_li[_bi].c === it.c && _li[_bi].key === _bcur.key && isFinite(_li[_bi].be)){
+          _beHTML = '<span class="ci" style="color:#b42318;font-weight:700">保本价 ¥' + _li[_bi].be
+            + '<a href="javascript:void 0" data-be="' + _li[_bi].be + '" data-bec="' + esc(it.c) + '" data-bek="' + esc(_bcur.key) + '"'
+            + ' title="一键把这条记录的闲鱼定价改成保本价（不亏不赚，云端同步）" style="cursor:pointer;margin-left:6px;padding:0 9px;border-radius:9px;background:#b42318;color:#fff;font-weight:600;font-size:12px;line-height:18px;display:inline-block">填</a></span>';
+          break;
+        }
+      }
+    }
+  }
   return '<div class="calc" data-key="' + esc(it.c) + '"'
     + (_bnc && +_bnc.lb > 0 ? ' data-bnlb="' + (+_bnc.lb) + '"' : '')
     + (_bnc && +_bnc.sb > 0 ? ' data-bnsb="' + (+_bnc.sb) + '"' : '') + '>'
@@ -1302,6 +1326,7 @@ function calcHTML(it){
        : '')
     + '<span class="ci">平台费1.6% <b class="p-fee">—</b></span>'
     + '<span class="ci">挣 <b class="p-out">—</b></span>'
+    + _beHTML
     + '</div>';
 }
 function calcUpdate(box){
@@ -2528,9 +2553,29 @@ function renderItem(it){
      子账号默认不给，管理号在「账号管理」勾 pubmeta 才给开 */
   var svInfo = (SUBVIEW && SUBVIEW.info && SUBVIEW.info[it.c]) ? SUBVIEW.info[it.c] : null;
   /* 2026-10-10 用户要求：看子用户发布时管理号只有查看权限——标记/取消发布按钮不给、
-     闲鱼定价输入框只读（TA 的发布记录不是你的，别改坏；改自己的价回主列表改） */
-  var svRO = !!(SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0');
+     闲鱼定价输入框只读（TA 的发布记录不是你的，别改坏；改自己的价回主列表改）。
+     2026-10-14 用户改主意「预览子用户的也要能改」：管理号代管放行——改价/下架直改 TA 的记录 */
+  var svRO = !!(SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0' && !(AUTH && AUTH.role === 'admin'));
   var svKind = svInfo ? (svInfo.k || (it.k === 'l' ? 'l' : (it.k === 's' ? 's' : ''))) : '';
+  /* 闲鱼ID行数据源（2026-10-14 用户定稿：ID 是各用户自己的备注）：
+     看子用户发布 = 显示 TA 记录里备了注的 ID（号名·ID，新的在前）；TA 没备注就是没有，
+     绝不拿自己的记录顶上。看自己/主列表 = 沿用当前胶囊那条（actXY）。 */
+  var _xids = [];
+  if (SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0'){
+    var _svxs = svInfo && svInfo.xs ? svInfo.xs : null;
+    if (_svxs){
+      var _xp = [];
+      for (var _xk in _svxs){
+        var _xe = _svxs[_xk];
+        if (_xe && _xe.xid != null) _xp.push([+_xe.t || 0, String(_xk).split('|')[0], String(_xe.xid)]);
+      }
+      _xp.sort(function(a, b){ return b[0] - a[0]; });
+      _xids = _xp.map(function(p){ return { xy: p[1], xid: p[2], key: null }; });
+    }
+  } else {
+    var _ax2 = actXY(it.c);
+    if (_ax2 && _ax2.xid != null) _xids = [{ xy: null, xid: _ax2.xid, key: _ax2.key }];
+  }
   /* 2026-10-13 用户实况「筛选里怎么编辑」：看自己的发布（子用户发布选「自己」）也照样摆
      胶囊 +「＋再发一号」，点开就能就地加一条/切价/改口径（编辑的是自己的记录，
      handler 跟主列表同一套）。看别人（u!=0）维持只读文字——自己的胶囊不上别人的卡 */
@@ -2569,7 +2614,7 @@ function renderItem(it){
            : '<div class="pimg ph">' + PH_SVG + (pok('addimg') ? '<button class="addimg" data-addimg="' + esc(it.c) + '">＋ 补图</button>' : '') + '</div>')
     + (mine ? '<button class="kimgdel" data-delimg="' + esc(it.c) + '" title="删掉我补的这张图">×</button>' : '')
     + '<div class="chead-main"><div class="moline">'
-    + '<span class="mo">' + esc(it.mo) + '</span>'
+    + '<span class="mo" data-mocopy="' + esc(it.mo) + '" title="点一下复制纯型号" style="cursor:pointer">' + esc(it.mo) + '</span>'
     + '<span class="pub"' + ((marked || svInfo) ? '' : ' hidden') + '>已发布'
     + (xyPubHTML ? xyPubHTML
               : svInfo ? ' · ' + (svKind === 's' ? '样机' : '正品')
@@ -2577,7 +2622,7 @@ function renderItem(it){
     + '</span>'
     + pmHTML
     + '<span class="acts">'
-    + (!svRO ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + (marked ? '取消发布' : '标记已发布') + '</button>' : '')
+    + (!svRO && (!SUBVIEW || SUBVIEW.u === '0' || svInfo) ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + ((marked || svInfo) ? '取消发布' : '标记已发布') + '</button>' : '')
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
     + (webUrl ? '<a class="markbtn web" href="' + esc(webUrl) + '" target="_blank" rel="noopener" title="打开品牌官网（对应型号）">官网</a>' : '')
     + '</span></div>'
@@ -2596,6 +2641,20 @@ function renderItem(it){
     + (pok('calc') ? calcHTML(it) : '')
     + (pg.length ? '<div class="prices newp">' + pg.join('') + '</div>' : '')
     + (g.length ? '<div class="prices">' + g.join('') + '</div>' : '')
+    /* 闲鱼ID行：ID 是各用户自己的备注（2026-10-14 定稿）——主列表/看自己显示当前胶囊那条
+       （点胶囊跟着换）；看子用户发布显示 TA 备注过的（号名·ID，没备注整行没有）。
+       2026-10-14 用户改稿：× 删除键不要了，改成复制键——点一下复制 ID，变「已复制」回弹 */
+    + (pok('calc') && _xids.length ? '<div class="row"><label>闲鱼ID</label><span class="v mono" style="font-weight:600;color:#0f7b3a">'
+       + _xids.map(function(_xi){
+           return '<span data-xidcopy="' + esc(_xi.xid) + '" title="点一下复制这个闲鱼ID" style="cursor:pointer">'
+                + (_xi.xy ? esc(_xi.xy) + '·' : '') + esc(_xi.xid) + '</span>'
+           /* 2026-10-14 用户加需求：ID 后面跟「打开宝贝」——闲鱼网页版直链，点开就是这件（官网按钮同款外链，弹系统浏览器） */
+                + (_xi.xid && /^\d{6,}$/.test(_xi.xid)
+                   ? ' <a href="https://seller.goofish.com/?site=COMMONPRO#/seller-item/publish?itemId=' + encodeURIComponent(_xi.xid) + '" target="_blank" rel="noopener"'
+                   + ' title="在浏览器打开卖家中心这件宝贝" style="margin-left:4px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px">打开宝贝</a>'
+                   : '');
+         }).join(' · ')
+       + '</span></div>' : '')
     /* 每行一个独立权限（2026-10 六次改版）：汇总=sum 库存=live 发货=supplier
        发往=nat 补贴=subsidy 物料编码=code，管理号在「账号管理」里逐行勾 */
     + (pok('sum') && sumHTML ? '<div class="row"><label>汇总</label><span class="vs">' + sumHTML + '</span></div>' : '')
@@ -2886,6 +2945,18 @@ function priceHint(){
   return '';
 }
 
+/* 黄条清单模式（2026-10-13 用户实况「从亏本/缺货清单点胶囊就闪退」）：
+   两个黄条点开的清单是直接塞 cur 渲染的，而 run() 每次都按搜索框+筛选重算 cur——
+   清单里点胶囊/改口径/确认弹窗都会触发 run()，清单瞬间被冲掉重排，看着像闪退。
+   进清单时记下当时搜索/筛选的指纹，run() 发现指纹没变就保住清单不重算；
+   搜索框/筛选一变（指纹不同）自动退出清单模式，恢复正常列表 */
+var BANNER_MODE = '';                // '' | 'lost'(缺货下架) | 'loss'(亏本快改价)
+var BANNER_SIG = '';
+var BANNER_RES = null;
+function viewSig(){
+  return JSON.stringify([input.value, curBrand, curCat, curKind, curPtype, curBrowseAll,
+                         flagStock, flagSend, flagPub, pminV, pmaxV, SUBVIEW, selXy]);
+}
 function run(){
   var q = input.value.trim();
   clrBtn.hidden = !q;
@@ -2894,6 +2965,28 @@ function run(){
   listEl.innerHTML = '';
   moreEl.hidden = true;
   shown = 0;
+  /* 清单模式：搜索/筛选没动过 → 保住清单视图。2026-10-14 修「下架了改价了都不会变」：
+     不再用进清单时的快照（改完列表纹丝不动），每次 run() 现算名单——下架一条少一条、
+     改价不亏了当场出列；全清空自动回常规视图 */
+  if (BANNER_MODE){
+    if (BANNER_SIG === viewSig()){
+      if (BANNER_MODE === 'lost') pubStockWarn();      // 库存/发布记录变了 → 缺货名单现算
+      var _bk = (BANNER_MODE === 'loss') ? (window.LOSS_ITEMS || []) : (PUBWARN_LOST || []);
+      var _bres = [];
+      for (var _bi = 0; _bi < (ALL || []).length; _bi++){
+        for (var _bj = 0; _bj < _bk.length; _bj++){
+          if (ALL[_bi].c === _bk[_bj].c){ _bres.push({ it: ALL[_bi], sc: 5 }); break; }
+        }
+      }
+      if (_bres.length){
+        BANNER_RES = _bres; cur = _bres;
+        hintEl.innerHTML = (BANNER_MODE === 'loss' ? '亏本商品' : '缺货商品') + ' <b>' + _bres.length + '</b> 条（正常搜索或筛选即恢复列表）';
+        renderBatch();
+        return;
+      }
+    }
+    BANNER_MODE = ''; BANNER_RES = null;   // 全修好/全下架，或搜索筛选变了 → 回常规视图
+  }
   var hasFilter = !!(curBrand || curCat || curKind || curPtype || curBrowseAll || flagStock || flagSend || flagPub || pminV != null || pmaxV != null || SUBVIEW);
   /* 顶部筛选横条（方式/价格类型）：2026-10-10 晚用户改定「常驻」——打开就有，随时可筛 */
   topEl.hidden = false;
@@ -2928,6 +3021,19 @@ function run(){
 input.addEventListener('input', function(){ fitQ(); run(); });
 input.addEventListener('keydown', function(e){ if (e.key === 'Escape'){ input.value = ''; fitQ(); run(); } });
 clrBtn.addEventListener('click', function(){ input.value = ''; fitQ(); input.focus(); run(); });
+/* 点击搜索框=粘贴（2026-10-14 用户定稿）：读剪贴板，框里有字先清掉再粘，粘完自动搜。
+   读不到剪贴板（权限/空）就当普通点击聚焦，不影响手动输入 */
+input.addEventListener('click', function(){
+  if (!(navigator.clipboard && navigator.clipboard.readText)) return;
+  navigator.clipboard.readText().then(function(t){
+    t = String(t || '').trim();
+    if (!t || t === input.value) return;
+    input.value = t;
+    fitQ();
+    run();
+    try { input.setSelectionRange(t.length, t.length); } catch(e){}
+  }).catch(function(){ /* 剪贴板没字/没权限 = 普通聚焦 */ });
+});
 /* 长型号（BCD-501WGHTD14W9U1 这种 18 字的）在 250px 侧栏里按 14px 排不下会截断
    —— 用户反馈「型号信息显示不全」。按字符数降两档字号 + 去字距，整串都能看全 */
 function fitQ(){
@@ -3061,16 +3167,19 @@ ptEl.addEventListener('change', function(e){
    顶栏/筛选/卡片渲染；管理号和子账号同一条路（/pub 按登录账号走，天然各看各的） */
 function enterSelfPub(chip){
   authFetch('/pub').then(function(j){
-    if (!j || !j.ok){ if (chip) chip.classList.remove('on'); run(); return; }
+    if (!j || !j.ok){ if (chip) chip.classList.remove('on'); BANNER_MODE = ''; BANNER_RES = null; run(); return; }
     /* 2026-10-09 修「看 TB 的发布变 0 个」：写 _SELF_PUB（自己那份），绝不覆盖
        _SUBPUB（/puball 子账号整包）——之前覆盖后管理号再选 TB 全取不到 */
     window._SELF_PUB = { all: { 0: j.marks || {} }, prices: { 0: j.prices || {} } };
     SUBVIEW = null;
-    showSubRec('0');
-    if (chip) chip.classList.add('on');
-    var _hb = ptEl.querySelector('.chip[data-flag="hide"]'); if (_hb) _hb.classList.remove('on');
+    /* 2026-10-13 修「已发布用不了了」：先关「未发布」再进自看——showSubRec 里就 run()，
+       原来跑在 hideMarked=false 之后，先点过「未发布」再点「已发布」会把全是已发布的卡
+       全藏光 → 空列表，之后才关开关但不再重绘，视图死在那 */
+    var _hb0 = ptEl.querySelector('.chip[data-flag="hide"]'); if (_hb0) _hb0.classList.remove('on');
     hideMarked = false;
     try { localStorage.setItem(HIDE_KEY, '0'); } catch(e){}
+    showSubRec('0');
+    if (chip) chip.classList.add('on');
   }).catch(function(){ if (chip) chip.classList.remove('on'); });
 }
 function exitSelfPub(){
@@ -3165,11 +3274,13 @@ function openXyMgr(onchg){
 /* 点「标记已发布」→ 问发哪个闲鱼号 + 正品还是样机（2026-10-13 用户定稿两改）：
    ① 号不做下拉，直接点选（配置过的号一块一个，另有「其它…」手输新号，输完自动记进配置）；
    ② 没定价不许标记——价从卡片定价框收，框空着但该号之前标过价也算有价 */
-function openPickKind(k){
+function openPickKind(k, recKey){
   var old = document.getElementById('kindmask'); if (old) old.remove();
   var LASTXY = '默认';
   try { LASTXY = localStorage.getItem('ml_lastxy') || '默认'; } catch(e){}
-  var curXy = LASTXY;
+  /* 2026-10-13 用户实况「怎么只能点正品两个字」：从胶囊点进来的带 recKey（号|口径）——
+     弹窗直接落在那条记录上（号选中、口径打勾、价预填），确认=改价，老键复用 */
+  var curXy = recKey ? (String(recKey).split('|')[0] || LASTXY) : LASTXY;
   /* 找卡片定价框 */
   var _inp = null;
   var _cards = document.querySelectorAll('.card');
@@ -3200,6 +3311,11 @@ function openPickKind(k){
      当前号已标的口径打 ✓ + 加粗描边；切换闲鱼号时跟着重画（各号口径可不一样） */
   function curKindOf(){
     if (curXy === '__input__' || curXy === '__new') return null;
+    /* 从胶囊点进来：预勾就是那条记录自己的口径（同号双口径时不再取「最新」） */
+    if (recKey && curXy === String(recKey).split('|')[0]){
+      var _r0 = MARKED[k] && MARKED[k].xys ? MARKED[k].xys[recKey] : null;
+      if (_r0) return _r0.k === 's' ? 's' : 'l';
+    }
     /* 同号双口径：取这个号最新一条的口径打勾（旧的还在，只是弹窗只预选最新） */
     var xs = markXys(k), best = null;
     for (var i = 0; i < xs.length; i++) if (xs[i].xy === curXy && (!best || xs[i].t > best.t)) best = xs[i];
@@ -3224,6 +3340,13 @@ function openPickKind(k){
     + '<div style="font-weight:700;margin:12px 0 6px">这个号的闲鱼定价</div>'
     + '<input id="kindprice" type="number" min="0" step="1" placeholder="填这个号发布的价"'
     + ' style="width:100%;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:14px">'
+    + '<div style="font-weight:700;margin:12px 0 6px">闲鱼ID（选填）</div>'
+    + '<div style="display:flex;gap:8px;align-items:center">'
+    + '<input id="kindxid" type="text" maxlength="40" placeholder="这个宝贝的闲鱼ID，发布多个时点胶囊各显各的"'
+    + ' style="flex:1;min-width:0;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:14px">'
+    + '<span id="kindxiddel" data-kxdel="1" title="删掉这条记录的闲鱼ID（云端同步清掉，价格和口径不动）" hidden'
+    + ' style="cursor:pointer;flex:none;width:30px;height:30px;line-height:28px;text-align:center;border-radius:8px;border:1px solid #e4b6b0;color:#c0392b;font-weight:700;font-size:16px;background:#fff">×</span>'
+    + '</div>'
     + '<div style="font-weight:700;margin:12px 0 10px">发布出去的是哪种？</div>'
     + '<div id="kindkkrow" style="display:flex;gap:10px;flex-wrap:wrap">' + kindRowHTML() + '</div>'
     + '</div></div>';
@@ -3238,7 +3361,30 @@ function openPickKind(k){
     if (isFinite(_pre) && _pre > 0) _kp.value = _pre;
     setTimeout(function(){ try{ _kp.focus(); _kp.select(); }catch(e){} }, 60);
   }
+  /* 闲鱼ID预填：从胶囊点进来的（recKey）带出那条记录自己的ID；＋再发一号留空各填各的 */
+  var _kx = m.querySelector('#kindxid');
+  if (_kx){
+    var _x0 = (recKey && MARKED[k] && MARKED[k].xys && MARKED[k].xys[recKey] && MARKED[k].xys[recKey].xid) || null;
+    if (_x0) _kx.value = _x0;
+    /* 删除键（2026-10-14 用户要求）：只在编辑已有ID的记录时亮出来，新标/＋再发一号没有可删的 */
+    var _kd = m.querySelector('#kindxiddel');
+    if (_kd) _kd.hidden = !_x0;
+  }
   m.addEventListener('click', function(e){
+    /* 弹窗里的删除键（2026-10-14）：删这条记录的闲鱼ID——本地+云端（xid:null）同步清，弹窗留着继续改价 */
+    var kxd = e.target.closest ? e.target.closest('[data-kxdel]') : null;
+    if (kxd){
+      if (!(recKey && MARKED[k] && MARKED[k].xys && MARKED[k].xys[recKey] && MARKED[k].xys[recKey].xid != null)) return;
+      if (!confirm('删掉「' + recKey.split('|')[0] + '」这条记录的闲鱼ID？价格和口径不动。')) return;
+      delete MARKED[k].xys[recKey].xid;
+      saveMarks();
+      authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ c: k, on: true, xidonly: true, xy: recKey, xid: null }) }, true);
+      var _ki = m.querySelector('#kindxid'); if (_ki) _ki.value = '';
+      kxd.hidden = true;
+      run();                               // 卡片上的闲鱼ID行同步消失
+      return;
+    }
     var xyb = e.target.closest ? e.target.closest('[data-xy]') : null;
     if (xyb){
       if (xyb.getAttribute('data-xy') === '__mgr'){
@@ -3295,7 +3441,12 @@ function openPickKind(k){
       var _e0 = cur.xys[_k0] || {};
       if (String(_k0).split('|')[0] === xy && (_e0.k === 's' ? 's' : 'l') === kk){ _rk = _k0; break; }
     }
+    /* 闲鱼ID（2026-10-13）：弹窗填了用新值；留空保留这条原本的ID（改价不抹ID） */
+    var _xidv = String((m.querySelector('#kindxid') || {}).value || '').trim().slice(0, 40);
+    var _oldxid = cur.xys[_rk] && cur.xys[_rk].xid != null ? String(cur.xys[_rk].xid) : null;
     cur.xys[_rk] = { t: now, k: kk, p: (isNum(PRICES[k]) ? PRICES[k] : null) };
+    var _nxid = _xidv || _oldxid;
+    if (_nxid) cur.xys[_rk].xid = _nxid;
     cur.t = now; cur.k = kk;
     ACTXY[k] = _rk;                      // 当前编辑切到刚标的这条
     MARKED[k] = cur;
@@ -3779,7 +3930,47 @@ listEl.addEventListener('click', function(e){
   var ax = e.target.closest('[data-actxy]');
   if (ax){
     var _ak = ax.getAttribute('data-key'), _ax = ax.getAttribute('data-actxy');
-    if (_ak && _ax){ ACTXY[_ak] = _ax; run(); }
+    if (_ak && _ax){
+      /* 2026-10-14 用户定稿「对应上了才打开」：点中正在管定价框的那枚（含 ACTXY 没设时
+         兜底显示的最新一条）= 直接开编辑窗；点没对应的 = 只把定价框切过去，不弹窗。
+         ——修掉「第一下像没反应」：兜底显示的那枚以前第一下白点 */
+      var _cur = ACTXY[_ak] || ((actXY(_ak) || {}).key) || null;
+      if (_cur === _ax){ ACTXY[_ak] = _ax; openPickKind(_ak, _ax); }
+      else { ACTXY[_ak] = _ax; run(); }
+    }
+    return;
+  }
+  var be = e.target.closest('[data-be]');
+  if (be){
+    /* C（2026-10-14）：一键改到保本价——只动这条记录的价，口径/ID/奖励原样，云端 /pub 同步 */
+    var _bc9 = be.getAttribute('data-bec'), _bk9 = be.getAttribute('data-bek');
+    var _bv9 = parseFloat(be.getAttribute('data-be'));
+    var _mr9 = MARKED[_bc9];
+    if (_mr9 && _mr9.xys && _mr9.xys[_bk9] && isFinite(_bv9) && _bv9 > 0){
+      _mr9.xys[_bk9].p = _bv9;
+      saveMarks();
+      authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ c: _bc9, on: true, xy: _bk9, k: _mr9.xys[_bk9].k === 's' ? 's' : 'l', p: _bv9 }) }, true);
+      run();
+    }
+    return;
+  }
+  var mo = e.target.closest('[data-mocopy]');
+  if (mo){
+    /* 复制纯型号（2026-10-14 用户要求）：跟闲鱼ID复制同一套 toast 回弹 */
+    var _mv = mo.getAttribute('data-mocopy');
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(_mv).then(function(){ toast(mo, true); }, function(){ fb(_mv, mo); });
+    } else { fb(_mv, mo); }
+    return;
+  }
+  var xc = e.target.closest('[data-xidcopy]');
+  if (xc){
+    /* 复制闲鱼ID（2026-10-14 用户改稿：卡片行 × 删除键改成复制键）；复用 toast 回弹「已复制」 */
+    var _xv = xc.getAttribute('data-xidcopy');
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(_xv).then(function(){ toast(xc, true); }, function(){ fb(_xv, xc); });
+    } else { fb(_xv, xc); }
     return;
   }
   var am = e.target.closest('[data-addmark]');
@@ -3792,6 +3983,26 @@ listEl.addEventListener('click', function(e){
   var mb = e.target.closest('[data-mark]');
   if (mb){
     var k = mb.dataset.mark;
+    /* 管理号代管（2026-10-14 用户要求「预览子用户的也要能改」）：看 TA 的发布时可下架 TA 的记录，
+       直接删 TA 的云端记录（/pub 带 u=，仅管理号），本地镜像 _SUBPUB/SUBVIEW 同步摘掉 */
+    if (SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0'){
+      if (!(AUTH && AUTH.role === 'admin')) return;
+      if (!SUBVIEW.info[k]) return;
+      var _su = SUBVIEW.u;
+      if (!confirm('下架 ' + _su + ' 发布的「' + k + '」？TA 的这条发布记录会删掉')) return;
+      var _sxk = null, _sbt = -1;
+      var _sxs = SUBVIEW.info[k].xs || {};
+      for (var _x1 in _sxs){ var _e1 = _sxs[_x1] || {}; if ((+_e1.t || 0) >= _sbt){ _sbt = +_e1.t || 0; _sxk = _x1; } }
+      authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ u: _su, c: k, on: false, xy: _sxk }) }, true);
+      if (window._SUBPUB && _SUBPUB.all && _SUBPUB.all[_su]) delete _SUBPUB.all[_su][k];
+      delete SUBVIEW.info[k];
+      delete SUBVIEW.set[k];
+      updateLossBanner();
+      pubStockWarn();
+      run();
+      return;
+    }
     if (MARKED[k]){
       if (markXys(k).length > 1){ openUnmarkPick(k); return; }   // 多号先问取消哪个
       delete MARKED[k]; saveMarks();
@@ -3839,6 +4050,24 @@ listEl.addEventListener('input', function(e){
   var k = box.dataset.key;
   if (!k) return;
   var v = parseFloat(e.target.value);
+  /* 管理号代管改价（2026-10-14 用户要求「预览子用户的也要能改」）：看 TA 的发布时改价
+     → 直改 TA 的云端记录（/pub 带 u= + ponly 只动价），绝不落本地 PRICES/MARKED（那是自己的） */
+  if (SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0'){
+    if (!(AUTH && AUTH.role === 'admin')) return;
+    var _si = SUBVIEW.info[k];
+    if (!_si) return;
+    var _sp = (isFinite(v) && v > 0) ? v : null;
+    _si.p = _sp;
+    var _pxk = null, _pbt = -1;
+    var _pxs = _si.xs || {};
+    for (var _p2 in _pxs){ var _pe = _pxs[_p2] || {}; if ((+_pe.t || 0) >= _pbt){ _pbt = +_pe.t || 0; _pxk = _p2; } }
+    if (_pxk && _pxs[_pxk]) _pxs[_pxk].p = _sp;
+    if (window._SUBPUB && _SUBPUB.prices && _SUBPUB.prices[SUBVIEW.u]) _SUBPUB.prices[SUBVIEW.u][k] = _sp;
+    if (_sp != null) authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ u: SUBVIEW.u, c: k, on: true, ponly: true, p: _sp, xy: _pxk }) }, true);
+    updateLossBanner();
+    return;
+  }
   /* 2026-10-10 新规矩：没点「标记已发布」的型号，定价不落库（框里随便算，走了就不留） */
   if (!MARKED[k]) return;
   if (isFinite(v) && v > 0) PRICES[k] = v; else delete PRICES[k];
@@ -3849,7 +4078,18 @@ listEl.addEventListener('input', function(e){
     var _ax = actXY(k);
     if (_ax && _cur.xys[_ax.key]){
       _cur.xys[_ax.key].p = (isFinite(v) && v > 0) ? v : null;
+      _cur.xys[_ax.key].t = Date.now();    // 抬时间戳：多机合并时以这次改价为准
       XYP_DIRTY[k] = 1;
+      /* 2026-10-14 用户实锤「你动了我的价格」：改价原来只走 2.5s 防抖的 /pubsync 批量通道，
+         跟 cs/bn/nat 通道同时触发时整包读写互相覆盖（读旧写新竞争），撞上价格就丢。
+         改成 0.8s 防抖直接 /pub 单条写（跟口径/奖励同款即时上云，worker 端原子落库+抬 t） */
+      clearTimeout(listEl._pricePushT);
+      var _pk1 = k, _pxy1 = _ax.key;
+      listEl._pricePushT = setTimeout(function(){
+        var _e1 = MARKED[_pk1] && MARKED[_pk1].xys && MARKED[_pk1].xys[_pxy1];
+        authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ c: _pk1, on: true, xy: _pxy1, p: _e1 ? _e1.p : null }) }, true);
+      }, 800);
     }
   }
   savePrices();
@@ -4398,12 +4638,10 @@ function pubStockWarn(){
       }
     }
     if (!res.length) return;
-    cur = res;
-    shown = 0;
-    listEl.innerHTML = '';
-    moreEl.hidden = true;
-    hintEl.innerHTML = '缺货商品 <b>' + res.length + '</b> 条（正常搜索或筛选即恢复列表）';
-    renderBatch();
+    /* 2026-10-13：改走清单模式（run() 保住清单）——不然清单里点胶囊/改价触发 run()
+       就被搜索框重算冲掉，看着像闪退 */
+    BANNER_MODE = 'lost'; BANNER_RES = res; BANNER_SIG = viewSig();
+    run();
     window.scrollTo(0, 0);
   });
 })();
@@ -4420,29 +4658,42 @@ function lossList(){
     if (!MARKED[k]) continue;
     var cs = MARKED[k].cs;
     var opts = costOptions(it);
-    var cost = null, cl = '';
-    if (cs){
-      for (var j = 0; j < opts.length; j++){
-        if (opts[j].l === cs.l){ cost = opts[j].v; cl = cs.l; break; }
-      }
-    } else if (opts.length){
-      cost = opts[0].v; cl = opts[0].l;
-    }
-    /* 净利口径（2026-10-12 电脑端补齐手机端同款）：定价 − 1.6%平台费 − 发全国运费100 − 成本 + 点了的出库奖励。
-       2026-10-13：奖励 bn（点了才算）和发全国勾选 nat 都跟发布记录走，黄条按同一套账核算。
-       多闲鱼号逐号核：哪个号的价亏了就报哪个（号名带上） */
-    var _bn = MARKED[k].bn, bon = _bn ? ((+_bn.lb || 0) + (+_bn.sb || 0)) : 0;
-    var _kind = kindOfBasis(cs && cs.l);           // 运费跟口径走：滞销不可发→不扣，样机可发→扣100
-    var fr = (canNationwide(it, _kind) && MARKED[k].nat !== 0) ? 100 : 0;
+    var _bn = MARKED[k].bn;
     var xs = markXys(k), missPushed = false;
     for (var x = 0; x < xs.length; x++){
-      var p = xs[x].p;
+      var p = xs[x].p, rk = xs[x].k;           // 这条记录自己的口径（正品l/样机s）
       if (!isNum(p)) continue;
+      /* 2026-10-14 用户定稿（A）：每条记录按**自己口径**核账——样机记录找样机清理价、
+         正品/滞销记录找非样机口径（记录里存的 cs 优先，不匹配再按种类取，最后兜底第一项）；
+         出库奖励也跟口径走：样机记录算 sb、正品/滞销记录算 lb（不再两条都加）。
+         运费判定沿用口径规则：样机可发全国扣100、滞销不可发不扣、含税走卡级老规则 */
+      var cost = null, cl = '';
+      if (rk === 's'){
+        for (var j = 0; j < opts.length; j++){
+          if (kindOfBasis(opts[j].l) === 's'){ cost = opts[j].v; cl = opts[j].l; break; }
+        }
+        if (cost == null && cs){
+          for (var j2 = 0; j2 < opts.length; j2++){ if (opts[j2].l === cs.l){ cost = opts[j2].v; cl = cs.l; break; } }
+        }
+      } else {
+        if (cs && kindOfBasis(cs.l) !== 's'){
+          for (var j3 = 0; j3 < opts.length; j3++){ if (opts[j3].l === cs.l){ cost = opts[j3].v; cl = cs.l; break; } }
+        }
+        if (cost == null){
+          for (var j4 = 0; j4 < opts.length; j4++){ if (kindOfBasis(opts[j4].l) !== 's'){ cost = opts[j4].v; cl = opts[j4].l; break; } }
+        }
+      }
+      if (cost == null && opts.length){ cost = opts[0].v; cl = opts[0].l; }
+      var bon = _bn ? (rk === 's' ? (+_bn.sb || 0) : (+_bn.lb || 0)) : 0;
+      var _frk = rk === 's' ? 's' : (cs && kindOfBasis(cs.l) === 'l' ? 'l' : null);
+      var fr = (canNationwide(it, _frk) && MARKED[k].nat !== 0) ? 100 : 0;
       if (cost != null){
         var net = p * (1 - 0.016) - fr - cost + bon;
-        if (net < 0) out.push({ c: k, mo: it.mo || k, xy: xs[x].xy, price: p, cost: cost, net: net, l: cl });
+        /* 保本价（C）：net=0 倒推 p = (运费+成本−奖励)/0.984，向上取整保证不亏 */
+        if (net < 0) out.push({ c: k, mo: it.mo || k, xy: xs[x].xy, key: xs[x].key, price: p, cost: cost, net: net, l: cl,
+                                be: Math.ceil((fr + cost - bon) / (1 - 0.016)) });
       } else if (cs && !missPushed){
-        out.push({ c: k, mo: it.mo || k, xy: xs[x].xy, price: p, cost: null, l: cl });
+        out.push({ c: k, mo: it.mo || k, xy: xs[x].xy, key: xs[x].key, price: p, cost: null, l: cl });
         missPushed = true;
       }
     }
@@ -4462,16 +4713,28 @@ function lossSetView(){
     if (!info || !isNum(info.p)) continue;
     var it = itemOf(c);
     var opts = it ? costOptions(it) : [];
-    var cs = info.cs || (MARKED[c] && MARKED[c].cs) || null, cost = null, hasBasis = false;
-    if (cs){
-      hasBasis = true;
-      for (var j = 0; j < opts.length; j++){
-        if (opts[j].l === cs.l){ cost = opts[j].v; break; }
+    var cs = info.cs || (MARKED[c] && MARKED[c].cs) || null;
+    /* 2026-10-14（A）跟 lossList 同款：记录按自己口径（正品l/样机s）取成本 */
+    var rk = info.k === 's' ? 's' : 'l';
+    var cost = null, hasBasis = false;
+    if (rk === 's'){
+      for (var j = 0; j < opts.length; j++){ if (kindOfBasis(opts[j].l) === 's'){ cost = opts[j].v; hasBasis = true; break; } }
+      if (cost == null && cs){
+        for (var j2 = 0; j2 < opts.length; j2++){ if (opts[j2].l === cs.l){ cost = opts[j2].v; hasBasis = true; break; } }
       }
-    } else if (opts.length){ cost = opts[0].v; }
-    /* 净利口径（2026-10-12 跟 lossList 同款）：扣 1.6% 平台费 + 发全国运费（口径跟 cs 走） */
+    } else {
+      if (cs && kindOfBasis(cs.l) !== 's'){
+        for (var j3 = 0; j3 < opts.length; j3++){ if (opts[j3].l === cs.l){ cost = opts[j3].v; hasBasis = true; break; } }
+      }
+      if (cost == null){
+        for (var j4 = 0; j4 < opts.length; j4++){ if (kindOfBasis(opts[j4].l) !== 's'){ cost = opts[j4].v; hasBasis = true; break; } }
+      }
+    }
+    if (cost == null && opts.length){ cost = opts[0].v; hasBasis = true; }
+    /* 净利口径（2026-10-12 跟 lossList 同款）：扣 1.6% 平台费 + 发全国运费（口径规则同上） */
     if (cost != null){
-      var net = info.p * (1 - 0.016) - (it ? (canNationwide(it, kindOfBasis(cs && cs.l)) ? 100 : 0) : 0) - cost;
+      var _frk = rk === 's' ? 's' : (cs && kindOfBasis(cs.l) === 'l' ? 'l' : null);
+      var net = info.p * (1 - 0.016) - (it ? (canNationwide(it, _frk) ? 100 : 0) : 0) - cost;
       if (net < 0) out[c] = 1;
     }
     else if (hasBasis) out[c] = 1;
@@ -4482,12 +4745,12 @@ function updateLossBanner(){
   var bar = document.getElementById('lossalert');
   if (!bar) return;
   var L = lossList(), sig = JSON.stringify(L);
-  if (!L.length){ bar.hidden = true; LOSS_DISMISS = ''; return; }
+  if (!L.length){ bar.hidden = true; LOSS_DISMISS = ''; window.LOSS_ITEMS = []; return; }
   if (sig === LOSS_DISMISS || bar.hidden === false && bar.dataset.sig === sig) return;
   bar.dataset.sig = sig; LOSS_DISMISS = '';
   window.LOSS_ITEMS = L;               // 黄条点击一次性列出全部亏本卡用（2026-10-13 对齐缺货红条）
   /* 2026-10-13 用户定稿：不再逐个列型号，只报条数（点击黄条仍一次性列出全部亏本卡） */
-  var h = '<b>⚠ 有 ' + L.length + ' 条已发布按你选的口径算是亏本的（已扣平台费/运费），快改价（点击本条全部列出）</b>';
+  var h = '<b>⚠ 有 ' + L.length + ' 条已发布算亏本（各条按自己口径核成本/奖励，已扣平台费/运费，清单里可一键填保本价）</b>';
   bar.innerHTML = h + '<button class="close" title="这批先不提醒">×</button>';
   bar.hidden = false;
 }
@@ -4510,12 +4773,9 @@ function updateLossBanner(){
       }
     }
     if (!res.length) return;
-    cur = res;
-    shown = 0;
-    listEl.innerHTML = '';
-    moreEl.hidden = true;
-    hintEl.innerHTML = '亏本商品 <b>' + res.length + '</b> 条（正常搜索或筛选即恢复列表）';
-    renderBatch();
+    /* 2026-10-13：改走清单模式（run() 保住清单），理由同缺货红条 */
+    BANNER_MODE = 'loss'; BANNER_RES = res; BANNER_SIG = viewSig();
+    run();
     window.scrollTo(0, 0);
   });
 })();
@@ -4523,6 +4783,7 @@ function updateLossBanner(){
 function start(d){
   META = (d && d.meta) || {};
   ALL  = (d && d.rows) || [];
+  BANNER_MODE = ''; BANNER_RES = null;   // 数据重拉，清单模式攥着的旧卡引用作废
   IMGS = (d && d.imgs) || {};
   WEB  = (d && d.web) || null;
   IMGHAS = null;

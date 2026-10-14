@@ -508,12 +508,21 @@ async function route(request, env, path, ctx) {
     return J({ ok: true, marks: await getPubN(who), prices: await getPubP(who) });
   }
   // 标记/取消一条：{c, on, k: 'l'|'s', p: 闲鱼定价(可选), xy: 闲鱼号(可选，缺省=默认), cs: {l,v} 成本口径(可选，2026-10-13)}
+  //   2026-10-14 管理号代管：带 u=子账号 → 改 TA 的发布记录（仅管理号）；
+  //   ponly=true → 只改价不动口径/时间；xidonly=true → 只写/删闲鱼ID
   if (path === "/pub" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     const c = safeKey(b.c, 100);                       // 审计（G1/S4）：长度上限 + 键名黑名单
     if (!c) return jerr("型号不能为空");
+    let target = who;
+    if (b.u) {
+      if (usersGate[who].role !== "admin") return jerr("只有管理号能改别人的发布记录", 403);
+      const tu = safeKey(b.u, 24);
+      if (!tu) return jerr("用户名不合法");
+      target = tu;
+    }
     const xy = safeKey(b.xy, 24) || DEF_XY;
-    const marks = await getPub(who);
+    const marks = await getPub(target);
     if (b.on === false) {
       const cur = marks[c];
       // 指了号且还有多条 → 只删那一条；否则整条删（老客户端行为不变）
@@ -522,21 +531,45 @@ async function route(request, env, path, ctx) {
         markTop(cur);
         marks[c] = cur;
         // pubp_ 镜像跟到剩余最新一条的价（没价就删镜像）
-        const pp0 = await getPubP(who);
+        const pp0 = await getPubP(target);
         const rest = Object.values(cur.xys).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0] || null;
         if (rest && isFinite(+rest.p)) pp0[c] = +rest.p;
         else if (c in pp0) delete pp0[c];
-        await env.KV.put("pubp_" + who, JSON.stringify(pp0));
+        await env.KV.put("pubp_" + target, JSON.stringify(pp0));
       } else {
         delete marks[c];
         // 2026-10-10 新规矩：取消发布，定价一并清掉（旧的「价格跟型号走」作废）
-        const pp0 = await getPubP(who);
-        if (c in pp0) { delete pp0[c]; await env.KV.put("pubp_" + who, JSON.stringify(pp0)); }
+        const pp0 = await getPubP(target);
+        if (c in pp0) { delete pp0[c]; await env.KV.put("pubp_" + target, JSON.stringify(pp0)); }
       }
     } else {
       const now = Date.now();
       const k = b.k === "s" ? "s" : "l";
-      const cur = normMark(marks[c], (await getPubP(who))[c]);
+      const cur = normMark(marks[c], (await getPubP(target))[c]);
+      // 只删/写闲鱼ID（2026-10-14）：不动口径、不动时间、不动价
+      if (b.xidonly) {
+        const e = cur.xys[xy];
+        if (!e) return jerr("没有这条发布记录");
+        if (b.xid) e.xid = String(b.xid).trim().slice(0, 40); else delete e.xid;
+        marks[c] = cur;
+        await env.KV.put("pub_" + target, JSON.stringify(marks));
+        return J({ ok: true });
+      }
+      // 只改价（2026-10-14 管理号在子用户发布视图里改价）：不动口径、不动记录时间
+      if (b.ponly) {
+        const keys = Object.keys(cur.xys);
+        if (!keys.length) return jerr("该型号还没有发布记录");
+        const e = cur.xys[xy] || keys.map(x => cur.xys[x]).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
+        if (!isFinite(+b.p)) return jerr("价格不对");
+        e.p = +b.p;
+        marks[c] = cur;
+        const pp = await getPubP(target);
+        const lt = Object.values(cur.xys).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
+        if (lt && isFinite(+lt.p)) pp[c] = +lt.p;
+        await env.KV.put("pubp_" + target, JSON.stringify(pp));
+        await env.KV.put("pub_" + target, JSON.stringify(marks));
+        return J({ ok: true });
+      }
       // 成本口径跟发布记录走（2026-10-13 用户定稿）：搭车存，旧客户端发的没这字段自动跳过
       if (b.cs && typeof b.cs === "object" && !Array.isArray(b.cs))
         cur.cs = { l: safeKey(b.cs.l, 40) || "", v: isFinite(+b.cs.v) ? +b.cs.v : null };
@@ -546,16 +579,22 @@ async function route(request, env, path, ctx) {
       const np = b.p === undefined
         ? (oldE && isFinite(+oldE.p) ? +oldE.p : null)
         : (isFinite(+b.p) ? +b.p : null);
-      cur.xys[xy] = { t: now, k, p: np };
+      // 闲鱼ID（2026-10-13）：带了就存（截40位），没带保留这条原本的——改价/改口径不抹ID
+      const nxid = b.xid === undefined
+        ? (oldE && oldE.xid != null ? String(oldE.xid).slice(0, 40) : null)
+        : (b.xid ? String(b.xid).trim().slice(0, 40) : null);
+      const ne = { t: now, k, p: np };
+      if (nxid) ne.xid = nxid;
+      cur.xys[xy] = ne;
       markTop(cur);
       marks[c] = cur;
       if (isFinite(np)) {
-        const pp = await getPubP(who);
+        const pp = await getPubP(target);
         pp[c] = +np;
-        await env.KV.put("pubp_" + who, JSON.stringify(pp));
+        await env.KV.put("pubp_" + target, JSON.stringify(pp));
       }
     }
-    await env.KV.put("pub_" + who, JSON.stringify(marks));
+    await env.KV.put("pub_" + target, JSON.stringify(marks));
     return J({ ok: true });
   }
   // 整包合并（登录后把本机旧记录并上云端）：{marks: {c: {t,k} | {t,k,xys}}, prices: {c: 价}, xyp: {c: {号: 价}}}
@@ -575,8 +614,11 @@ async function route(request, env, path, ctx) {
         for (const [x0, e] of Object.entries(v.xys)) {
           const x = safeKey(x0, 24);
           if (!x || !e || typeof e !== "object") continue;
-          if (!cur.xys[x] || (+cur.xys[x].t || 0) < (+e.t || 0))
-            cur.xys[x] = { t: +e.t || Date.now(), k: e.k === "s" ? "s" : "l", p: isFinite(+e.p) ? +e.p : null };
+          if (!cur.xys[x] || (+cur.xys[x].t || 0) < (+e.t || 0)) {
+            const ne = { t: +e.t || Date.now(), k: e.k === "s" ? "s" : "l", p: isFinite(+e.p) ? +e.p : null };
+            if (e.xid) ne.xid = String(e.xid).trim().slice(0, 40);   // 闲鱼ID跟着记录走（2026-10-13）
+            cur.xys[x] = ne;
+          }
         }
         if (v.cs && typeof v.cs === "object" && !Array.isArray(v.cs))
           cur.cs = { l: safeKey(v.cs.l, 40) || "", v: isFinite(+v.cs.v) ? +v.cs.v : null };
