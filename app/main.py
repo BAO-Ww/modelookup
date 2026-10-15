@@ -234,7 +234,8 @@ def _check():
         ok = False
         out.append("openpyxl ❌ 缺了会导致没法解析表格！%r" % (e,))
 
-    for name in ("template.html", "payload.json", "images_cache.json",
+    # 2026-10-15 行级化 + 出厂包不带数据：payload.json 从必带清单移除（数据走云端拉取）
+    for name in ("template.html", "images_cache.json",
                  "midea_prices.json", "ronshen_prices.json"):
         p = rp(name)
         if os.path.isfile(p):
@@ -254,40 +255,44 @@ def _check():
                      for v in (p.get("imgs") or {}).values())
         out.append("数据: 型号 %d 个 / 图 %d 张 / dataURL 格式 %s ✅"
                    % (len(p["rows"]), n_img, "正常" if img_ok else "异常"))
-        if n_img == 0:
-            ok = False
-            out.append("数据里一张图都没有 ❌")
-        n_src = len((p.get("meta") or {}).get("sources") or [])
-        out.append("数据源 %d 个 %s" % (n_src, "✅" if n_src >= 2 else "⚠ 只认得 1 个表"))
-        if n_src < 2:
-            ok = False
-        # 价格表字段抽查
-        has_p = sum(1 for r in p["rows"] if r.get("pt") is not None)
-        out.append("带价格表数据的型号 = %d 个 %s" % (has_p, "✅" if has_p else "❌"))
-        if not has_p:
-            ok = False
-        # 「美的」页并进来了没（另一套报价：拿货价·慧买卖 / 给二批 / 价格取整）
-        n_md = sum(1 for r in p["rows"]
-                   if any(isinstance(r.get(k), (int, float)) for k in ("mh", "m2", "mr")))
-        out.append("美的 / 容声型号 = %d 个 %s" % (n_md, "✅" if n_md else "❌ 美的页没读进来"))
-        if not n_md:
-            ok = False
-        # v24 结构：旧库存字段应已删干净（库存/仓库全部走用友实时接口 stock_live.json）
-        n_legacy = sum(1 for r in p["rows"]
-                       if r.get("inv") or r.get("pgp") is not None or r.get("psp") is not None)
-        out.append("payload 残留旧库存字段(pgp/psp/inv) = %d 个 %s"
-                   % (n_legacy, "✅" if not n_legacy else "❌ 还是 v23 旧结构"))
-        if n_legacy:
-            ok = False
-        # 品牌里不该再出现品类名（源表把「科沃斯随手吸」的品牌写成「吸尘器」的那个坑）
-        badb = sorted({r.get("b") for r in p["rows"]
-                       if r.get("b") and any(w in r["b"] for w in NOT_BRAND)})
-        out.append("品牌列残留品类名 = %s %s" % (badb or "无", "✅" if not badb else "❌"))
-        if badb:
-            ok = False
-        # 官网价快照（assets/midea_prices.json + ronshen_prices.json）
-        n_mp = sum(1 for r in p["rows"] if isinstance(r.get("mp"), (int, float)))
-        out.append("带官网价的型号 = %d 个 %s" % (n_mp, "✅" if n_mp else "⚠ 官网价快照没挂上"))
+        if p["rows"]:
+            # 出厂包带了数据才做数据完整性检查（2026-10-15 起默认不带，数据走云端拉取制）
+            if n_img == 0:
+                ok = False
+                out.append("数据里一张图都没有 ❌")
+            n_src = len((p.get("meta") or {}).get("sources") or [])
+            out.append("数据源 %d 个 %s" % (n_src, "✅" if n_src >= 2 else "⚠ 只认得 1 个表"))
+            if n_src < 2:
+                ok = False
+            # 价格表字段抽查
+            has_p = sum(1 for r in p["rows"] if r.get("pt") is not None)
+            out.append("带价格表数据的型号 = %d 个 %s" % (has_p, "✅" if has_p else "❌"))
+            if not has_p:
+                ok = False
+            # 「美的」页并进来了没（另一套报价：拿货价·慧买卖 / 给二批 / 价格取整）
+            n_md = sum(1 for r in p["rows"]
+                       if any(isinstance(r.get(k), (int, float)) for k in ("mh", "m2", "mr")))
+            out.append("美的 / 容声型号 = %d 个 %s" % (n_md, "✅" if n_md else "❌ 美的页没读进来"))
+            if not n_md:
+                ok = False
+            # v24 结构：旧库存字段应已删干净（库存/仓库全部走用友实时接口 stock_live.json）
+            n_legacy = sum(1 for r in p["rows"]
+                           if r.get("inv") or r.get("pgp") is not None or r.get("psp") is not None)
+            out.append("payload 残留旧库存字段(pgp/psp/inv) = %d 个 %s"
+                       % (n_legacy, "✅" if not n_legacy else "❌ 还是 v23 旧结构"))
+            if n_legacy:
+                ok = False
+            # 品牌里不该再出现品类名（源表把「科沃斯随手吸」的品牌写成「吸尘器」的那个坑）
+            badb = sorted({r.get("b") for r in p["rows"]
+                           if r.get("b") and any(w in r["b"] for w in NOT_BRAND)})
+            out.append("品牌列残留品类名 = %s %s" % (badb or "无", "✅" if not badb else "❌"))
+            if badb:
+                ok = False
+            # 官网价快照（assets/midea_prices.json + ronshen_prices.json）
+            n_mp = sum(1 for r in p["rows"] if isinstance(r.get("mp"), (int, float)))
+            out.append("带官网价的型号 = %d 个 %s" % (n_mp, "✅" if n_mp else "⚠ 官网价快照没挂上"))
+        else:
+            out.append("出厂包不带数据（云端拉取制）：启动后 60 秒同步循环自动拉最新 ✅")
     except Exception as e:
         ok = False
         out.append("数据读取 ❌ %r" % (e,))
@@ -326,9 +331,11 @@ def _check():
             if len(b) < 100:
                 ok = False
                 out.append("/img/<core> 返回的内容不像图片 ❌")
-        else:
+        elif j.get("rows"):
             ok = False
             out.append("/api/data 里没有图片 key ❌")
+        else:
+            out.append("/api/data 无数据（云端拉取制）：跳过图片抽查 ✅")
         httpd.shutdown()
     except Exception as e:
         ok = False
