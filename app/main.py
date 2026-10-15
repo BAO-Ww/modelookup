@@ -91,10 +91,12 @@ _tick("常量区/埋点就绪")
 
 
 def _wipe_stale_local():
-    """2026-10-15 用户定稿：版本更新后第一次启动，本地缓存数据全部清干净再起——
-    防旧版本残留状态（固化页/库存缓存/payload/实时库存库）串进新版。
-    保留：凭据（auth_token/xy_cookies/glm_key）、文件ID（*_fileid.txt，清了云拉就没靶子）、
-    xlsx 大文件（重下要几分钟且本身无状态）、webview 配置（登录态在里面，清了要重登录）。"""
+    """2026-10-15 用户定稿：版本更新后第一次启动，清掉会串版本的旧状态再起。
+    清：固化页 + 各同步时间戳（ts 没了 → 启动后自动从云端重拉，数据缓存自动重建）。
+    不清：payload.json / stock_live.json / xinsheng.sqlite3 —— 它们是数据缓存，
+    有自己的版本/新鲜度校验；删了软件会回退到 exe 内嵌老数据（2.7.54 实锤：
+    型号数据从 10-15 倒退回 10-07），比不清危害大得多。
+    保留：凭据（auth_token/xy_cookies/glm_key）、文件ID（*_fileid.txt）、xlsx 大文件、webview 登录态。"""
     verf = wp("ver.txt")
     try:
         last = io.open(verf, encoding="utf-8").read().strip() if os.path.isfile(verf) else ""
@@ -103,8 +105,7 @@ def _wipe_stale_local():
     if last == APP_VERSION:
         return
     wiped = []
-    for _name in ["index.html", "payload.json", "stock_live.json",
-                  "xinsheng.sqlite3", "xlsx_ts.txt", "price_ts.txt", "xs_ts.txt"]:
+    for _name in ["index.html", "xlsx_ts.txt", "price_ts.txt", "xs_ts.txt"]:
         _p = wp(_name)
         if os.path.isfile(_p):
             try:
