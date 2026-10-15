@@ -149,6 +149,126 @@ async function d1List(env) {
   const r = await env.DB.prepare("SELECT k, v FROM store").all();
   return (r.results || []).map((x) => ({ name: x.k, v: x.v }));
 }
+
+// ---------------- 标记发布行级存储（2026-10-15 大改）----------------
+// 之前 pub_<u> = 整个账号一坨 JSON，每次标记 = 读整坨改一条写整坨——并发覆盖/写放大/单点损坏
+// 三宗罪的根源。现在拆三张表，一条标记一行，写入原子化：
+//   marks(u,c,xy,k,t,p,xid)   一条发布记录一行（xy = 闲鱼号|口径组合键，与 blob xys 键同构）
+//   markmeta(u,c,k,t,cs_l,cs_v,bn_lb,bn_sb,nat)  型号级镜像（顶层 t/k + cs/bn/nat）
+//   prices(u,c,p)             价格镜像（原 pubp_，含没发布过只收过价的历史型号）
+// 旧 pub_*/pubp_* blob 迁移后原样留在 store 表当只读备份，worker 不再读写它们。
+const MARKS_TABLES_SQL = [
+  "CREATE TABLE IF NOT EXISTS marks (u TEXT NOT NULL, c TEXT NOT NULL, xy TEXT NOT NULL, k TEXT, t INTEGER, p REAL, xid TEXT, PRIMARY KEY (u, c, xy))",
+  "CREATE TABLE IF NOT EXISTS markmeta (u TEXT NOT NULL, c TEXT NOT NULL, k TEXT, t INTEGER, cs_l TEXT, cs_v REAL, bn_lb INTEGER, bn_sb INTEGER, nat INTEGER, PRIMARY KEY (u, c))",
+  "CREATE TABLE IF NOT EXISTS prices (u TEXT NOT NULL, c TEXT NOT NULL, p REAL, PRIMARY KEY (u, c))"
+];
+let _marksOK = false;
+async function marksInit(env) {
+  if (!(await d1Init(env))) return false;
+  if (_marksOK) return true;
+  for (const s of MARKS_TABLES_SQL) await env.DB.prepare(s).run();
+  _marksOK = true;
+  return true;
+}
+const DEF_XY = "默认";
+// 组装：行 → 与 blob 时代完全同构的 {c: {t,k,cs?,bn?,nat?,xys:{...}}}
+async function pubGet(env, u) {
+  if (!(await marksInit(env))) return {};
+  const out = {};
+  const ms = await env.DB.prepare("SELECT c, xy, k, t, p, xid FROM marks WHERE u = ?").bind(u).all();
+  const mt = await env.DB.prepare("SELECT c, k, t, cs_l, cs_v, bn_lb, bn_sb, nat FROM markmeta WHERE u = ?").bind(u).all();
+  const meta = {};
+  for (const m of mt.results || []) meta[m.c] = m;
+  for (const r of ms.results || []) {
+    const c = r.c;
+    if (!out[c]) {
+      const m = meta[c] || {};
+      out[c] = { t: +m.t || 0, k: m.k === "s" ? "s" : "l", xys: {} };
+      if (m.cs_l != null || m.cs_v != null) out[c].cs = { l: m.cs_l || "", v: m.cs_v == null ? null : +m.cs_v };
+      if (m.bn_lb != null || m.bn_sb != null) out[c].bn = { lb: m.bn_lb == null ? 0 : +m.bn_lb, sb: m.bn_sb == null ? 0 : +m.bn_sb };
+      if (m.nat != null) out[c].nat = +m.nat;
+    }
+    const e = { t: +r.t || 0, k: r.k === "s" ? "s" : "l" };
+    if (r.p != null && isFinite(+r.p)) e.p = +r.p;
+    if (r.xid) e.xid = r.xid;
+    out[c].xys[r.xy] = e;
+  }
+  return out;
+}
+async function pubGetP(env, u) {
+  if (!(await marksInit(env))) return {};
+  const out = {};
+  const rs = await env.DB.prepare("SELECT c, p FROM prices WHERE u = ?").bind(u).all();
+  for (const r of rs.results || []) if (r.p != null && isFinite(+r.p)) out[r.c] = +r.p;
+  return out;
+}
+async function pubpSet(env, u, c, p) {              // 单价镜像 upsert；p 非法 = 删
+  if (!(await marksInit(env))) return;
+  if (p == null || !isFinite(+p)) { await env.DB.prepare("DELETE FROM prices WHERE u = ? AND c = ?").bind(u, c).run(); return; }
+  await env.DB.prepare("INSERT INTO prices (u,c,p) VALUES (?,?,?) ON CONFLICT(u,c) DO UPDATE SET p = excluded.p").bind(u, c, +p).run();
+}
+async function markRowUpsert(env, u, c, xy, e) {    // 一条发布记录 upsert
+  if (!(await marksInit(env))) return;
+  await env.DB.prepare(
+    "INSERT INTO marks (u,c,xy,k,t,p,xid) VALUES (?,?,?,?,?,?,?) ON CONFLICT(u,c,xy) DO UPDATE SET k=excluded.k, t=excluded.t, p=excluded.p, xid=excluded.xid"
+  ).bind(u, c, xy, e.k === "s" ? "s" : "l", +e.t || 0,
+         (e.p != null && isFinite(+e.p)) ? +e.p : null, e.xid ? String(e.xid).slice(0, 40) : null).run();
+}
+async function markRowDel(env, u, c, xy) {
+  if (!(await marksInit(env))) return;
+  await env.DB.prepare("DELETE FROM marks WHERE u = ? AND c = ? AND xy = ?").bind(u, c, xy).run();
+}
+async function markCardDel(env, u, c) {             // 整卡删除（最后一条取消发布时）
+  if (!(await marksInit(env))) return;
+  await env.DB.prepare("DELETE FROM marks WHERE u = ? AND c = ?").bind(u, c).run();
+  await env.DB.prepare("DELETE FROM markmeta WHERE u = ? AND c = ?").bind(u, c).run();
+}
+async function markMetaUpsert(env, u, c, m) {       // m = 组装态卡对象（取顶层镜像与 cs/bn/nat）
+  if (!(await marksInit(env))) return;
+  await env.DB.prepare(
+    "INSERT INTO markmeta (u,c,k,t,cs_l,cs_v,bn_lb,bn_sb,nat) VALUES (?,?,?,?,?,?,?,?,?) " +
+    "ON CONFLICT(u,c) DO UPDATE SET k=excluded.k, t=excluded.t, cs_l=excluded.cs_l, cs_v=excluded.cs_v, bn_lb=excluded.bn_lb, bn_sb=excluded.bn_sb, nat=excluded.nat"
+  ).bind(u, c, m.k === "s" ? "s" : "l", +m.t || 0,
+         m.cs ? (m.cs.l || "") : null, m.cs ? (m.cs.v == null ? null : +m.cs.v) : null,
+         m.bn ? (isFinite(+m.bn.lb) ? +m.bn.lb : 0) : null, m.bn ? (isFinite(+m.bn.sb) ? +m.bn.sb : 0) : null,
+         m.nat == null ? null : +m.nat).run();
+}
+// 老格式（数字 / {t,k}）包上 xys，价从镜像带进默认号（纯函数，迁移/快照也用）
+function normMarkG(v, flatP) {
+  if (typeof v !== "object" || !v) v = { t: +v || Date.now(), k: "l" };
+  if (!v.xys || typeof v.xys !== "object") {
+    const d = { t: +v.t || Date.now(), k: v.k === "s" ? "s" : "l", p: isFinite(+flatP) ? +flatP : null };
+    v = { t: d.t, k: d.k, xys: { [DEF_XY]: d } };
+  }
+  return v;
+}
+async function markUserDel(env, u) {                 // 删账号时连行级数据一起清
+  if (!(await marksInit(env))) return;
+  await env.DB.prepare("DELETE FROM marks WHERE u = ?").bind(u).run();
+  await env.DB.prepare("DELETE FROM markmeta WHERE u = ?").bind(u).run();
+  await env.DB.prepare("DELETE FROM prices WHERE u = ?").bind(u).run();
+}
+// blob → 行（restore / 迁移用；替换式导入一张卡的所有行 + 镜像）
+async function pubImport(env, u, blobMarks, ts) {
+  if (!(await marksInit(env))) return;
+  for (const [c0, v] of Object.entries(blobMarks || {})) {
+    const c = safeKey(c0, 100);
+    if (!c) continue;
+    const m = normMarkG(v, null);
+    if (!(+m.t || 0)) m.t = ts || Date.now();       // 归一化补的时间戳不落库成假数据
+    await env.DB.prepare("DELETE FROM marks WHERE u = ? AND c = ?").bind(u, c).run();
+    for (const [xy, e] of Object.entries(m.xys || {})) await markRowUpsert(env, u, c, xy, e);
+    await markMetaUpsert(env, u, c, m);
+  }
+}
+async function pubpImport(env, u, prices) {
+  if (!(await marksInit(env))) return;
+  for (const [c0, p] of Object.entries(prices || {})) {
+    const c = safeKey(c0, 100);
+    if (!c) continue;
+    await pubpSet(env, u, c, isFinite(+p) ? +p : null);
+  }
+}
 // 2026-10-10 审计修复（G15/并发）：进程内 async 锁——同 isolate 的读改写操作串行化，消并发丢更新。
 // Cloudflare Worker 同一 isolate 串行处理请求，但 fetch 是异步交错执行的，全路由套一把锁最稳。
 let _lock = Promise.resolve();
@@ -241,6 +361,15 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
     const url = new URL(request.url);
     const path = url.pathname;
+    // 维护开关（2026-10-15）：KV 键 "maintenance" = "1" 时断所有用户读写（存储手术/升级用）。
+    // 只放行 /appcheck、/appdl（无副作用的版本检查与下载）；其余一律 503，客户端显示维护中。
+    // 解除：删掉 KV 里的 maintenance 键即可（运维口 /admin/restore 同权限级别，不暴露到前端）。
+    if (path !== "/appcheck" && path !== "/appdl") {
+      try {
+        if ((await env.KV.get("maintenance")) === "1")
+          return jerr("系统维护中（正在升级存储），请几分钟后重试", 503);
+      } catch (e) {}
+    }
     try {
       if (ctx) ctx.waitUntil(dailySnap(env));   // 每日 users 快照（当天首次请求触发，不挡响应）
       // 全路由串行化（审计 G15）：读改写型操作（pub/pubsync/admin/save/myimgs…）不再有并发丢更新
@@ -276,10 +405,11 @@ async function dailySnap(env) {
       }
     }
     try {
-      for (const k of await d1List(env)) {            // pub_/pubp_ 从 D1 进快照（同构键名，快照格式不变）
-        if (k.v != null) snap[k.name] = k.v;
+      for (const u of Object.keys(JSON.parse(users))) {   // pub_/pubp_ 已行级化：按账号现组装成 blob 形态进快照
+        try { snap["pub_" + u] = JSON.stringify(await pubGet(env, u)); } catch (e) {}
+        try { snap["pubp_" + u] = JSON.stringify(await pubGetP(env, u)); } catch (e) {}
       }
-    } catch (e) { console.error("快照取 D1 失败（降级只备 KV）：" + e.message); }
+    } catch (e) { console.error("快照取行级数据失败（降级只备 KV）：" + e.message); }
     await env.KV.put("snap_" + today, JSON.stringify(snap));
     await env.KV.put("snap_last", today);
     const cutoff = new Date(Date.now() - 8 * 86400000).toISOString().slice(0, 10).replaceAll("-", "");
@@ -403,7 +533,9 @@ async function route(request, env, path, ctx) {
         if (k === "users") continue;
         if (!/^(pub_|pubp_|xy_)/.test(k) || typeof v !== "string") continue;
         try {
-          if (/^(pub_|pubp_)/.test(k)) await d1Put(env, k, JSON.parse(v));   // 已迁 D1：恢复口同步分流
+          // 2026-10-15 行级化：恢复口把 blob 拆成行导入（marks/markmeta/prices），不再整包覆盖
+          if (/^pubp_/.test(k)) await pubpImport(env, k.slice(5), JSON.parse(v));
+          else if (/^pub_/.test(k)) await pubImport(env, k.slice(4), JSON.parse(v));
           else await env.KV.put(k, v);                                        // xy_ 留 KV
           nBiz++;
         } catch (e) {}
@@ -527,8 +659,9 @@ async function route(request, env, path, ctx) {
       return jerr("本次保存将删除子账号：" + doomed.join(", ") + "。如果是误操作请检查面板；确认要删请带 confirm:true", 400);
     for (const u of doomed) {
       delete users[u];
-      await d1Del(env, "pub_" + u);
+      await d1Del(env, "pub_" + u);      // 行级化后这里只是残留备份 blob，一并清
       await d1Del(env, "pubp_" + u);
+      await markUserDel(env, u);         // 行级三表按账号清
     }
     await putUsers(env, users);
     return J({ ok: true, deleted: doomed });
@@ -545,17 +678,15 @@ async function route(request, env, path, ctx) {
   }
 
   // ---------- 发布记录（云端，跟账号走，换电脑登录也在） ----------
-  // KV: pub_<u> = { 型号: {t, k, xys: { 闲鱼号: {t, k, p} } } }
-  //     2026-10-12 多闲鱼号：一个账号可能挂多个闲鱼号，各号各价 —— xys 里一号一条。
-  //     顶层 t/k = 最新一条的镜像（老客户端只看顶层，照常工作）。
-  //     pubp_<u> = { 型号: 当前价镜像 }（老客户端/手机端兼容用，新客户端主要看 xys.p）
+  // 2026-10-15 行级化：读写已搬到顶层行级助手（marks/markmeta/prices 三表），这里只是薄壳。
+  // 数据形态与 blob 时代同构：{型号: {t,k,cs?,bn?,nat?,xys:{闲鱼号|口径: {t,k,p,xid?}}}}
   const DEF_XY = "默认";
   const pubTs = (v) => (typeof v === "object" && v ? (+v.t || 0) : (+v || 0));
   async function getPub(u) {
-    return d1Get(env, "pub_" + u, {});
+    return pubGet(env, u);
   }
   async function getPubP(u) {
-    return d1Get(env, "pubp_" + u, {});
+    return pubGetP(env, u);
   }
   // 顶层镜像重算：取 xys 里最新一条的 t/k/p
   function markTop(m) {
@@ -601,7 +732,7 @@ async function route(request, env, path, ctx) {
       target = tu;
     }
     const xy = safeKey(b.xy, 24) || DEF_XY;
-    const marks = await getPub(target);
+    const marks = await getPub(target);                // 行级组装（读便宜，写才是原子的）
     if (b.on === false) {
       const cur = marks[c];
       // 指了号且还有多条 → 只删那一条；否则整条删（老客户端行为不变）
@@ -609,17 +740,14 @@ async function route(request, env, path, ctx) {
         delete cur.xys[xy];
         markTop(cur);
         marks[c] = cur;
+        await markRowDel(env, target, c, xy);          // 行级：只删那一行
+        await markMetaUpsert(env, target, c, cur);     // 顶层镜像跟新
         // pubp_ 镜像跟到剩余最新一条的价（没价就删镜像）
-        const pp0 = await getPubP(target);
         const rest = Object.values(cur.xys).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0] || null;
-        if (rest && isFinite(+rest.p)) pp0[c] = +rest.p;
-        else if (c in pp0) delete pp0[c];
-        await d1Put(env, "pubp_" + target, pp0);
+        await pubpSet(env, target, c, rest && isFinite(+rest.p) ? +rest.p : null);
       } else {
-        delete marks[c];
-        // 2026-10-10 新规矩：取消发布，定价一并清掉（旧的「价格跟型号走」作废）
-        const pp0 = await getPubP(target);
-        if (c in pp0) { delete pp0[c]; await d1Put(env, "pubp_" + target, pp0); }
+        await markCardDel(env, target, c);             // 行级：整卡删除（记录行 + 镜像行）
+        await pubpSet(env, target, c, null);           // 2026-10-10 新规矩：取消发布，定价一并清掉
       }
     } else {
       const now = Date.now();
@@ -630,8 +758,7 @@ async function route(request, env, path, ctx) {
         const e = cur.xys[xy];
         if (!e) return jerr("没有这条发布记录");
         if (b.xid) e.xid = String(b.xid).trim().slice(0, 40); else delete e.xid;
-        marks[c] = cur;
-        await d1Put(env, "pub_" + target, marks);
+        await markRowUpsert(env, target, c, xy, e);    // 行级：只动这一行的 xid
         return J({ ok: true });
       }
       // 只改价（2026-10-14 管理号在子用户发布视图里改价）：不动口径、不动记录时间
@@ -641,12 +768,9 @@ async function route(request, env, path, ctx) {
         const e = cur.xys[xy] || keys.map(x => cur.xys[x]).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
         if (!isFinite(+b.p)) return jerr("价格不对");
         e.p = +b.p;
-        marks[c] = cur;
-        const pp = await getPubP(target);
+        await markRowUpsert(env, target, c, xy, e);    // 行级：只动这一行的价
         const lt = Object.values(cur.xys).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
-        if (lt && isFinite(+lt.p)) pp[c] = +lt.p;
-        await d1Put(env, "pubp_" + target, pp);
-        await d1Put(env, "pub_" + target, marks);
+        await pubpSet(env, target, c, lt && isFinite(+lt.p) ? +lt.p : null);
         return J({ ok: true });
       }
       // 成本口径跟发布记录走（2026-10-13 用户定稿）：搭车存，旧客户端发的没这字段自动跳过
@@ -667,29 +791,26 @@ async function route(request, env, path, ctx) {
       cur.xys[xy] = ne;
       markTop(cur);
       marks[c] = cur;
-      if (isFinite(np)) {
-        const pp = await getPubP(target);
-        pp[c] = +np;
-        await d1Put(env, "pubp_" + target, pp);
-      }
+      await markRowUpsert(env, target, c, xy, ne);     // 行级：这一行 upsert（原子）
+      await markMetaUpsert(env, target, c, cur);       // 顶层镜像 + cs/bn/nat
+      if (isFinite(np)) await pubpSet(env, target, c, +np);
     }
-    await d1Put(env, "pub_" + target, marks);
     return J({ ok: true });
   }
   // 整包合并（登录后把本机旧记录并上云端）：{marks: {c: {t,k} | {t,k,xys}}, prices: {c: 价}, xyp: {c: {号: 价}}}
   if (path === "/pubsync" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     if (Array.isArray(b.prices)) return jerr("prices 格式错误（应为对象）");   // 审计：数组下标会被当型号
-    const marks = await getPub(who);
+    const marks = await getPub(who);                   // 行级组装（读便宜，写按行原子）
     const pp0 = await getPubP(who);
     const inc = b.marks && typeof b.marks === "object" && !Array.isArray(b.marks) ? b.marks : {};
-    let chM = false;
     for (const [c0, v] of Object.entries(inc)) {
       const c = safeKey(c0, 100);
       if (!c) continue;                                // 审计（S4）：脏键直接丢
       if (v && typeof v === "object" && v.xys && typeof v.xys === "object" && Object.keys(v.xys).length) {
         // 新客户端：逐号并（只新盖旧，不删云端已有号）
         const cur = normMark(marks[c], pp0[c]);
+        let touched = false;
         for (const [x0, e] of Object.entries(v.xys)) {
           const x = safeKey(x0, 24);
           if (!x || !e || typeof e !== "object") continue;
@@ -697,12 +818,17 @@ async function route(request, env, path, ctx) {
             const ne = { t: +e.t || Date.now(), k: e.k === "s" ? "s" : "l", p: isFinite(+e.p) ? +e.p : null };
             if (e.xid) ne.xid = String(e.xid).trim().slice(0, 40);   // 闲鱼ID跟着记录走（2026-10-13）
             cur.xys[x] = ne;
+            await markRowUpsert(env, who, c, x, ne);   // 行级：一条一行，天然原子
+            touched = true;
           }
         }
         if (v.cs && typeof v.cs === "object" && !Array.isArray(v.cs))
           cur.cs = { l: safeKey(v.cs.l, 40) || "", v: isFinite(+v.cs.v) ? +v.cs.v : null };
-        markTop(cur);
-        if (JSON.stringify(marks[c]) !== JSON.stringify(cur)) { marks[c] = cur; chM = true; }
+        if (touched || v.cs) {
+          markTop(cur);
+          marks[c] = cur;
+          await markMetaUpsert(env, who, c, cur);      // 顶层镜像 + cs 跟行级走
+        }
       } else {
         // 老客户端：并进默认号
         const t = pubTs(v) || Date.now();
@@ -710,94 +836,79 @@ async function route(request, env, path, ctx) {
         const cur = normMark(marks[c], pp0[c]);
         const d = cur.xys[DEF_XY];
         if (!d || (+d.t || 0) < t) {
-          cur.xys[DEF_XY] = { t, k, p: isFinite(+pp0[c]) ? +pp0[c] : null };
+          const ne = { t, k, p: isFinite(+pp0[c]) ? +pp0[c] : null };
+          cur.xys[DEF_XY] = ne;
           markTop(cur);
-          marks[c] = cur; chM = true;
+          marks[c] = cur;
+          await markRowUpsert(env, who, c, DEF_XY, ne);
+          await markMetaUpsert(env, who, c, cur);
         }
       }
     }
-    // KV 省额度（2026-10-10）：只有真的并进来了发布标记才写 pub_——
-    // 打价场景每次 /pubsync 只带 prices，pub_ 原来被无条件整包重写，白烧一倍写额度
-    if (chM) await d1Put(env, "pub_" + who, marks);
     // cs/bn/nat 通道（2026-10-13）：口径 cs、出库奖励点击状态 bn、发全国勾选 nat
-    // 跟发布记录走。只动各自字段，不碰 xys/时间戳/pubp_；旧客户端没这些字段自动跳过
-    // 2026-10-13 修「改好了刷新就没」：10-12 之前标的老记录是 {t,k} 没 xys，下面四通道
-    // 原来直接 continue 静默丢——先 normMark 归一化（包 xys['默认']，价从 pubp_ 带）再改
-    let chC = false, chN = false;
+    // 跟 markmeta 表走，只动各自字段，不碰 xys/时间戳/pubp_。行级天然全归一化，无「老格式补写」之说
+    let chC = false;
     if (b.cs && typeof b.cs === "object" && !Array.isArray(b.cs)) {
       for (const [c0, v] of Object.entries(b.cs)) {
         const c = safeKey(c0, 100);
         if (!c || !v || typeof v !== "object" || Array.isArray(v)) continue;
-        if (!marks[c] || typeof marks[c] !== "object") continue;   // 只改已发布的
-        let cur = marks[c];
-        if (!cur.xys || typeof cur.xys !== "object") { cur = normMark(cur, pp0[c]); marks[c] = cur; chN = true; }
+        const cur = marks[c];
+        if (!cur || typeof cur !== "object") continue;             // 只改已发布的
         const ncs = { l: safeKey(v.l, 40) || "", v: isFinite(+v.v) ? +v.v : null };
-        if (JSON.stringify(cur.cs || {}) !== JSON.stringify(ncs)) { cur.cs = ncs; chC = true; }
+        if (JSON.stringify(cur.cs || {}) !== JSON.stringify(ncs)) { cur.cs = ncs; await markMetaUpsert(env, who, c, cur); chC = true; }
       }
     }
     if (b.bn && typeof b.bn === "object" && !Array.isArray(b.bn)) {
       for (const [c0, v] of Object.entries(b.bn)) {
         const c = safeKey(c0, 100);
         if (!c || !v || typeof v !== "object" || Array.isArray(v)) continue;
-        if (!marks[c] || typeof marks[c] !== "object") continue;
-        let cur = marks[c];
-        if (!cur.xys || typeof cur.xys !== "object") { cur = normMark(cur, pp0[c]); marks[c] = cur; chN = true; }
+        const cur = marks[c];
+        if (!cur || typeof cur !== "object") continue;
         const nb = { lb: isFinite(+v.lb) ? +v.lb : 0, sb: isFinite(+v.sb) ? +v.sb : 0 };
-        if (JSON.stringify(cur.bn || {}) !== JSON.stringify(nb)) { cur.bn = nb; chC = true; }
+        if (JSON.stringify(cur.bn || {}) !== JSON.stringify(nb)) { cur.bn = nb; await markMetaUpsert(env, who, c, cur); chC = true; }
       }
     }
     if (b.nat && typeof b.nat === "object" && !Array.isArray(b.nat)) {
       for (const [c0, v] of Object.entries(b.nat)) {
         const c = safeKey(c0, 100);
         if (!c || v == null) continue;
-        if (!marks[c] || typeof marks[c] !== "object") continue;
-        let cur = marks[c];
-        if (!cur.xys || typeof cur.xys !== "object") { cur = normMark(cur, pp0[c]); marks[c] = cur; chN = true; }
+        const cur = marks[c];
+        if (!cur || typeof cur !== "object") continue;
         const nv = +v === 1 ? 1 : 0;
-        if (cur.nat !== nv) { cur.nat = nv; chC = true; }
+        if (cur.nat !== nv) { cur.nat = nv; await markMetaUpsert(env, who, c, cur); chC = true; }
       }
     }
-    if (chC) await d1Put(env, "pub_" + who, marks);
     // xyp 增量（2026-10-12 多闲鱼号）：改某号某型的价，只对已存在的标记改，不造新标记
     let chPP = false;   // pubp_ 镜像有变更（2026-10-14 体检 P1-1：xyp 改价也要跟镜像）
     if (b.xyp && typeof b.xyp === "object" && !Array.isArray(b.xyp)) {
-      let chX = false; const xypC = {};   // 有价变更的型号 → 镜像要重算
+      const xypC = {};   // 有价变更的型号 → 镜像要重算
       for (const [c0, xs] of Object.entries(b.xyp)) {
         const c = safeKey(c0, 100);
         if (!c || !xs || typeof xs !== "object" || Array.isArray(xs)) continue;
-        let cur = marks[c];
+        const cur = marks[c];
         if (!cur || typeof cur !== "object") continue;
-        if (!cur.xys || typeof cur.xys !== "object") { cur = normMark(cur, pp0[c]); marks[c] = cur; chN = true; }
         for (const [x0, p] of Object.entries(xs)) {
           const x = safeKey(x0, 24);
           if (!x || !cur.xys[x] || !isFinite(+p) || cur.xys[x].p === +p) continue;
-          cur.xys[x].p = +p; chX = true; xypC[c] = true;
+          cur.xys[x].p = +p;
+          await markRowUpsert(env, who, c, x, cur.xys[x]);   // 行级：只动这一行的价
+          xypC[c] = true;
         }
       }
-      if (chX) {
-        await d1Put(env, "pub_" + who, marks);
-        // 2026-10-14 修「手机端价格漂移」：原来 xyp 通道只改 pub_ 从不碰 pubp_，
-        // 手机端/老客户端（看的是 pubp_ 镜像）一直显示旧价。口径与 /pub ponly 同款：
-        // 镜像 = 该型号最新一条记录的价
-        for (const c of Object.keys(xypC)) {
-          const lt = Object.values(marks[c].xys || {}).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
-          if (lt && isFinite(+lt.p) && pp0[c] !== +lt.p) { pp0[c] = +lt.p; chPP = true; }
-        }
+      // 2026-10-14 修「手机端价格漂移」：镜像 = 该型号最新一条记录的价
+      for (const c of Object.keys(xypC)) {
+        const lt = Object.values(marks[c].xys || {}).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
+        if (lt && isFinite(+lt.p) && pp0[c] !== +lt.p) { pp0[c] = +lt.p; await pubpSet(env, who, c, +lt.p); chPP = true; }
       }
-      var _chX = true;   // 标记 xyp 通道跑过（给下面的归一化落库判断用）
     }
-    // 老格式归一化落库：chC/chX 的写已顺带把升级带上；只有归一化没别的变更时补这一刀
-    if (chN && !chC && !_chX) await d1Put(env, "pub_" + who, marks);
     if (b.prices && typeof b.prices === "object" && !Array.isArray(b.prices)) {
       for (const [c0, p] of Object.entries(b.prices)) {
         const c = safeKey(c0, 100);
         if (!c) continue;
         // 2026-10-08：全量收价 —— 没点「标记发布」的型号定价也要存（用户要求）
-        if (isFinite(+p) && pp0[c] !== +p) { pp0[c] = +p; chPP = true; }
+        if (isFinite(+p) && pp0[c] !== +p) { pp0[c] = +p; await pubpSet(env, who, c, +p); chPP = true; }
       }
-      chPP = true;   // prices 通道保持原行为：带了 prices 就落一次镜像（幂等，串行区内安全）
     }
-    if (chPP) await d1Put(env, "pubp_" + who, pp0);
     // 2026-10-14 体检 P1-4：返回直接用内存组装（marks/pp0 都在手上），
     // 省掉结尾 getPubN+getPubP 的 2 次重复读——免费版 KV 读额度的大头之一
     const outM = {};
@@ -857,8 +968,9 @@ async function route(request, env, path, ctx) {
     const keys = Array.isArray(b.keys) ? b.keys.map((k) => safeKey(k, 100)).filter(Boolean) : [];
     const pp = await getPubP(u);
     const removed = [];
-    for (const k of keys) { if (k in pp) { delete pp[k]; removed.push(k); } }
-    await d1Put(env, "pubp_" + u, pp);
+    for (const k of keys) {
+      if (k in pp) { delete pp[k]; removed.push(k); await pubpSet(env, u, k, null); }
+    }
     return J({ ok: true, u, removed, prices: pp });
   }
 
