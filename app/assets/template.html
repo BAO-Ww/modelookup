@@ -5073,7 +5073,25 @@ function pubStockWarn(){
         if (ALL[i].c === keys[j].c){ res.push({ it: ALL[i], sc: 5 }); break; }
       }
     }
-    if (!res.length) return;
+    if (!res.length){
+      /* 2026-10-15 修「点了没反应」：精确匹配不上（型号已从主数据下架/变体名对不上）
+         → 先去空格大写宽匹配一轮；还列不出就把型号名直接摊开在黄条里，绝不静默装死 */
+      var _nm = function(s){ return String(s || '').replace(/\s+/g, '').toUpperCase(); };
+      var _ix = {};
+      for (i = 0; i < (ALL || []).length; i++) _ix[_nm(ALL[i].c)] = ALL[i];
+      for (j = 0; j < keys.length; j++){
+        var _it = _ix[_nm(keys[j].c)];
+        if (_it) res.push({ it: _it, sc: 5 });
+      }
+    }
+    if (!res.length){
+      box.innerHTML = '⚠ 以下已发布型号已不在当前主数据里（列表列不出来），请直接在闲鱼下架：'
+        + keys.map(function(k){ return '<b>' + esc(k.s || k.c) + '</b>'; }).join('、')
+        + ' <a id="pubwarnx">知道了</a>';
+      var _x2 = box.querySelector('#pubwarnx');
+      if (_x2) _x2.onclick = function(){ box.hidden = true; };
+      return;
+    }
     /* 2026-10-13：改走清单模式（run() 保住清单）——不然清单里点胶囊/改价触发 run()
        就被搜索框重算冲掉，看着像闪退 */
     BANNER_MODE = 'lost'; BANNER_RES = res; BANNER_SIG = viewSig();
