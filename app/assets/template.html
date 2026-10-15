@@ -1604,7 +1604,10 @@ function ensureAuth(){
         m.querySelector('#aerr').textContent = '';
         var tried = 0;
         function doLogin(){
-          return authFetch('/login', { method: 'POST', body: JSON.stringify({ u: u, p: p }) }, false)
+          /* 2026-10-15 修「登录转圈卡死」：第三个参数原来传 false=只走记住的那条线路，
+             缓存的线路一死（老域名 403 / workers.dev 被墙）登录就永远转圈。
+             去掉 false → withRetry 默认 true → 自动轮询全部线路直到通为止 */
+          return authFetch('/login', { method: 'POST', body: JSON.stringify({ u: u, p: p }) })
             .then(function(j){
               if (j && j._st === 0 && !j.ok && tried < AUTH_HOSTS.length - 1){
                 tried++;

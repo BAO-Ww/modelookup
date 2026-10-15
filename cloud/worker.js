@@ -863,10 +863,26 @@ async function route(request, env, path, ctx) {
   }
 
   // ---------- 补图上云（所有人共享：谁补的大家都能看到） ----------
-  // KV: myimgs = { 卡片key: {b: dataURL, by: 补图人|'sys'(整库灌入)|'__legacy__'(旧数据)} }
+  // 2026-10-15 R2 化：myimgs 整包改存 R2（env.IMG 单对象 "myimgs"），摆脱 KV 单值 25MB 天花板。
+  // 格式与原 KV 键完全一致（{卡片key: {b, by}}），客户端协议零改动。
+  // env.IMG 未绑 → 退 KV（部署漏绑不炸）；已绑 → 只走 R2，失败抛错不退（防读旧数据）。
+  async function myimgsGet(env) {
+    if (env.IMG) {
+      const o = await env.IMG.get("myimgs");
+      if (!o) return {};
+      return JSON.parse(await o.text());
+    }
+    return getJSON(env, "myimgs", {});
+  }
+  async function myimgsPut(env, imgs) {
+    const s = JSON.stringify(imgs);
+    if (env.IMG) { await env.IMG.put("myimgs", s); return; }
+    await env.KV.put("myimgs", s);
+  }
+  // KV 时代注释：myimgs = { 卡片key: {b: dataURL, by: 补图人|'sys'(整库灌入)|'__legacy__'(旧数据)} }
   // 2026-10-12 加归属：公共池合并拉下来后人人本地都有，原来 × 谁都能点、谁都能删别人的图。
   async function getMyImgs(env) {
-    const raw = await getJSON(env, "myimgs", {});
+    const raw = await myimgsGet(env);
     const out = {};
     for (const [k, v] of Object.entries(raw)) {
       if (typeof v === "string") out[k] = { b: v, by: "__legacy__" };   // 旧格式兜一层
@@ -886,7 +902,7 @@ async function route(request, env, path, ctx) {
     imgs[c] = { b: String(b.b64), by: who };           // 归属 = 上传人（服务端定，不信客户端）
     const total = JSON.stringify(imgs).length;
     if (total > 24000000) return jerr("云端补图库满了（" + Math.round(total/1048576) + "MB），清理后再传");
-    await env.KV.put("myimgs", JSON.stringify(imgs));
+    await myimgsPut(env, imgs);
     return J({ ok: true, total });
   }
   if (path === "/myimg" && request.method === "DELETE") {
@@ -901,7 +917,7 @@ async function route(request, env, path, ctx) {
       const isAdmin = !!(users[who] && users[who].role === "admin");
       if (e.by !== who && !(isAdmin && e.by !== "sys")) return jerr("只能删自己补的图", 403);
       delete imgs[c];
-      await env.KV.put("myimgs", JSON.stringify(imgs));
+      await myimgsPut(env, imgs);
     }
     return J({ ok: true });
   }
@@ -925,7 +941,7 @@ async function route(request, env, path, ctx) {
     }
     const total = JSON.stringify(imgs).length;
     if (total > 24000000) return jerr("整库太大（" + Math.round(total / 1048576) + "MB），超 KV 单值上限");
-    await env.KV.put("myimgs", JSON.stringify(imgs));
+    await myimgsPut(env, imgs);
     return J({ ok: true, added: n, total: Object.keys(imgs).length, bytes: total });
   }
 
