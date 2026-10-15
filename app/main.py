@@ -90,8 +90,44 @@ except Exception:
 _tick("常量区/埋点就绪")
 
 
+def _wipe_stale_local():
+    """2026-10-15 用户定稿：版本更新后第一次启动，本地缓存数据全部清干净再起——
+    防旧版本残留状态（固化页/库存缓存/payload/实时库存库）串进新版。
+    保留：凭据（auth_token/xy_cookies/glm_key）、文件ID（*_fileid.txt，清了云拉就没靶子）、
+    xlsx 大文件（重下要几分钟且本身无状态）、webview 配置（登录态在里面，清了要重登录）。"""
+    verf = wp("ver.txt")
+    try:
+        last = io.open(verf, encoding="utf-8").read().strip() if os.path.isfile(verf) else ""
+    except Exception:
+        last = ""
+    if last == APP_VERSION:
+        return
+    wiped = []
+    for _name in ["index.html", "payload.json", "stock_live.json",
+                  "xinsheng.sqlite3", "xlsx_ts.txt", "price_ts.txt", "xs_ts.txt"]:
+        _p = wp(_name)
+        if os.path.isfile(_p):
+            try:
+                os.remove(_p)
+                wiped.append(_name)
+            except Exception:
+                pass
+    try:
+        io.open(verf, "w", encoding="utf-8").write(APP_VERSION)
+    except Exception:
+        pass
+    if wiped:
+        print("[版本清场] %s -> %s，已清：%s" % (last or "(无记录)", APP_VERSION, ", ".join(wiped)))
+
+
 def main():
     _tick("main() 进入（Python 侧已起来）")
+    # 2026-10-15：版本变了先清本地缓存（固化页/库存缓存/payload），再走正常启动
+    try:
+        _wipe_stale_local()
+    except Exception:
+        pass
+    _tick("版本清场检查完成")
     # Mac 用 WKWebView，没有 WebView2 这回事（2026-10-11 Mac 端）
     if sys.platform != "darwin" and not webview2_ok():
         warn_no_webview2()
