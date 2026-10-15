@@ -900,6 +900,24 @@ prunePrices();   // 开机先清一遍：没点标记已发布的价一律不留
 function saveMarks(){ save(MARK_KEY, MARKED); }
 /* ---------- 发布记录云端化（跟账号走，换电脑登录也在） ----------
    KV 存 pub_<账号>；登录后整包合并一次，之后每标记/取消一条即时推一条。 */
+function draftCs(c){
+  /* 卡片定价框里「用户正看着的成本口径」——确认标记/改口径时随单落库（2026-10-15 修
+     「我选了样机清理价，保本价却按正品算」：弹窗确认从不带 cs，没记过口径的记录
+     永远走兜底第一项）。取不到（无下拉/无选中）返回 null，pubPush 退回 MARKED 里的 cs */
+  try {
+    var _card = document.querySelector('.card[data-key="' + String(c).replace(/"/g, '\\"') + '"]');
+    var _sel = _card && _card.querySelector('.costsel');
+    if (_sel && _sel.selectedIndex >= 0){
+      var _o = _sel.options[_sel.selectedIndex];
+      var _l = _o.getAttribute('data-l');
+      if (_l){
+        var _v = parseFloat(_o.value);
+        return { l: String(_l).slice(0, 40), v: isFinite(_v) ? _v : null };
+      }
+    }
+  } catch (e) {}
+  return null;
+}
 function pubPush(c, on, xy){
   if (!AUTH || !AUTH.token) return;
   /* ⚠ 必须显式带 Content-Type: application/json —— WebView2 里 string body 缺它时
@@ -3871,6 +3889,7 @@ function openPickKind(k, recKey){
     if (_mig) delete cur.xys[_mig];      // 老口径/老号那条搬完就删，不留双胞胎
     cur.t = now; cur.k = kk;
     ACTXY[k] = _rk;                      // 当前编辑切到刚标的这条
+    var _dcs = draftCs(k); if (_dcs) cur.cs = _dcs;   // 2026-10-15：确认时把定价框选的成本口径一起落库
     MARKED[k] = cur;
     saveMarks();
     savePrices();
@@ -3922,6 +3941,7 @@ function openSwitchKind(k, xy){
     } else {
       cur.k = kk; cur.t = now;
     }
+    var _dcs2 = draftCs(k); if (_dcs2) cur.cs = _dcs2;   // 2026-10-15：改口径时同步落库定价框选的成本口径
     saveMarks();
     pubPush(k, true, tgt);                 // 云端即时同步（带 k=新口径，价保留）
     run();
