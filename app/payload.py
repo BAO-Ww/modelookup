@@ -133,7 +133,9 @@ def load_current_payload():
 
     ⚠ 工作目录缓存带 meta.pv 版本号：与代码里的 PAYLOAD_VER 不一致就视为过期
       （老版本升级上来时字段结构可能变了），自动改用 exe 内嵌的新数据。
-    """
+    2026-10-15 用户拍板：exe 不再内嵌出厂数据（老数据倒退 10-07 实锤）——
+    工作目录也没有时返回空载荷占位，60 秒同步循环拉云端后重建
+    （set_payload 置 rev → 前端无感重载），期间页面显示等待同步。"""
     p = wp("payload.json")
     if os.path.isfile(p):
         try:
@@ -144,8 +146,16 @@ def load_current_payload():
         except Exception:
             pass
     p = rp("payload.json")
-    with io.open(p, encoding="utf-8") as f:
-        return json.load(f)
+    if os.path.isfile(p):
+        try:
+            with io.open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            if (d.get("meta") or {}).get("pv") == PAYLOAD_VER:
+                return d
+        except Exception:
+            pass
+    return {"meta": {"pv": PAYLOAD_VER, "built": "等待云端同步", "sources": []},
+            "rows": [], "imgs": {}, "web": None}
 
 
 def attach_subsidy(payload, log):

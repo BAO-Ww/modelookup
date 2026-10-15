@@ -20,7 +20,8 @@ ICNS = os.path.join(A, "icon.icns")
 
 datas = [
     (os.path.join(A, "template.html"), "assets"),
-    (os.path.join(A, "payload.json"), "assets"),
+    # 2026-10-15 用户拍板：不再内嵌出厂 payload.json（老数据倒退 10-07 实锤）——
+    # 首装/缓存缺失时空载荷占位，60 秒同步循环拉云端重建
     (os.path.join(A, "images_cache.json"), "assets"),
     (os.path.join(A, "midea_prices.json"), "assets"),
     (os.path.join(A, "ronshen_prices.json"), "assets"),
