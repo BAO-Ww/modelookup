@@ -745,6 +745,24 @@ function markXys(c){
   return out;
 }
 var ACTXY = {};
+/* SUBVIEW.info 里的发布记录（云端 /pub、/puball 的 marks 条目）→ 与 markXys 同构的 [{xy,key,t,k,p}]，
+   按时间新→旧（2026-10-16 连根修：亏钱筛选改按记录价核账用）。老格式记录（无 xs）退回顶层 p（定价表价） */
+function subRecXys(info){
+  var out = [];
+  if (info && info.xs && typeof info.xs === 'object'){
+    for (var key in info.xs){
+      var e = info.xs[key] || {};
+      if (!e || (e.k !== 'l' && e.k !== 's')) continue;
+      out.push({ xy: String(key).split('|')[0] || String(key), key: key,
+                 t: +e.t || 0, k: e.k === 's' ? 's' : 'l',
+                 p: (e.p != null && isFinite(+e.p)) ? +e.p : null });
+    }
+    out.sort(function(a,b){ return b.t - a.t; });
+  } else if (info && isNum(info.p)){
+    out.push({ xy: '默认', key: '默认', t: +info.t || 0, k: info.k === 's' ? 's' : 'l', p: +info.p });
+  }
+  return out;
+}
 function actXY(c){
   var xs = markXys(c);
   for (var i = 0; i < xs.length; i++) if (xs[i].key === ACTXY[c]) return xs[i];   // 按记录键定位（同号双口径各是各的键）
@@ -2709,7 +2727,10 @@ function renderItem(it){
   var pmOK = pok('pubmeta');   // 管理号：默认开，「我的显示开关/顶栏胶囊」可关；子账号：管理号勾了才开
   var pmHTML = '';
   if (svInfo && pmOK && (svInfo.p || svInfo.t)){
-    /* 多闲鱼号：一号一价并列（2026-10-12），单号维持原样 */
+    /* 多闲鱼号：一号一价并列（2026-10-12），单号维持原样。
+       2026-10-16（连根修）：单号价显示**发布记录价**（subRecXys 最新一条），
+       不再显示定价表价——定价表跟记录价脱节时（LC-172/CWY16 亏钱误报案），
+       头部小字跟胶囊芯片一个口径，不再自相矛盾 */
     var _sxk = svInfo.xs ? Object.keys(svInfo.xs) : [];
     var _svx = '';
     if (_sxk.length > 1){
@@ -2719,8 +2740,10 @@ function renderItem(it){
       }).join(' · ');
       if (svInfo.t) _svx += ' · 发布于 ' + fmtTs(svInfo.t);
     } else {
-      _svx = (svInfo.p ? '闲鱼定价 ¥' + pmMoney(svInfo.p) : '')
-           + (svInfo.p && svInfo.t ? ' · ' : '')
+      var _svr = subRecXys(svInfo)[0] || null;
+      var _svp = (_svr && isNum(_svr.p)) ? _svr.p : svInfo.p;
+      _svx = (isNum(_svp) && +_svp ? '闲鱼定价 ¥' + pmMoney(_svp) : '')
+           + (isNum(_svp) && +_svp && svInfo.t ? ' · ' : '')
            + (svInfo.t ? '发布于 ' + fmtTs(svInfo.t) : '');
     }
     if (_svx) pmHTML = '<span class="pubmeta">' + _svx + '</span>';
@@ -5123,10 +5146,41 @@ function pubStockWarn(){
   });
 })();
 /* 数据到位 → 建索引 → 起界面 */
+/* ---------- 单条发布记录核账（2026-10-16 连根修）：黄条 lossList 与亏钱筛选 lossSetView
+   共用这一套，杜绝口径漂移。按记录自己的价/口径算：样机记录找样机清理价、
+   正品/滞销记录找非样机口径（记录里存的 cs 优先，不匹配再按种类取，最后兜底第一项）；
+   出库奖励跟口径走（样机算 sb、正品/滞销算 lb）；运费按口径规则 + nat 勾（0=不扣）。
+   返回 {cost, cl, bon, fr, net, miss}：net=数字可判亏盈；cost=null 且记过口径 → miss=true（口径没了也提醒） */
+function recNet(it, cs, bn, nat, rk, p){
+  var opts = it ? costOptions(it) : [];
+  var cost = null, cl = '';
+  if (rk === 's'){
+    for (var j = 0; j < opts.length; j++){
+      if (kindOfBasis(opts[j].l) === 's'){ cost = opts[j].v; cl = opts[j].l; break; }
+    }
+    if (cost == null && cs){
+      for (var j2 = 0; j2 < opts.length; j2++){ if (opts[j2].l === cs.l){ cost = opts[j2].v; cl = cs.l; break; } }
+    }
+  } else {
+    if (cs && kindOfBasis(cs.l) !== 's'){
+      for (var j3 = 0; j3 < opts.length; j3++){ if (opts[j3].l === cs.l){ cost = opts[j3].v; cl = cs.l; break; } }
+    }
+    if (cost == null){
+      for (var j4 = 0; j4 < opts.length; j4++){ if (kindOfBasis(opts[j4].l) !== 's'){ cost = opts[j4].v; cl = opts[j4].l; break; } }
+    }
+  }
+  if (cost == null && opts.length){ cost = opts[0].v; cl = opts[0].l; }
+  var bon = bn ? (rk === 's' ? (+bn.sb || 0) : (+bn.lb || 0)) : 0;
+  var _frk = rk === 's' ? 's' : (cs && kindOfBasis(cs.l) === 'l' ? 'l' : null);
+  var fr = (it && canNationwide(it, _frk) && nat !== 0) ? 100 : 0;
+  var net = (cost != null && isNum(p)) ? p * (1 - 0.016) - fr - cost + bon : null;
+  return { cost: cost, cl: cl, bon: bon, fr: fr, net: net, miss: (cost == null && !!cs) };
+}
 /* ---------- 亏钱哨兵（2026-10-10 用户要求）：发布后表格价格变了要通知我改价 ----------
    口径 = 发布记录 MARKED[k].cs（云端唯一源，2026-10-13 定稿；没记过的老发布按默认第一项核对）。
    每次数据同步/列表渲染都核对一遍：闲鱼定价 < 口径现价 → 顶部黄条；
-   选的口径在新表里没了（比如价格含税整列取消）也提醒。点型号跳过去改价。 */
+   选的口径在新表里没了（比如价格含税整列取消）也提醒。点型号跳过去改价。
+   2026-10-16（连根修）：核账逻辑抽到 recNet() 与亏钱筛选完全同款，一条不差 */
 function lossList(){
   var out = [];
   if (!ALL) return out;
@@ -5134,43 +5188,18 @@ function lossList(){
     var it = ALL[i], k = it.c;
     if (!MARKED[k]) continue;
     var cs = MARKED[k].cs;
-    var opts = costOptions(it);
-    var _bn = MARKED[k].bn;
+    var _bn = MARKED[k].bn, _nat = MARKED[k].nat;
     var xs = markXys(k), missPushed = false;
     for (var x = 0; x < xs.length; x++){
       var p = xs[x].p, rk = xs[x].k;           // 这条记录自己的口径（正品l/样机s）
       if (!isNum(p)) continue;
-      /* 2026-10-14 用户定稿（A）：每条记录按**自己口径**核账——样机记录找样机清理价、
-         正品/滞销记录找非样机口径（记录里存的 cs 优先，不匹配再按种类取，最后兜底第一项）；
-         出库奖励也跟口径走：样机记录算 sb、正品/滞销记录算 lb（不再两条都加）。
-         运费判定沿用口径规则：样机可发全国扣100、滞销不可发不扣、含税走卡级老规则 */
-      var cost = null, cl = '';
-      if (rk === 's'){
-        for (var j = 0; j < opts.length; j++){
-          if (kindOfBasis(opts[j].l) === 's'){ cost = opts[j].v; cl = opts[j].l; break; }
-        }
-        if (cost == null && cs){
-          for (var j2 = 0; j2 < opts.length; j2++){ if (opts[j2].l === cs.l){ cost = opts[j2].v; cl = cs.l; break; } }
-        }
-      } else {
-        if (cs && kindOfBasis(cs.l) !== 's'){
-          for (var j3 = 0; j3 < opts.length; j3++){ if (opts[j3].l === cs.l){ cost = opts[j3].v; cl = cs.l; break; } }
-        }
-        if (cost == null){
-          for (var j4 = 0; j4 < opts.length; j4++){ if (kindOfBasis(opts[j4].l) !== 's'){ cost = opts[j4].v; cl = opts[j4].l; break; } }
-        }
-      }
-      if (cost == null && opts.length){ cost = opts[0].v; cl = opts[0].l; }
-      var bon = _bn ? (rk === 's' ? (+_bn.sb || 0) : (+_bn.lb || 0)) : 0;
-      var _frk = rk === 's' ? 's' : (cs && kindOfBasis(cs.l) === 'l' ? 'l' : null);
-      var fr = (canNationwide(it, _frk) && MARKED[k].nat !== 0) ? 100 : 0;
-      if (cost != null){
-        var net = p * (1 - 0.016) - fr - cost + bon;
+      var r = recNet(it, cs, _bn, _nat, rk, p);
+      if (r.net != null){
         /* 保本价（C）：net=0 倒推 p = (运费+成本−奖励)/0.984，向上取整保证不亏 */
-        if (net < 0) out.push({ c: k, mo: it.mo || k, xy: xs[x].xy, key: xs[x].key, price: p, cost: cost, net: net, l: cl,
-                                be: Math.ceil((fr + cost - bon) / (1 - 0.016)) });
-      } else if (cs && !missPushed){
-        out.push({ c: k, mo: it.mo || k, xy: xs[x].xy, key: xs[x].key, price: p, cost: null, l: cl });
+        if (r.net < 0) out.push({ c: k, mo: it.mo || k, xy: xs[x].xy, key: xs[x].key, price: p, cost: r.cost, net: r.net, l: r.cl,
+                                  be: Math.ceil((r.fr + r.cost - r.bon) / (1 - 0.016)) });
+      } else if (r.miss && !missPushed){
+        out.push({ c: k, mo: it.mo || k, xy: xs[x].xy, key: xs[x].key, price: p, cost: null, l: r.cl });
         missPushed = true;
       }
     }
@@ -5178,43 +5207,26 @@ function lossList(){
   return out;
 }
 var LOSS_DISMISS = '';
-/* 「亏钱」筛选用的判定集（2026-10-10）：看发布记录（自己或别人）时，按记录里的口径
-   （云端 MARKED/info 的 cs，2026-10-13 起本地不再有口径记忆；没记就取第一项）
-   算 定价 < 成本 = 亏；选的口径整列没了也算。
-   价格/口径取自 SUBVIEW.info（云端发布记录），跟亏钱横幅 lossList() 同一套账 */
+/* 「亏钱」筛选用的判定集（2026-10-10）：看发布记录（自己或别人）时逐条记录核账。
+   2026-10-16（B 连根修）：价取**发布记录自己的价**（xs 各号各价，跟黄条 lossList 同源），
+   不再看定价表价——定价表跟记录价脱节时（LC-172/CWY16 误报案）筛选跟着记录走；
+   核账公式 = recNet()（与黄条一条不差：算出库奖励、按 nat 勾扣运费、口径没了也提醒） */
 function lossSetView(){
   var out = {};
   if (!SUBVIEW) return out;
   for (var c in SUBVIEW.set){
     var info = SUBVIEW.info[c];
-    if (!info || !isNum(info.p)) continue;
+    if (!info) continue;
     var it = itemOf(c);
-    var opts = it ? costOptions(it) : [];
-    var cs = info.cs || (MARKED[c] && MARKED[c].cs) || null;
-    /* 2026-10-14（A）跟 lossList 同款：记录按自己口径（正品l/样机s）取成本 */
-    var rk = info.k === 's' ? 's' : 'l';
-    var cost = null, hasBasis = false;
-    if (rk === 's'){
-      for (var j = 0; j < opts.length; j++){ if (kindOfBasis(opts[j].l) === 's'){ cost = opts[j].v; hasBasis = true; break; } }
-      if (cost == null && cs){
-        for (var j2 = 0; j2 < opts.length; j2++){ if (opts[j2].l === cs.l){ cost = opts[j2].v; hasBasis = true; break; } }
-      }
-    } else {
-      if (cs && kindOfBasis(cs.l) !== 's'){
-        for (var j3 = 0; j3 < opts.length; j3++){ if (opts[j3].l === cs.l){ cost = opts[j3].v; hasBasis = true; break; } }
-      }
-      if (cost == null){
-        for (var j4 = 0; j4 < opts.length; j4++){ if (kindOfBasis(opts[j4].l) !== 's'){ cost = opts[j4].v; hasBasis = true; break; } }
-      }
+    var cs = info.cs || null, _bn = info.bn || null, _nat = info.nat;
+    var xs = subRecXys(info);
+    for (var x = 0; x < xs.length; x++){
+      var p = xs[x].p, rk = xs[x].k;
+      if (!isNum(p)) continue;
+      var r = recNet(it, cs, _bn, _nat, rk, p);
+      if (r.net != null){ if (r.net < 0){ out[c] = 1; break; } }
+      else if (r.miss){ out[c] = 1; break; }
     }
-    if (cost == null && opts.length){ cost = opts[0].v; hasBasis = true; }
-    /* 净利口径（2026-10-12 跟 lossList 同款）：扣 1.6% 平台费 + 发全国运费（口径规则同上） */
-    if (cost != null){
-      var _frk = rk === 's' ? 's' : (cs && kindOfBasis(cs.l) === 'l' ? 'l' : null);
-      var net = info.p * (1 - 0.016) - (it ? (canNationwide(it, _frk) ? 100 : 0) : 0) - cost;
-      if (net < 0) out[c] = 1;
-    }
-    else if (hasBasis) out[c] = 1;
   }
   return out;
 }

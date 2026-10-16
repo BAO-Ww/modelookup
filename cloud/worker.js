@@ -906,8 +906,26 @@ async function route(request, env, path, ctx) {
         const c = safeKey(c0, 100);
         if (!c) continue;
         // 2026-10-08：全量收价 —— 没点「标记发布」的型号定价也要存（用户要求）
-        if (isFinite(+p) && pp0[c] !== +p) { pp0[c] = +p; await pubpSet(env, who, c, +p); chPP = true; }
+        // 2026-10-16 连根修（B）：已发布型号**记录价优先**——定价表跟最新一条发布记录走，
+        // 客户端旧定价表不再把改过的闲鱼价盖回去（LC-172/CWY16 亏钱误报案的根因）。
+        // 没发布记录（或记录没价）才收客户端的价，「草稿价也要落库」老规矩不变
+        let rp = null;
+        const mrc = marks[c];
+        if (mrc && mrc.xys) {
+          const lt = Object.values(mrc.xys).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
+          if (lt && isFinite(+lt.p)) rp = +lt.p;
+        }
+        const fin = rp != null ? rp : (isFinite(+p) ? +p : null);
+        if (fin != null && pp0[c] !== fin) { pp0[c] = fin; await pubpSet(env, who, c, fin); chPP = true; }
       }
+    }
+    // 2026-10-16 连根修（B）：全量对账——已发布且有价的型号，定价表一律对齐最新记录价。
+    // 客户端 prices 没带的键、或历史 drift（记录 6999 / 定价表 2999），这次同步全部治愈。
+    // 记录没价的不动（留给客户端草稿价走上面的通道）
+    for (const [c, mrc] of Object.entries(marks)) {
+      if (!mrc || !mrc.xys) continue;
+      const lt = Object.values(mrc.xys).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
+      if (lt && isFinite(+lt.p) && pp0[c] !== +lt.p) { pp0[c] = +lt.p; await pubpSet(env, who, c, +lt.p); chPP = true; }
     }
     // 2026-10-14 体检 P1-4：返回直接用内存组装（marks/pp0 都在手上），
     // 省掉结尾 getPubN+getPubP 的 2 次重复读——免费版 KV 读额度的大头之一
