@@ -35,4 +35,5 @@ jobs:
         env:
           CLOUD_TOKEN: ${{ secrets.CLOUD_TOKEN }}
           KX_SECRET: ${{ secrets.KX_SECRET }}
-        run: "$env:PY" .github/scripts/kdocs_cloud_pull.py
+        run: |
+          "$env:PY" .github/scripts/kdocs_cloud_pull.py

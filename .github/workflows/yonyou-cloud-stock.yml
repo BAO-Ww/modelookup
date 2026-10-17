@@ -52,4 +52,5 @@ jobs:
           YY_USER: ${{ secrets.YY_USER }}
           YY_PASS: ${{ secrets.YY_PASS }}
           CLOUD_TOKEN: ${{ secrets.CLOUD_TOKEN }}
-        run: "$env:PY" .github/scripts/yy_cloud_pull.py
+        run: |
+          "$env:PY" .github/scripts/yy_cloud_pull.py
