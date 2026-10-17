@@ -80,10 +80,13 @@ class ApiGetMixin:
                             state.LOG.append("[文案] peiwen 抓取链未命中（%s），用内置算法" % _we)
                             _info = None
                     if _info and (_info.get("props") or []):
-                        # 2026-10-17 用户要求：卖点 3→6 条，挑最好的（AI 卖点优先按序取 6，
-                        # 不足 6 条由 desc_text 内部用本地卖点池自动补齐）
+                        # 2026-10-17 定稿：XianyuPeiwen Pro 原版方案基础上扩到 6 条——
+                        # AI 卖点优先按序取 6 进 desc（desc_text 内部 [:6]），
+                        # 不足由本地卖点池软兜底凑满 6；「卖点」页展示也截 6 条
                         _pts = [str(x).strip() for x in (res.get("points") or [])
                                 if str(x).strip()][:6]
+                        res["points"] = [str(x).strip() for x in (res.get("points") or [])
+                                         if str(x).strip()][:6]
                         res["titles"] = _pc.titles(_info)
                         res["desc_nat"] = _pc.desc_text(_info, "N", _pts or None)
                         res["desc_rep"] = _pc.desc_text(_info, "B", _pts or None)

@@ -744,7 +744,8 @@ def prop_dict(props):
 
 
 def sellpoints(info, exclude=None):
-    """本地生成最多 6 条卖点（2026-10-17 用户要求 3→6，挑最好的）。
+    """本地生成最多 6 条卖点（XianyuPeiwen Pro 原版方案 + 用户要求扩到 6）。
+    候选顺序=优先级（超薄>容量>能效>静音>风冷>变频），不够由软兜底凑满 6。
     exclude 为【参数】行已展示过的字符串集合，
     命中则跳过对应卖点，避免描述和参数复读同一个数字（如 10kg）。"""
     pd = prop_dict(info.get("props") or [])
@@ -796,9 +797,6 @@ def sellpoints(info, exclude=None):
     comp = find("压缩机", "定变频")
     if comp and "变频" in comp:
         add("变频动力，恒温更稳定")
-    zone = find("温区", "变温室", "软冷冻")
-    if zone:
-        add("多温区精储，冷藏冷冻软冻分开放不串味")
     # 兜底软卖点：与参数数字无关，保证凑满 6 条且不复读参数
     _SOFT = ("用料扎实，细节经得起细看", "安装省心，师傅上门服务",
              "日常好打理，省时省力", "全新未拆封，开箱即用",
@@ -1011,7 +1009,7 @@ def desc_text(info, version, points=None):
     【品牌+规格品类】型号 xxx
     ·卖点1
     ·卖点2
-    …共 6 条（2026-10-17 用户要求 3→6，不足自动补）
+    …共 6 条（XianyuPeiwen Pro 方案 + 2026-10-17 扩到 6，软兜底凑满）
     【参数】k v | k v | ...
     【官网价】xxx（本店售价见标价，全新未拆封）
     【交易】先验后签收，破损拒收
@@ -1058,9 +1056,10 @@ def desc_text(info, version, points=None):
             excl.add(v.strip())
             for num in re.findall(r"\d+(?:\.\d+)?", v):
                 excl.add(num)
+    # XianyuPeiwen Pro 原版链路 + 2026-10-17 扩到 6 条：
+    # AI 卖点优先取前 6 → 不足 6 条由本地池补齐（防重复+防特征词复读）→ 静态兜底 6 条
     sp = [str(x).strip() for x in (points or []) if str(x).strip()][:6]
-    # 外部卖点不足 6 条 → 本地卖点池补齐（exclude 去参数复读；不与已有卖点重复）
-    # 特征词去重：本地候选与已有卖点撞同一特征（风冷/能效/变频…）→ 跳过，防语义复读
+    # 本地候选与已有卖点撞同一特征（风冷/能效/变频…）→ 跳过，防语义复读
     _FEAT = ("风冷", "无霜", "除霜", "能效", "省电", "变频", "定频", "温区",
              "容量", "分储", "静音", "噪音", "冷藏", "冷冻")
     for x in sellpoints(info, exclude=excl):
@@ -1505,9 +1504,10 @@ def zhipu_polish_titles(api_key, info, base_titles):
 
 
 def zhipu_polish_desc(api_key, info, version="N"):
-    """AI 润色描述：AI 只出 3 条卖点，整段由本地按模板拼装。
-    参数/官网价/交易/结尾话术全部来自真实数据，AI 碰不到。"""
-    pts = _zhipu_sellpoints(api_key, info, 3, long=True)
+    """AI 润色描述：AI 只出 6 条卖点（2026-10-17 跟随描述扩 6），整段由本地按模板拼装。
+    参数/官网价/交易/结尾话术全部来自真实数据，AI 碰不到。AI 不足 6 条时
+    desc_text 内部用本地池补齐。"""
+    pts = _zhipu_sellpoints(api_key, info, 6, long=True)
     if not pts:
         return None
     return desc_text(info, version, points=pts)
@@ -1736,9 +1736,9 @@ def ai_make_cover(info, sel_dir, api_key=None, out_name="0_AI_主图.jpg"):
     text(40, 30, show_title, 32, "#ffffff")
     text(40, 78, "型号 " + info.get("model") or "", 22, "#c9c9c9", bold=False)
 
-    # 卖点区（AI 生成 3 条）
+    # 卖点区（固定 3 条：海报色带版位是按 3 条设计的，不随描述 6 条联动）
     y = H - bw + 40
-    for p in pts:
+    for p in pts[:3]:
         p = p if len(p) <= 18 else p[:17] + "…"
         # 左侧白点
         dr.ellipse([44, y + 16, 44 + 14, y + 30], fill="#fbbf24")
