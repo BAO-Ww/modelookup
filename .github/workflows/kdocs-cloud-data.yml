@@ -28,12 +28,12 @@ jobs:
 
       - name: Install Playwright + Chromium + openpyxl
         run: |
-          "$env:PY" -m pip install playwright==1.48.0 openpyxl
-          "$env:PY" -m playwright install chromium
+          & "$env:PY" -m pip install playwright==1.48.0 openpyxl
+          & "$env:PY" -m playwright install chromium
 
       - name: Pull KDocs tables and upload
         env:
           CLOUD_TOKEN: ${{ secrets.CLOUD_TOKEN }}
           KX_SECRET: ${{ secrets.KX_SECRET }}
         run: |
-          "$env:PY" .github/scripts/kdocs_cloud_pull.py
+          & "$env:PY" .github/scripts/kdocs_cloud_pull.py
