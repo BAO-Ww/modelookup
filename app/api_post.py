@@ -204,6 +204,130 @@ class ApiPostMixin:
             self._send(200, json.dumps(r, ensure_ascii=False))
             return
 
+        if u.path == "/api/xyview":
+            # 软件内打开闲鱼页（2026-10-17）：拉起 --goofish 独立进程窗口，
+            # 一号一个 WebView2 档案（xyprofile_<账号>），多号登录态互不干扰
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            except Exception:
+                d = {}
+            url = str(d.get("url") or "")
+            acc = str(d.get("acc") or "default")[:24]
+            if not url.startswith(("https://www.goofish.com/", "https://seller.goofish.com/",
+                                   "https://www.goofish.com")):
+                self._send(400, json.dumps({"ok": False, "msg": "只许打开 goofish.com 页面"},
+                                           ensure_ascii=False))
+                return
+            import subprocess
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--goofish", acc, url]
+            else:
+                cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                    "main.py"), "--goofish", acc, url]
+            flags = 0x08000000 if os.name == "nt" else 0   # CREATE_NO_WINDOW
+            try:
+                subprocess.Popen(cmd, creationflags=flags, close_fds=True)
+                state.LOG.append("[闲鱼] 内嵌窗口：%s（%s）" % (url[:60], acc))
+                self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+            return
+
+        if u.path == "/api/xyopen":
+            # 2026-10-17：系统浏览器打开 goofish 页（管理号把子账号的
+            # 「闲鱼操作在软件内打开」勾掉时，编辑/改价/查看/下架走这条路）
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            except Exception:
+                d = {}
+            url2 = str(d.get("url") or "")
+            if not url2.startswith(("https://www.goofish.com/", "https://seller.goofish.com/")):
+                self._send(400, json.dumps({"ok": False, "msg": "只许打开 goofish.com 页面"},
+                                           ensure_ascii=False))
+                return
+            try:
+                import webbrowser
+                webbrowser.open(url2)
+                self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+            return
+
+        # ---------- 发布图工厂（2026-10-17，闲鱼配文 Pro 并入） ----------
+        if u.path in ("/api/pubgen", "/api/pubhero", "/api/pubsel", "/api/pubqa",
+                      "/api/pubauto", "/api/pubimport", "/api/pubgh", "/api/pubopen",
+                      "/api/pubxy"):
+            import pubwork
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            except Exception:
+                d = {}
+            model = str(d.get("model") or "").strip()
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            price = d.get("price")
+            try:
+                price = float(price) if price not in (None, "", 0) else None
+            except (TypeError, ValueError):
+                price = None
+            ver = "B" if d.get("ver") == "B" else "N"
+            try:
+                if u.path == "/api/pubgen":
+                    # 套图生成走后台线程（AI 背景要十几秒），前端轮询 /api/pubjob
+                    if pubwork.job_state()["running"]:
+                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑"}, ensure_ascii=False))
+                        return
+                    style = str(d.get("style") or "studio")
+                    if style not in pubwork.STYLE_DIRS:
+                        self._send(400, json.dumps({"ok": False, "msg": "未知风格"}, ensure_ascii=False))
+                        return
+                    threading.Thread(target=pubwork.gen_style,
+                                     args=(model, style, price, ver), daemon=True).start()
+                    self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
+                    return
+                if u.path == "/api/pubhero":
+                    if pubwork.job_state()["running"]:
+                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑"}, ensure_ascii=False))
+                        return
+                    threading.Thread(target=pubwork.gen_hero,
+                                     args=(model, price, ver), daemon=True).start()
+                    self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
+                    return
+                if u.path == "/api/pubsel":
+                    rels = [str(x).replace("\\", "/") for x in (d.get("files") or [])
+                            if str(x) and ".." not in str(x)]
+                    r = pubwork.sel_save(model, rels, sell_price=price, version=ver)
+                elif u.path == "/api/pubqa":
+                    r = pubwork.qa_run(model)
+                elif u.path == "/api/pubauto":
+                    r = pubwork.qa_auto(model)
+                elif u.path == "/api/pubimport":
+                    r = pubwork.import_imgs(model, d.get("files") or [])
+                elif u.path == "/api/pubgh":
+                    r = pubwork.push_gh(model, only_sel=bool(d.get("sel")))
+                elif u.path == "/api/pubxy":
+                    # 一键发布闲鱼：playwright 半自动，阻塞在后台线程（用户在浏览器点发布）
+                    if pubwork.job_state()["running"]:
+                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑"}, ensure_ascii=False))
+                        return
+                    threading.Thread(target=pubwork.pub_xy,
+                                     args=(model, ver), daemon=True).start()
+                    self._send(200, json.dumps({"ok": True, "started": True,
+                                                "msg": "浏览器即将打开发布页，自动填好后你自己点「发布」"},
+                                               ensure_ascii=False))
+                    return
+                else:
+                    r = pubwork.open_dir(model, str(d.get("sub") or ""))
+                state.LOG.append("[发布图] %s %s" % (u.path, model))
+                self._send(200, json.dumps(r, ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+            return
+
         if u.path != "/api/upload":
             self._send(404, json.dumps({"ok": False, "msg": "not found"}, ensure_ascii=False))
             return

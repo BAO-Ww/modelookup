@@ -79,10 +79,15 @@ if sys.platform == "darwin":
 else:
     from appwin import run_app                                            # noqa: E402
 
-# 调试开关：设了 ML_CDP_PORT 环境变量才开 WebView2 远程调试（正式包不受影响）
+# 调试开关：WebView2 远程调试口（CDP）——goofish 内嵌页自动化依赖它
+# （2026-10-17：「快速进入」选号页自动点 + 菜单真实路由探测，见 xy_cdp.py）。
+# 默认开启，端口 pid 派生防多进程撞口；外部用 ML_CDP_PORT 可指定。
 try:
     _dbg_port = int(os.environ.get("ML_CDP_PORT") or 0)
-    if _dbg_port:
+    if not _dbg_port:
+        _dbg_port = 9333 + (os.getpid() % 300)
+        os.environ["ML_CDP_PORT"] = str(_dbg_port)
+    if sys.platform != "darwin":            # WKWebView 无此 setting
         webview.settings["REMOTE_DEBUGGING_PORT"] = _dbg_port
 except Exception:
     pass
@@ -121,8 +126,45 @@ def _wipe_stale_local():
         print("[版本清场] %s -> %s，已清：%s" % (last or "(无记录)", APP_VERSION, ", ".join(wiped)))
 
 
+def _goofish_mode():
+    """--goofish <账号> <url>（2026-10-17）：独立小窗口打开闲鱼页（编辑/查看宝贝内嵌）。
+    一号一个 WebView2 档案目录（xyprofile_<账号>），登录态互不干扰、多号可同时开；
+    首次扫码登录一次，之后免登。必须在单实例检查之前分支返回（不占端口、不碰主窗口）。"""
+    if "--goofish" not in sys.argv:
+        return False
+    try:
+        _i = sys.argv.index("--goofish")
+        _acc = sys.argv[_i + 1]
+        _url = sys.argv[_i + 2]
+    except (IndexError, ValueError):
+        return False
+    _safe = "".join(ch for ch in _acc if ch.isalnum() or ch in "-_") or "default"
+    _sp = wp("xyprofile_" + _safe)
+    os.makedirs(_sp, exist_ok=True)
+    # 独立窗口同样开 CDP + 自动点「快速进入」（跟主进程同款）。
+    # 端口必须重算：独立窗口是子进程，会继承父进程的 ML_CDP_PORT（已绑），不重算就没口
+    try:
+        import xy_cdp
+        os.environ["ML_CDP_PORT"] = str(9333 + (os.getpid() % 300))
+        webview.settings["REMOTE_DEBUGGING_PORT"] = int(os.environ["ML_CDP_PORT"])
+        xy_cdp.start_autoclick()
+    except Exception:
+        pass
+    try:
+        webview.create_window("闲鱼 · %s" % (_acc if _acc != "default" else "宝贝页"), _url,
+                              width=1360, height=900)
+        webview.start(private_mode=False, storage_path=_sp,
+                      gui="edgechromium" if sys.platform != "darwin" else None)
+    except Exception as e:
+        print("[goofish] 窗口失败：%s" % e)
+    return True
+
+
 def main():
     _tick("main() 进入（Python 侧已起来）")
+    # 2026-10-17：--goofish 内嵌闲鱼窗口最先分支（不走向主流程：不清场、不抢单实例）
+    if _goofish_mode():
+        return
     # 2026-10-15：版本变了先清本地缓存（固化页/库存缓存/payload），再走正常启动
     try:
         _wipe_stale_local()
@@ -164,6 +206,12 @@ def main():
     _tick("实时库存缓存：%s" % ("上次更新 " + str(state_stock_ts()) if state_stock_ts() else "还没有"))
     httpd, port = start_server()
     _tick("本地服务已起")
+    # goofish 内嵌自动化：「快速进入」选号页替用户自动点（2026-10-17 用户要求）
+    try:
+        import xy_cdp
+        xy_cdp.start_autoclick()
+    except Exception:
+        pass
     run_app(httpd, port, arg)
 
 

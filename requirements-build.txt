@@ -8,3 +8,5 @@ openpyxl==3.1.5
 pyinstaller==6.22.2
 # Pillow：make_icon.py 生成 icon.ico + copywriter 促销首图合成（2026-10-13 起 exe 里要带）
 Pillow>=11
+# websocket-client：xy_cdp 走 WebView2 CDP（快速进入自动点/菜单路由探测，2026-10-17）
+websocket-client>=1.8

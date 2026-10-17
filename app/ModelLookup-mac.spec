@@ -25,6 +25,15 @@ datas = [
     (os.path.join(A, "images_cache.json"), "assets"),
     (os.path.join(A, "midea_prices.json"), "assets"),
     (os.path.join(A, "ronshen_prices.json"), "assets"),
+    # 发布图工厂（2026-10-17 闲鱼配文 Pro 并入）：官网索引 + URL 种子
+    (os.path.join(A, "pei", "haier_index.json"), "assets/pei"),
+    (os.path.join(A, "pei", "casarte_index.json"), "assets/pei"),
+    (os.path.join(A, "pei", "leader_index.json"), "assets/pei"),
+    (os.path.join(A, "pei", "xdjdy_index.json"), "assets/pei"),
+    (os.path.join(A, "pei", "site_urls_haier.txt"), "assets/pei"),
+    (os.path.join(A, "pei", "site_urls_casarte.txt"), "assets/pei"),
+    (os.path.join(A, "pei", "site_urls_leader.txt"), "assets/pei"),
+    (os.path.join(A, "pei", "site_urls_xdjdy.txt"), "assets/pei"),
 ]
 
 a = Analysis(
@@ -35,12 +44,16 @@ a = Analysis(
     hiddenimports=[
         "openpyxl", "et_xmlfile",
         "webview", "webview.menu", "webview.platforms.cocoa",
+        # 发布图工厂（2026-10-17 闲鱼配文 Pro 并入）：pei_ai9/pei_hero/pei_core + copywriter 促销首图
+        "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont",
+        "PIL.ImageFilter", "PIL.ImageStat", "PIL.ImageChops", "PIL.ImageEnhance",
+        "websocket",   # goofish 自动化（xy_cdp）：CDP 自动点选号/菜单路由探测（2026-10-17）
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     # 图像是预先烤好的 dataURL；Windows 后端一律不要
-    excludes=["numpy", "scipy", "pandas", "matplotlib", "PIL", "Pillow",
+    excludes=["numpy", "scipy", "pandas", "matplotlib",
               "PyQt5", "PyQt6", "PySide2", "PySide6", "IPython", "pytest",
               "setuptools", "pkg_resources", "wheel",
               "tkinter", "unittest", "pydoc_data",
