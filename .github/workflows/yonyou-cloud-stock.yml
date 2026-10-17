@@ -36,22 +36,20 @@ permissions:
 jobs:
   pull-stock:
     runs-on: [self-hosted, windows]   # 2026-10-17 额度墙：本机自建 runner（不吃 Actions 分钟）
+    env:
+      PY: C:\actions-runner\_work\_tool\Python\3.11.9\x64\python.exe   # 本机预置 Python（setup-python 云端下载在本机网络下不稳）
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Install Playwright + Chromium
         run: |
-          pip install playwright==1.48.0 openpyxl==3.1.5
-          python -m playwright install chromium
+          "$env:PY" -m pip install playwright==1.48.0 openpyxl==3.1.5
+          "$env:PY" -m playwright install chromium
 
       - name: Pull Yonyou stock and upload
         env:
           YY_USER: ${{ secrets.YY_USER }}
           YY_PASS: ${{ secrets.YY_PASS }}
           CLOUD_TOKEN: ${{ secrets.CLOUD_TOKEN }}
-        run: python .github/scripts/yy_cloud_pull.py
+        run: "$env:PY" .github/scripts/yy_cloud_pull.py
