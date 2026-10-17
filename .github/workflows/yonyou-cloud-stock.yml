@@ -35,7 +35,7 @@ permissions:
 
 jobs:
   pull-stock:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows]   # 2026-10-17 额度墙：本机自建 runner（不吃 Actions 分钟）
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
       - name: Install Playwright + Chromium
         run: |
           pip install playwright==1.48.0 openpyxl==3.1.5
-          python -m playwright install --with-deps chromium
+          python -m playwright install chromium
 
       - name: Pull Yonyou stock and upload
         env:
