@@ -21,6 +21,8 @@ jobs:
   pull-kdocs:
     runs-on: [self-hosted, windows]   # 2026-10-17 额度墙：本机自建 runner（不吃 Actions 分钟）
     env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
       PY: C:\actions-runner\_work\_tool\Python\3.11.9\x64\python.exe   # 本机预置 Python
     timeout-minutes: 25
     steps:
