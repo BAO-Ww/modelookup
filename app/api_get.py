@@ -65,6 +65,34 @@ class ApiGetMixin:
             try:
                 res = copywriter.generate(model, kind, force,
                                           log=lambda s: state.LOG.append("[文案] " + s))
+                # 2026-10-17 用户要求：文案跟闲鱼配文 Pro 一模一样——用 peiwen 原版算法
+                # （pei_core.titles/desc_text，配文 core.py 原样搬来的）重写标题和描述。
+                # 素材没有就现场走 peiwen 抓取链补一份（pubwork.work，跟「生成素材」同源），
+                # 抓取失败才落回 copywriter 自己的 AI 版
+                try:
+                    import pubwork as _pw
+                    import pei_core as _pc
+                    _info = _pw.load_info(model)
+                    if not _info or not (_info.get("props") or []):
+                        try:
+                            _info = _pw.work(model, prog=lambda p, m: state.LOG.append("[文案] " + m))
+                        except Exception as _we:
+                            state.LOG.append("[文案] peiwen 抓取链未命中（%s），用内置算法" % _we)
+                            _info = None
+                    if _info and (_info.get("props") or []):
+                        # 2026-10-17 用户要求：卖点 3→6 条，挑最好的（AI 卖点优先按序取 6，
+                        # 不足 6 条由 desc_text 内部用本地卖点池自动补齐）
+                        _pts = [str(x).strip() for x in (res.get("points") or [])
+                                if str(x).strip()][:6]
+                        res["titles"] = _pc.titles(_info)
+                        res["desc_nat"] = _pc.desc_text(_info, "N", _pts or None)
+                        res["desc_rep"] = _pc.desc_text(_info, "B", _pts or None)
+                        res["desc_src"] = "peiwen"
+                        # 婷宝版窗口按品牌自动选话术版本（对齐 BAO-Ww/tingbao app.py
+                        # 「卡萨帝 -> 报备版(B)，其他 -> 全国版(N)」的自动设置逻辑）
+                        res["brand"] = str(_info.get("brand") or "").strip()
+                except Exception:
+                    pass
                 self._send(200, json.dumps(res, ensure_ascii=False))
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": "文案生成失败：%s" % e,
@@ -267,6 +295,116 @@ class ApiGetMixin:
             except Exception:
                 tok = None
             self._send(200, json.dumps({"token": tok}, ensure_ascii=False))
+            return
+
+        # ---------- 发布图工厂（2026-10-17，闲鱼配文 Pro 并入） ----------
+        if path == "/api/pubwork":
+            # 抓素材：本地已有 info.json 直接返回；没有则起后台线程走抓取链，前端轮询 /api/pubjob
+            q = urllib.parse.parse_qs(u.query)
+            model = (q.get("model") or [""])[0].strip()
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            import pubwork
+            info = pubwork.load_info(model)
+            if info and not (q.get("force") or ["0"])[0] in ("1", "true"):
+                self._send(200, json.dumps({"ok": True, "cached": True, "info": {
+                    "brand": info.get("brand"), "model": info.get("model"),
+                    "title": info.get("title") or info.get("pname"), "price": info.get("price"),
+                    "props": info.get("props") or [], "n_imgs": len(pubwork._img_files(info["dir"]))},
+                    "job": pubwork.job_state()}, ensure_ascii=False))
+                return
+            if pubwork.job_state()["running"]:
+                self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑"}, ensure_ascii=False))
+                return
+            pubwork._job_begin(model, "抓素材")
+            def _w():
+                try:
+                    inf = pubwork.work(model, prog=pubwork._job_prog)
+                    pubwork._save_info(inf)
+                    pubwork._job_prog(100, "素材就绪")
+                    pubwork._job_end(True)
+                except Exception as e:
+                    pubwork._job_end(False, str(e))
+            threading.Thread(target=_w, daemon=True).start()
+            self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
+            return
+
+        if path == "/api/publib":
+            q = urllib.parse.parse_qs(u.query)
+            model = (q.get("model") or [""])[0].strip()
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            import pubwork
+            self._send(200, json.dumps(pubwork.lib(model), ensure_ascii=False))
+            return
+
+        if path == "/api/pubai":
+            # AI 连接状态：ping=1 时真调一次 GLM（对齐闲鱼配文pro「AI 连接测试」按钮）
+            import copywriter
+            q = urllib.parse.parse_qs(u.query)
+            if (q.get("ping") or ["0"])[0] in ("1", "true"):
+                try:
+                    r = copywriter._chat("只输出两个字符：OK")
+                    ok = bool(r) and "OK" in str(r).upper()
+                    self._send(200, json.dumps({"ok": True, "ai": bool(copywriter._load_glm_key()),
+                                                "ping": "ok" if ok else "fail",
+                                                "raw": str(r)[:60]}, ensure_ascii=False))
+                except Exception as e:
+                    self._send(200, json.dumps({"ok": True, "ai": bool(copywriter._load_glm_key()),
+                                                "ping": "fail", "msg": str(e)[:120]}, ensure_ascii=False))
+                return
+            self._send(200, json.dumps({"ok": True, "ai": bool(copywriter._load_glm_key())},
+                                       ensure_ascii=False))
+            return
+
+        if path == "/api/pubjob":
+            import pubwork
+            self._send(200, json.dumps(pubwork.job_state(), ensure_ascii=False))
+            return
+
+        if path == "/api/xymenu":
+            # 2026-10-17：运行时菜单路由探测（CDP 在已登录 goofish 页里调 mtop 菜单接口），
+            # 用来把「改价/下架」指到真实的宝贝管理页；raw=菜单原始 JSON，routes_seen=嗅探到的 hash
+            try:
+                import xy_cdp
+                raw = xy_cdp.dump_menu()
+                self._send(200, json.dumps(
+                    {"ok": True, "raw": raw or "(没探到：先在软件里打开一次「数据」并登录)",
+                     "routes_seen": xy_cdp.routes_seen()}, ensure_ascii=False))
+            except Exception as e:
+                self._send(200, json.dumps({"ok": False, "msg": str(e)[:200]}, ensure_ascii=False))
+            return
+
+        if path.startswith("/pubimg/"):
+            # 发布图工厂静态图：/pubimg/<型号>/<文件> 或 /pubimg/<型号>/<子目录>/<文件>
+            import pubwork
+            core = urllib.parse.unquote(path[len("/pubimg/"):])
+            parts = core.split("/")
+            if not (2 <= len(parts) <= 3) or not all(parts) or any(
+                    (".." in p) or ("/" in p) or ("\\" in p) for p in parts):
+                self._send(403, b"forbidden", "text/plain; charset=utf-8")
+                return
+            fp = os.path.join(pubwork.sroot(), *parts)
+            root = os.path.abspath(pubwork.sroot())
+            if not os.path.abspath(fp).startswith(root) or not os.path.isfile(fp):
+                self._send(404, b"not found", "text/plain; charset=utf-8")
+                return
+            ext = os.path.splitext(fp)[1].lower()
+            ctype = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                     ".webp": "image/webp", ".bmp": "image/bmp"}.get(ext, "application/octet-stream")
+            with io.open(fp, "rb") as f:
+                raw = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                self.wfile.write(raw)
+            except Exception:
+                pass
             return
 
         self._send(404, json.dumps({"ok": False, "msg": "not found"}, ensure_ascii=False))

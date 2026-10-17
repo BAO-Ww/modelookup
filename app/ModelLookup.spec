@@ -22,6 +22,15 @@ datas = [
     (os.path.join(A, "midea_prices.json"), "assets"),
     (os.path.join(A, "ronshen_prices.json"), "assets"),
     (os.path.join(A, "icon.ico"), "assets"),
+    # 发布图工厂（2026-10-17 闲鱼配文 Pro 并入）：官网索引 + URL 种子（pei_core.res_path 读 assets/pei/）
+    (os.path.join(A, "pei", "haier_index.json"), "assets/pei"),
+    (os.path.join(A, "pei", "casarte_index.json"), "assets/pei"),
+    (os.path.join(A, "pei", "leader_index.json"), "assets/pei"),
+    (os.path.join(A, "pei", "xdjdy_index.json"), "assets/pei"),
+    (os.path.join(A, "pei", "site_urls_haier.txt"), "assets/pei"),
+    (os.path.join(A, "pei", "site_urls_casarte.txt"), "assets/pei"),
+    (os.path.join(A, "pei", "site_urls_leader.txt"), "assets/pei"),
+    (os.path.join(A, "pei", "site_urls_xdjdy.txt"), "assets/pei"),
 ]
 
 a = Analysis(
@@ -35,6 +44,10 @@ a = Analysis(
         "clr", "pythonnet", "clr_loader",
         # 促销首图合成（copywriter.make_featured）：主图 + 价格角标 PIL 拼图
         "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont",
+        # 发布图工厂（pei_ai9/pei_hero）：滤镜/统计/通道混合/增强
+        "PIL.ImageFilter", "PIL.ImageStat", "PIL.ImageChops", "PIL.ImageEnhance",
+        # goofish 内嵌自动化（xy_cdp，2026-10-17）：CDP 自动点「快速进入」+ 菜单路由探测
+        "websocket",
     ],
     hookspath=[],
     hooksconfig={},
