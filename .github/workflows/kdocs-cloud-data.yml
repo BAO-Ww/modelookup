@@ -38,4 +38,11 @@ jobs:
           CLOUD_TOKEN: ${{ secrets.CLOUD_TOKEN }}
           KX_SECRET: ${{ secrets.KX_SECRET }}
         run: |
-          & "$env:PY" .github/scripts/kdocs_cloud_pull.py
+          $ok = $false
+          foreach ($i in 1..3) {
+            & "$env:PY" .github/scripts/kdocs_cloud_pull.py
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "== 第 $i 次失败，60 秒后重试 =="
+            Start-Sleep -Seconds 60
+          }
+          if (-not $ok) { exit 1 }
