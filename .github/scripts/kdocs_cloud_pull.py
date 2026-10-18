@@ -55,10 +55,12 @@ def worker_req(path, method="GET", obj=None, timeout=120):
     """调 worker：优先 CLOUD_TOKEN（管理号登录态），失败再试 X-Cloud-Key。"""
     body = json.dumps(obj).encode("utf-8") if obj is not None else None
     last = "no auth"
-    for headers in (
-        {"X-Token": TOKEN} if TOKEN else [],
-        {"X-Cloud-Key": SECRET} if SECRET else [],
-    ):
+    creds = []
+    if TOKEN:
+        creds.append({"X-Token": TOKEN})
+    if SECRET:
+        creds.append({"X-Cloud-Key": SECRET})
+    for headers in creds:
         req = urllib.request.Request(CLOUD + path, data=body, method=method)
         for k, v in headers.items():
             req.add_header(k, v)
