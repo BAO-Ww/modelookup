@@ -375,7 +375,9 @@ def fetch_model_set():
 
 
 def main():
-    ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + 8 * 3600))   # 2026-10-14 带年份（跨年修复，与 app/yy_agg.py 同步改）
+    # 北京时间 = UTC+8，显式算（2026-10-18 修复：原 localtime+8 在云端 UTC 机器上正确，
+    # 挪到本机 self-hosted runner 后 localtime 已是北京时间，再加 8 就变成"未来时间"）
+    ts = time.strftime("%Y-%m-%d %H:%M", time.gmtime(time.time() + 8 * 3600))
     log("== 云端用友库存拉取 %s ==" % ts)
     recs = login_and_fetch()
     log("拉取完成：%d 行" % len(recs))
