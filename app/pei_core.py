@@ -343,9 +343,10 @@ def find_page(model, sites=("haier", "casarte", "leader"), log=None):
     for site in sites:
         if log:
             log("查 %s 本地型号库 ..." % BRAND_CN[site])
-        # xdjdy（渠道商城）：本地索引匹配 -> 在线搜索兜底，见 core_xdjdy.py
+        # xdjdy（渠道商城）：本地索引匹配 -> 在线搜索兜底（find_xdjdy 在 pei_xdjdy.py，
+        # 2026-10-19 修复：原 import core_xdjdy 是改名前残留，装版走到这就炸 No module named）
         if site == "xdjdy":
-            import core_xdjdy
+            import pei_xdjdy as core_xdjdy
             u = core_xdjdy.find_xdjdy(model, log=log)
             if u:
                 return "xdjdy", u
