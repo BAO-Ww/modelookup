@@ -71,7 +71,7 @@ from state import _tick, price_load, stock_load                           # noqa
 from payload import bootstrap, get_payload                                # noqa: E402
 from server import start_server                                           # noqa: E402
 from instance import (activate_existing, already_running,                 # noqa: E402
-                      any_live_instance, read_port, save_port)            # noqa: E402
+                      any_live_instance, read_port, save_port, BYPASSED)  # noqa: E402
 from appwin import _webview2_pv, warn_no_webview2                         # noqa: E402
 # 2026-10-11 Mac 端：窗口域按平台分发（Windows 走 appwin 不变，Mac 走 appwin_mac）
 if sys.platform == "darwin":
@@ -191,6 +191,7 @@ def main():
             activate_existing(z)
             return
         _tick("互斥量被僵尸实例占用（无任何应答），绕过单实例继续启动")
+        BYPASSED[0] = True                 # 托盘起来后气泡告知（2026-10-19）
     _tick("单实例检查通过")
 
     arg = None

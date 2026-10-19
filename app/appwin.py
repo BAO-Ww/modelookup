@@ -624,6 +624,17 @@ def run_app(httpd, port, startup_xlsx=None):
             bv.KeyPreview = True
             bv.KeyDown += _on_keydown
             _tick("托盘就绪：× / Ctrl+W 收进托盘，托盘双击恢复，右键退出")
+            # 2026-10-19：僵尸绕过启动时告知用户（否则静默双实例互踩数据没人知道）
+            try:
+                from instance import BYPASSED
+                if BYPASSED[0]:
+                    ni.BalloonTipTitle = "型号查询：检测到无响应的旧实例"
+                    ni.BalloonTipText = ("已有一个无响应的旧实例在后台（端口被占）。本次以独立模式启动，"
+                                         "两份数据可能互相覆盖；建议关机重启一次清掉旧实例。")
+                    ni.ShowBalloonTip(8000)
+                    state.LOG.append("⚠ 本次为僵尸绕过启动（旧实例无响应），建议重启电脑清理")
+            except Exception:
+                pass
         except Exception as e:
             _tick("托盘初始化失败（不影响其他功能）: %r" % e)
 
