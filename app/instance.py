@@ -14,6 +14,14 @@ from paths import wp
 #   这才是「打开要 5.9 秒」的真正原因（跟页面多大没关系）。
 #   改用命名互斥量：CreateMutexW 是瞬时的，进程退出系统自动释放。
 _MUTEX = None
+BYPASSED = [False]      # 2026-10-19：僵尸绕过发生时置 True，托盘起来后气泡告知用户
+
+
+def _direct_opener():
+    """直连 opener： localhost 握手绝不能走任何代理（环境变量/注册表代理都不吃）。
+    2026-10-19 双实例事故排查发现：urllib 默认会吃 http_proxy 环境变量，
+    代理一挂，对 127.0.0.1 的握手 ping 也被拖死。"""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def already_running():
@@ -77,23 +85,36 @@ def read_port():
 
 def activate_existing(port):
     """把一个已在跑的实例的窗口叫到前面来（连的是**在监听**的端口，秒回）。"""
+    op = _direct_opener()
     for path in ("/api/focus", "/api/ping"):
         try:
-            urllib.request.urlopen("http://%s:%d%s" % (HOST, port, path), timeout=1.5).read()
+            op.open("http://%s:%d%s" % (HOST, port, path), timeout=1.5).read()
             return True
         except Exception:
             continue
     return False
 
 
+def _ping_ok(port, timeout=1.2):
+    try:
+        _direct_opener().open("http://%s:%d/api/ping" % (HOST, port), timeout=timeout).read()
+        return True
+    except Exception:
+        return False
+
+
 def any_live_instance():
     """逐个端口找**活着的**实例（/api/ping 有应答才算活）。
     2026-10-10 实锤：实例会僵死（互斥量被占、端口在 LISTEN 但不 accept、
-    taskkill/Stop-Process 都杀不动，只能等重启）——这种不能算「已在运行」。"""
-    for p in PORTS:
-        try:
-            urllib.request.urlopen("http://%s:%d/api/ping" % (HOST, p), timeout=0.6).read()
-            return p
-        except Exception:
-            continue
+    taskkill/Stop-Process 都杀不动，只能等重启）——这种不能算「已在运行」。
+    2026-10-19 双实例事故加固：主实例忙时（payload 重建等 GIL 重活）0.6s×1 次的
+    判定会把健康实例误判成僵尸 → 静默开出第二实例互踩数据。改为 3 轮跨约 5 秒
+    重试，偶发忙不再误判；真僵死仍照旧绕过（BYPASSED 置位 → 托盘气泡告知）。"""
+    import time as _time
+    for attempt in range(3):
+        for p in PORTS:
+            if _ping_ok(p):
+                return p
+        if attempt < 2:
+            _time.sleep(1.4)
     return 0
