@@ -5742,46 +5742,73 @@ function pubStockWarn(){
 /* 2026-10-12：红条点击跳转（事件委托挂容器一次）：
    用户定稿方案A——点红条任意位置（含型号小牌、共N个），不填搜索框不跑查询，
    一次性把全部缺货商品卡列出来；之后正常搜索或点筛选即恢复常规列表 */
+/* 2026-10-20：不在总表的已发布型号 → 幽灵卡片（点黄条里的名字弹出来看+就地取消发布）。
+   总表里没数据（价格/库存/编码全无），卡片只亮发布记录自带的字段：
+   类型 / 闲鱼定价 / 价格口径 / 发布时间 / 闲鱼ID（复制·编辑宝贝·查看宝贝全活，委托绑定）。
+   取消发布按钮复用全局 data-mark 链路（管理号代管 / 自己的记录各走各的）。 */
+function ghostCardHTML(c){
+  var info = (SUBVIEW && SUBVIEW.info && SUBVIEW.info[c]) || (MARKED && MARKED[c]) || null;
+  var kind = info ? (info.k || 'l') : 'l';
+  var xs = info && info.xs ? info.xs : null;
+  var latest = null, lt = -1;
+  if (xs) for (var xk in xs){ var xe = xs[xk]; if (xe && (+xe.t || 0) >= lt){ lt = +xe.t || 0; latest = { k: xk, e: xe }; } }
+  var cs = info && info.cs ? info.cs : null;
+  var money = function(v){ return isNum(v) ? '¥' + Number(v).toLocaleString('zh-CN') : ''; };
+  var fmtT = function(t){ if (!t) return ''; var d = new Date(t * 1000); if (isNaN(d.getTime())) return '';
+    return (d.getMonth() + 1) + '-' + d.getDate() + ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); };
+  var xids = [];
+  if (xs) for (xk in xs){ var xe2 = xs[xk]; if (xe2 && xe2.xid != null) xids.push({ xy: String(xk).split('|')[0], xid: String(xe2.xid), t: +xe2.t || 0 }); }
+  xids.sort(function(a, b){ return b.t - a.t; });
+  var canUnmark = (SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0')
+    ? !!(AUTH && AUTH.role === 'admin')
+    : true;
+  var h = '<article class="card" style="border-color:#f0b9b3">';
+  h += '<h3 style="margin:0 0 6px">' + esc(c)
+     + ' <span style="font-size:12px;font-weight:600;color:#0f7b3a;background:#e6f6ec;border:1px solid #bfe3cd;border-radius:99px;padding:1px 8px;vertical-align:2px">已发布</span>'
+     + ' <span style="font-size:12px;font-weight:600;color:#d92d20;background:#fdeceb;border:1px solid #f0b9b3;border-radius:99px;padding:1px 8px;vertical-align:2px">⚠ 已不在价格总表</span></h3>';
+  h += '<div class="row"><label>发布类型</label><span class="v">' + (kind === 's' ? '样机' : '正品') + '</span></div>';
+  if (latest && isNum(latest.e.p)) h += '<div class="row"><label>闲鱼定价</label><span class="v mono" style="font-weight:600">' + money(latest.e.p) + '</span></div>';
+  if (cs) h += '<div class="row"><label>价格口径</label><span class="v">' + esc(cs.l || '') + (isNum(cs.v) ? ' ' + money(cs.v) : '') + '</span></div>';
+  if (lt > 0) h += '<div class="row"><label>发布时间</label><span class="v">' + fmtT(lt) + '</span></div>';
+  if (xids.length){
+    h += '<div class="row"><label>闲鱼ID</label><span class="v mono" style="font-weight:600;color:#0f7b3a">'
+       + xids.map(function(_xi){
+           return '<span data-xidcopy="' + esc(_xi.xid) + '" title="点一下复制这个闲鱼ID" style="cursor:pointer">'
+                + esc(_xi.xy) + '·' + esc(_xi.xid) + '</span>'
+                + (_xi.xid && /^\d{6,}$/.test(_xi.xid) && pok('xyops')
+                   ? ' <span data-xyview="' + esc('https://seller.goofish.com/?site=COMMONPRO#/seller-item/publish?itemId=' + encodeURIComponent(_xi.xid)) + '" data-acc="' + esc(_xi.xy || 'default') + '"'
+                   + ' title="软件内打开卖家中心编辑页（独立登录窗口）" style="margin-left:4px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px;cursor:pointer">编辑宝贝</span>'
+                   + ' <span data-xyview="' + esc('https://www.goofish.com/item?id=' + encodeURIComponent(_xi.xid)) + '" data-acc="' + esc(_xi.xy || 'default') + '"'
+                   + ' title="软件内打开买家页（买家搜到看到的样子）" style="margin-left:4px;font-size:11px;font-weight:600;color:#2e6be6;text-decoration:none;border:1px solid rgba(46,107,230,.35);border-radius:99px;padding:0 7px;line-height:16px;display:inline-block;vertical-align:1px;cursor:pointer">查看宝贝</span>'
+                   : '');
+         }).join(' · ')
+       + '</span></div>';
+  }
+  h += '<div style="margin-top:10px">'
+     + (canUnmark ? '<button class="markbtn" data-mark="' + esc(c) + '" style="color:#d92d20;border-color:#f0b9b3">取消发布</button>' : '')
+     + ' <span style="font-size:11.5px;color:#98a2b3">该型号已不在价格总表（成本/库存数据缺失），取消发布后不会再出现在任何提醒里。</span></div>';
+  h += '</article>';
+  return h;
+}
+function showGhostCard(c){
+  listEl.innerHTML = ghostCardHTML(c);
+  listEl.hidden = false; moreEl.hidden = true; cur = []; shown = 0;
+  hintEl.innerHTML = '不在总表的已发布型号（<a id="ghostback" style="cursor:pointer;text-decoration:underline">返回列表</a>）';
+  var _gb = document.getElementById('ghostback');
+  if (_gb) _gb.onclick = function(){ run(); };
+  window.scrollTo(0, 0);
+}
 (function(){
   var box = document.getElementById('pubwarn');
   if (!box) return;
   box.addEventListener('click', function(e){
     if (box.hidden) return;
     if (e.target.id === 'pubwarnx') return;              // 知道了按钮有自己的 onclick
-    /* 2026-10-20：不在总表的型号点名字直接取消标记（跟卡片「取消发布」同一条链路） */
+    /* 2026-10-20：不在总表的型号点名字 → 弹幽灵卡片（信息 + 就地取消发布） */
     var _nu = e.target.closest ? e.target.closest('.ntunm') : null;
     if (_nu){
-      var k = _nu.getAttribute('data-c');
-      if (SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0'){
-        if (!(AUTH && AUTH.role === 'admin')){ netToast('只有管理号能下架 TA 的记录'); return; }
-        if (!SUBVIEW.info[k]){ netToast('这条记录已经不在了'); pubStockWarn(); return; }
-        var _su = SUBVIEW.u;
-        if (!confirm('下架 ' + _su + ' 发布的「' + k + '」？TA 的这条发布记录会删掉')) return;
-        var _sxk = null, _sbt = -1;
-        var _sxs = SUBVIEW.info[k].xs || {};
-        for (var _x1 in _sxs){ var _e1 = _sxs[_x1] || {}; if ((+_e1.t || 0) >= _sbt){ _sbt = +_e1.t || 0; _sxk = _x1; } }
-        authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ u: _su, c: k, on: false, xy: _sxk }) }, true);
-        if (window._SUBPUB && _SUBPUB.all && _SUBPUB.all[_su]) delete _SUBPUB.all[_su][k];
-        delete SUBVIEW.info[k];
-        delete SUBVIEW.set[k];
-        updateLossBanner();
-        pubStockWarn();
-        run();
-        return;
-      }
-      if (MARKED[k]){
-        if (!confirm('取消发布「' + k + '」？发布记录和定价会一并清掉')) return;
-        if (markXys(k).length > 1){ openUnmarkPick(k); return; }   // 多号先问取消哪个
-        delete MARKED[k]; saveMarks();
-        delete PRICES[k]; savePrices();
-        pubPush(k, false);
-        updateLossBanner();
-        pubStockWarn();
-        run();
-        return;
-      }
-      netToast('这条没有可取消的发布记录'); pubStockWarn(); return;
+      showGhostCard(_nu.getAttribute('data-c'));
+      return;
     }
     var keys = PUBWARN_LOST || [];
     if (!keys.length) return;
