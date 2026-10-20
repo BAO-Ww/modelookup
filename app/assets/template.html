@@ -5724,12 +5724,17 @@ function pubStockWarn(){
     }
     var kind = m.k || (it && it.k === 's' ? 's' : 'l');
     var left = pubLeftOf((it && it.mo) || c, kind, it ? nameOf(it) : '', it ? it.code : '');   // 用型号查库存，别用记录键（变体码查不到）
-    if (left <= 0) lost.push({ c: c, s: c + '（' + (kind === 's' ? '样机' : '正品') + '）' });
+    if (left <= 0) lost.push({ c: c, s: c + '（' + (kind === 's' ? '样机' : '正品') + '）', nt: !it });
   });
   if (!lost.length){ box.hidden = true; box.innerHTML = ''; PUBWARN_LOST = []; return; }
   PUBWARN_LOST = lost;
   box.hidden = false;
-  box.innerHTML = '⚠ ' + (who ? '「' + esc(who) + '」已发布的型号' : '这些你已发布的型号') + '已经没库存了，记得下架（<b>共 ' + lost.length + ' 个</b>，点击本条全部列出）'
+  var _nt = [], _ok = [];
+  lost.forEach(function(l){ (l.nt ? _nt : _ok).push(l); });
+  box.innerHTML = '⚠ ' + (who ? '「' + esc(who) + '」已发布的型号' : '这些你已发布的型号') + '已经没库存了，记得下架（<b>共 ' + lost.length + ' 个</b>' + (_ok.length ? '，点击本条全部列出' : '') + '）'
+    + (_nt.length ? '<br>⚠ 其中有 <b>' + _nt.length + ' 个</b>已不在价格总表里（列表列不出）：'
+       + _nt.map(function(l){ return '<b>' + esc(l.c) + '</b>'; }).join('、') + ' —— 直接去闲鱼下架即可'
+       : '')
     + '<a id="pubwarnx">知道了</a>';
   var x = box.querySelector('#pubwarnx');
   if (x) x.onclick = function(){ box.hidden = true; };
