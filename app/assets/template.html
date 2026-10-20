@@ -5732,8 +5732,8 @@ function pubStockWarn(){
   var _nt = [], _ok = [];
   lost.forEach(function(l){ (l.nt ? _nt : _ok).push(l); });
   box.innerHTML = '⚠ ' + (who ? '「' + esc(who) + '」已发布的型号' : '这些你已发布的型号') + '已经没库存了，记得下架（<b>共 ' + lost.length + ' 个</b>' + (_ok.length ? '，点击本条全部列出' : '') + '）'
-    + (_nt.length ? '<br>⚠ 其中有 <b>' + _nt.length + ' 个</b>已不在价格总表里（列表列不出）：'
-       + _nt.map(function(l){ return '<b>' + esc(l.c) + '</b>'; }).join('、') + ' —— 直接去闲鱼下架即可'
+    + (_nt.length ? '<br>⚠ 其中有 <b>' + _nt.length + ' 个</b>已不在价格总表里（列表列不出），<b>点名字直接取消标记下架</b>：'
+       + _nt.map(function(l){ return '<b class="ntunm" data-c="' + esc(l.c) + '" style="cursor:pointer;text-decoration:underline;color:#d92d20">' + esc(l.c) + '</b>'; }).join('、')
        : '')
     + '<a id="pubwarnx">知道了</a>';
   var x = box.querySelector('#pubwarnx');
@@ -5748,6 +5748,41 @@ function pubStockWarn(){
   box.addEventListener('click', function(e){
     if (box.hidden) return;
     if (e.target.id === 'pubwarnx') return;              // 知道了按钮有自己的 onclick
+    /* 2026-10-20：不在总表的型号点名字直接取消标记（跟卡片「取消发布」同一条链路） */
+    var _nu = e.target.closest ? e.target.closest('.ntunm') : null;
+    if (_nu){
+      var k = _nu.getAttribute('data-c');
+      if (SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0'){
+        if (!(AUTH && AUTH.role === 'admin')){ netToast('只有管理号能下架 TA 的记录'); return; }
+        if (!SUBVIEW.info[k]){ netToast('这条记录已经不在了'); pubStockWarn(); return; }
+        var _su = SUBVIEW.u;
+        if (!confirm('下架 ' + _su + ' 发布的「' + k + '」？TA 的这条发布记录会删掉')) return;
+        var _sxk = null, _sbt = -1;
+        var _sxs = SUBVIEW.info[k].xs || {};
+        for (var _x1 in _sxs){ var _e1 = _sxs[_x1] || {}; if ((+_e1.t || 0) >= _sbt){ _sbt = +_e1.t || 0; _sxk = _x1; } }
+        authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ u: _su, c: k, on: false, xy: _sxk }) }, true);
+        if (window._SUBPUB && _SUBPUB.all && _SUBPUB.all[_su]) delete _SUBPUB.all[_su][k];
+        delete SUBVIEW.info[k];
+        delete SUBVIEW.set[k];
+        updateLossBanner();
+        pubStockWarn();
+        run();
+        return;
+      }
+      if (MARKED[k]){
+        if (!confirm('取消发布「' + k + '」？发布记录和定价会一并清掉')) return;
+        if (markXys(k).length > 1){ openUnmarkPick(k); return; }   // 多号先问取消哪个
+        delete MARKED[k]; saveMarks();
+        delete PRICES[k]; savePrices();
+        pubPush(k, false);
+        updateLossBanner();
+        pubStockWarn();
+        run();
+        return;
+      }
+      netToast('这条没有可取消的发布记录'); pubStockWarn(); return;
+    }
     var keys = PUBWARN_LOST || [];
     if (!keys.length) return;
     var res = [];
