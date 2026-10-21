@@ -3495,7 +3495,11 @@ ptEl.addEventListener('change', function(e){
 /* 进入「看自己的发布」：拉自己的云端记录塞进 SUBVIEW（u='0'=自己），复用子用户发布的
    顶栏/筛选/卡片渲染；管理号和子账号同一条路（/pub 按登录账号走，天然各看各的） */
 function enterSelfPub(chip){
-  authFetch('/pub').then(function(j){
+  /* 2026-10-21 用户实锤「点已发布要等好几秒」：原来每次点都先等 /pub 网络往返才渲染，
+     几秒全耗在云端一趟上。改成缓存优先——本会话拉过一次就用缓存立刻进视图（秒开），
+     同时后台静默对账，云端数据真变了才重画（顺带保住用户在视图里选的筛选状态）。
+     首次进（无缓存）仍走网络 */
+  var _apply = function(j){
     if (!j || !j.ok){ if (chip) chip.classList.remove('on'); BANNER_MODE = ''; BANNER_RES = null; run(); return; }
     /* 2026-10-09 修「看 TB 的发布变 0 个」：写 _SELF_PUB（自己那份），绝不覆盖
        _SUBPUB（/puball 子账号整包）——之前覆盖后管理号再选 TB 全取不到 */
@@ -3509,7 +3513,22 @@ function enterSelfPub(chip){
     try { localStorage.setItem(HIDE_KEY, '0'); } catch(e){}
     showSubRec('0');
     if (chip) chip.classList.add('on');
-  }).catch(function(){ if (chip) chip.classList.remove('on'); });
+  };
+  if (window._SELF_PUB){
+    _apply({ ok: true, marks: window._SELF_PUB.all[0], prices: window._SELF_PUB.prices[0] });
+    var _same = function(j){
+      try {
+        return JSON.stringify((j && j.marks) || {}) === JSON.stringify(window._SELF_PUB.all[0] || {})
+            && JSON.stringify((j && j.prices) || {}) === JSON.stringify(window._SELF_PUB.prices[0] || {});
+      } catch(e){ return true; }
+    };
+    authFetch('/pub').then(function(j){
+      if (!j || !j.ok || _same(j)) return;   // 云端没变就不动视图，筛选状态不白选
+      _apply(j);
+    }).catch(function(){});
+    return;
+  }
+  authFetch('/pub').then(_apply).catch(function(){ if (chip) chip.classList.remove('on'); });
 }
 function exitSelfPub(){
   SUBVIEW = null;
