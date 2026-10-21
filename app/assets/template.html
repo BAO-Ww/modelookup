@@ -2201,11 +2201,10 @@ function subHeaderHTML(){
        + (selXy ? esc(selXy) + ' ' : '') + _countSet() + ' 个型号' + (selXy ? ' / 共 ' + Object.keys(SUBVIEW.set).length + ' 个' : '') + '）</b>'
        + '<a href="javascript:void 0" id="subexit" title="退出查看" style="display:inline-block;margin-left:8px;padding:1px 9px;border-radius:9px;font-size:12px;cursor:pointer;background:#eef1f6;color:#475467;">退出</a>'
        + _chip('', '全部') + _chip('l', '正品') + _chip('s', '样机')
-       + _tchip('fns', '没库存', '只看没库存的（正品看正品仓、样机看样机仓）')
-       + _tchip('floss', '亏钱', '只看按当前口径算要亏了的（定价 < 成本，口径跟卡片上选的一致）')
-       /* 2026-10-21 用户要求：闲鱼ID筛选——有ID=已备注闲鱼宝贝的，没ID=还没备注的。
-          三态互斥（再点一下取消回全部）；选了「闲鱼号」筛选时按那个号名下的记录判 */
-       + _xchip('has', '有ID', '只看已备注闲鱼ID的型号')
+       + _tchip('fns', '没库存', '只看没库存的（正品看正品仓、样机看样机仓；和亏钱互斥）')
+       + _tchip('floss', '亏钱', '只看按当前口径算要亏了的（定价 < 成本，口径跟卡片上选的一致；和没库存互斥）')
+       /* 2026-10-21 用户定稿：闲鱼ID筛选只留「没ID」——没备注的就是该补的清单，
+          「有ID」没必要单独看（默认列表里本来就有）。选了闲鱼号时按那个号名下的记录判 */
        + _xchip('no', '没ID', '只看还没备注闲鱼ID的型号（该补备注了）');
   /* 管理号自己的显示选项：卡片上「闲鱼定价/发布于」小字看不看（=「我的显示开关」里的
      「发布卡片显示闲鱼定价/发布时间」，同一份设置，这里给个快捷开关，2026-10-09） */
@@ -2318,8 +2317,12 @@ document.getElementById('hint').addEventListener('click', function(e){
     return;
   }
   var st = (e.target && e.target.getAttribute) ? e.target.getAttribute('data-st') : null;
-  if (st != null && SUBVIEW){                        // 没库存/亏钱 开关胶囊
+  if (st != null && SUBVIEW){                        // 没库存/亏钱 开关胶囊（2026-10-21 用户定稿：互斥，开一个自动关另一个）
     SUBVIEW[st] = !SUBVIEW[st];
+    if (SUBVIEW[st]){
+      if (st === 'fns') SUBVIEW.floss = false;
+      if (st === 'floss') SUBVIEW.fns = false;
+    }
     run();
     return;
   }
