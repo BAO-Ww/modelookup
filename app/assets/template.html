@@ -3071,7 +3071,21 @@ function allFiltered(){
     /* 「全部」浏览模式（点了品牌/品类/方式的「全部」）：一张不藏、条数不设上限 */
     if (pass(it) && (curBrowseAll || !isBlankCard(it))) hit.push({ sc: 0, it: it, ix: -1 });
   }
-  hit.sort(function(a,b){ return a.it.c.length - b.it.c.length || (a.it._n < b.it._n ? -1 : a.it._n > b.it._n ? 1 : 0); });
+  /* 2026-10-21 用户定稿：「已发布」视图（自看 u='0' / 管理号看子账号）按标记时间降序——
+     最新标的排最上面，越早发的越靠后。时间口径 = SUBVIEW.info[c].t（该型号最新一次
+     标记/改价/重标的 ts）。退出已发布回正常浏览恢复型号名排序，搜索仍按匹配度。 */
+  if (SUBVIEW && SUBVIEW.u != null){
+    var _mt = function(c){
+      var iv = SUBVIEW.info && SUBVIEW.info[c];
+      if (iv && iv.t) return +iv.t || 0;
+      var m = MARKED[c];
+      if (m && m.xys){ var _mx = 0; for (var _xk in m.xys){ var _e = m.xys[_xk] || {}; if ((+_e.t || 0) > _mx) _mx = +_e.t; } return _mx; }
+      return 0;
+    };
+    hit.sort(function(a,b){ return _mt(b.it.c) - _mt(a.it.c) || a.it.c.length - b.it.c.length || (a.it._n < b.it._n ? -1 : a.it._n > b.it._n ? 1 : 0); });
+  } else {
+    hit.sort(function(a,b){ return a.it.c.length - b.it.c.length || (a.it._n < b.it._n ? -1 : a.it._n > b.it._n ? 1 : 0); });
+  }
   return hit;
 }
 
