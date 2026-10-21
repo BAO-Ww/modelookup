@@ -1091,6 +1091,99 @@ def desc_text(info, version, points=None):
     return "\n".join(lines)
 
 
+# ---------- 文案新口径 v2（2026-10-21，用户另一会话定稿「调整洗衣机首图文案」） ----------
+# 标题三档全闲鱼话术角度（全新未拆/样机清仓/特价处理），结构=品牌+卖点+型号，
+# 品牌开头、型号收尾；正文一话一行 + 结尾承诺句，不带【参数】【官网价】【交易】和发货句。
+# 卖点短语全部取自抓到的真实参数（容量/核心功能/能效/噪音/面板），取不到就留空 —— 防编造。
+
+def _v2_sellsets(info):
+    """v2 标题用的三组卖点短语：s1=容量+核心功能+类型（主推）、s2=变频+能效、
+    s3=面板材质+噪音静音。全部来自真实参数/标题，取不到返回空串由调用方兜底。
+    注意：core_feature 最后有品类通用词兜底（冰箱→风冷无霜等）——没 props 撑腰
+    就是编造，v2 里 props 为空时禁用（宁可标题短也不上空话，2026-10-21）。"""
+    cap = capacity_str(info) or ""
+    tw = type_word(info) or ""
+    feat = (core_feature(info) or "") if (info.get("props") or []) else ""
+    s1 = (cap + feat + tw).strip()
+    pd = prop_dict(info.get("props") or [])
+    s2 = ""
+    _inv = ""
+    for k, v in pd.items():
+        ks, vs = str(k), str(v)
+        if "变频" in ks:
+            if "定频" in vs or vs in ("否", "无"):
+                _inv = "定频"
+            elif vs in ("是", "直流变频", "全自动变频") or "变频" in vs:
+                _inv = "变频"
+    _ee = str(pd.get("能效等级") or pd.get("能效") or "").strip()
+    if _ee:
+        _ee = _ee.replace("1", "一").replace("2", "二").replace("3", "三")
+        s2 = _inv + (_ee if "能效" in _ee else _ee + "能效")
+    elif _inv:
+        s2 = _inv
+    s3 = ""
+    _db = str(pd.get("噪音") or pd.get("噪声") or "").strip()
+    if _db:
+        _num = re.sub(r"[^0-9.]", "", _db)
+        if _num:
+            s3 = _num + "分贝静音"
+    _panel = str(pd.get("面板材质") or "").strip()
+    if _panel and _panel not in ("无", "否"):
+        s3 = (_panel + s3) if s3 else _panel
+    return s1, s2, s3
+
+
+def titles_v2(info, kind='l'):
+    """v2 标题（用户 2026-10-21 定稿）：三档闲鱼话术，品牌+卖点+型号。
+    l：全新未拆封 / 展示样机清仓 / 全新低价出；s：展示样机 / 样机清仓特惠 / 样机特价。"""
+    b = (info.get("brand") or "海尔").strip()
+    model = (info.get("model") or "").strip()
+    s1, s2, s3 = _v2_sellsets(info)
+
+    def join(*parts):
+        return " ".join(p for p in parts if p)
+
+    def clip(s, n=60):
+        s = re.sub(r"\s+", " ", str(s)).strip()
+        if len(s) <= n:
+            return s
+        c = s[:n]
+        if " " in c:
+            c = c[:c.rfind(" ")]
+        return c.rstrip()
+
+    if kind == 's':
+        v1 = join(b, "展示样机", s1, model)
+        v2t = join(b, "样机清仓特惠", s2 or s1, model)
+        v3 = join(b, s3 or s1, "样机特价", model)
+    else:
+        v1 = join(b, "全新未拆封", s1, model)
+        v2t = join(b, "展示样机清仓", s2 or s1, model)
+        v3 = join(b, s3 or s1, "全新低价出", model)
+    return [clip(x) for x in (v1, v2t, v3)]
+
+
+def desc_v2(info, kind='l', points=None):
+    """v2 正文（用户 2026-10-21 定稿）：一话一行卖点 + 结尾承诺句，
+    不带【参数】【官网价】【交易】和可发货地区（发货句用户明确不要）。"""
+    brand = (info.get("brand") or "海尔").strip()
+    model = (info.get("model") or "").strip()
+    title = (info.get("title") or "").strip()
+    head = title if title.startswith(brand) else brand + title
+    lines = ["【%s】" % head if (model and model in head)
+             else "【%s】型号 %s" % (head, model), ""]
+    sp = [str(x).strip() for x in (points or []) if str(x).strip()][:6]
+    if not sp:
+        sp = [str(x).strip() for x in sellpoints(info) if str(x).strip()][:6]
+    lines.extend(sp)
+    lines.append("")
+    if kind == 's':
+        lines.append("展示样机，功能完好，%s全国联保，支持到货验货，破损可拒收。" % brand)
+    else:
+        lines.append("全新未拆封，%s全国联保，支持到货验货，破损可拒收。" % brand)
+    return "\n".join(lines)
+
+
 # ★ 关窗时用来强制掐断「启动探测」的连接。
 # 背景（2026-09-29）：_ai_indicator_init 在后台 daemon 线程里跑 zhipu_test，
 # 若关窗时它正卡在 SSL recv（沙箱/代理下 urlopen 的 timeout 覆盖不到握手与读，

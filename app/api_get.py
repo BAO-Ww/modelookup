@@ -47,6 +47,7 @@ class ApiGetMixin:
             kind = (q.get("kind") or ["l"])[0]
             force = (q.get("force") or ["0"])[0] in ("1", "true")
             openfolder = (q.get("open") or ["0"])[0] in ("1", "true")
+            style = (q.get("style") or [""])[0]   # v2=文案新口径（2026-10-21 显示开关）
             if not model:
                 self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
                 return
@@ -69,6 +70,7 @@ class ApiGetMixin:
                 # （pei_core.titles/desc_text，配文 core.py 原样搬来的）重写标题和描述。
                 # 素材没有就现场走 peiwen 抓取链补一份（pubwork.work，跟「生成素材」同源），
                 # 抓取失败才落回 copywriter 自己的 AI 版
+                _info = None
                 try:
                     import pubwork as _pw
                     import pei_core as _pc
@@ -96,6 +98,38 @@ class ApiGetMixin:
                         res["brand"] = str(_info.get("brand") or "").strip()
                 except Exception:
                     pass
+                # 文案新口径 v2（2026-10-21 显示开关「文案新口径」控制）：标题三档
+                # 闲鱼话术（品牌+卖点+型号）+ 正文一行一句带承诺句。
+                # peiwen 素材命中 → 用 props 组装；未命中 → 用 copywriter 抓到的
+                # 真实数据兜底（品牌从商品名识别、卖点用 AI 已过防编造校验的那批）
+                if style == "v2":
+                    try:
+                        _kk2 = 's' if kind == 's' else 'l'
+                        if _info and (_info.get("props") or []):
+                            res["titles"] = _pc.titles_v2(_info, _kk2)
+                            _v2p = [str(x).strip() for x in (res.get("points") or [])
+                                    if str(x).strip()][:6]
+                            _dv2 = _pc.desc_v2(_info, _kk2, _v2p or None)
+                        else:
+                            from normalize import norm_model as _nm2
+                            _pn = str(res.get("pname") or "")
+                            _brand = ""
+                            for _b in ("卡萨帝", "统帅", "Leader", "海尔"):
+                                if _b in _pn:
+                                    _brand = _b
+                                    break
+                            _fi = {"brand": _brand or "海尔",
+                                   "model": _nm2(res.get("model") or "") or str(res.get("model") or ""),
+                                   "title": _pn, "props": [], "cat": ""}
+                            res["titles"] = _pc.titles_v2(_fi, _kk2)
+                            _v2p = [str(x).strip() for x in (res.get("points") or [])
+                                    if str(x).strip()][:6]
+                            _dv2 = _pc.desc_v2(_fi, _kk2, _v2p or None)
+                        res["desc_nat"] = _dv2
+                        res["desc_rep"] = _dv2
+                        res["copy_style"] = "v2"
+                    except Exception:
+                        pass
                 self._send(200, json.dumps(res, ensure_ascii=False))
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": "文案生成失败：%s" % e,
