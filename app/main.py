@@ -94,6 +94,53 @@ except Exception:
 
 _tick("常量区/埋点就绪")
 
+# ------------------------------------------------------------------ 崩溃留痕（2026-10-21）
+# 「无声退出」三大通道全覆盖（此前 Windows 只有启动期 MessageBox，运行期死了无据可查）：
+#   ① sys.excepthook        主线程未捕获异常（webview.start 内抛出等）
+#   ② threading.excepthook  子线程未捕获异常（本地 HTTP 服务 / 云端同步循环都是子线程）
+#   ③ faulthandler          native 段错误（WebView2/pythonnet 层 access violation）
+#                           —— 进程被硬崩带走前把 Python 栈 dump 到 crash_fa.log
+# 统一追加写工作目录 crash.log（与 Mac 同名同位），带时间戳/版本，fail-safe 绝不二次炸。
+def _crash_log(tag, text):
+    try:
+        import datetime
+        with io.open(wp("crash.log"), "a", encoding="utf-8") as _cf:
+            _cf.write("[%s] %s v%s — %s\n%s\n"
+                      % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                         APP_NAME, APP_VERSION, tag, text))
+    except Exception:
+        pass
+
+def _excepthook(tp, val, tb):
+    _crash_log("主线程未捕获异常", "".join(traceback.format_exception(tp, val, tb)))
+    try:
+        sys.__excepthook__(tp, val, tb)     # 原有行为原样保留
+    except Exception:
+        pass
+
+def _thread_hook(args):
+    try:
+        _tname = getattr(getattr(args, "thread", None), "name", "?")
+    except Exception:
+        _tname = "?"
+    _crash_log("子线程未捕获异常(thread=%s)" % _tname,
+               "".join(traceback.format_exception(args.exc_type, args.exc_value,
+                                                  args.exc_traceback)))
+
+try:
+    sys.excepthook = _excepthook
+    import threading
+    threading.excepthook = _thread_hook
+except Exception:
+    pass
+# faulthandler：需要文件对象常开，单独落 crash_fa.log（硬崩 dump，与文本日志分开）
+try:
+    import faulthandler
+    _fh_file = io.open(wp("crash_fa.log"), "w", encoding="utf-8", errors="ignore")
+    faulthandler.enable(_fh_file)
+except Exception:
+    pass
+
 
 def _wipe_stale_local():
     """2026-10-15 用户定稿：版本更新后第一次启动，清掉会串版本的旧状态再起。
@@ -425,6 +472,11 @@ if __name__ == "__main__":
                 import ctypes
                 ctypes.windll.user32.MessageBoxW(None, traceback.format_exc(),
                                                  APP_NAME + " 启动失败", 0x10)
+            except Exception:
+                pass
+            # 崩溃留痕（2026-10-21）：Windows 也落盘——弹窗点掉就没了，文件还在
+            try:
+                _crash_log("启动失败(main抛异常)", traceback.format_exc())
             except Exception:
                 pass
             # Mac 端（2026-10-11）：没有 MessageBox，落 crash.log 兜底可查
