@@ -948,7 +948,18 @@ prunePrices();   // 开机先清一遍：没点标记已发布的价一律不留
     if (Object.keys(old).length) pairs[i][2](old);
   }
 })();
-function saveMarks(){ save(MARK_KEY, MARKED); }
+function saveMarks(){ save(MARK_KEY, MARKED); syncSelfPubCache(); }
+/* 2026-10-21 已发布「缓存优先」改造配套（用户问「会不会影响到我标记的」）：
+   标记/取消/改价的瞬间把 _SELF_PUB 缓存同步上——点「已发布」秒开时一定包含刚标的型号，
+   不会因为缓存里还没有而漏显。本地 MARKED 是自己账号操作的事实源；后台对账仍以云端为
+   准（其他设备的改动照样会被纠正回来） */
+function syncSelfPubCache(){
+  try {
+    if (!window._SELF_PUB || !window._SELF_PUB.all) return;
+    window._SELF_PUB.all[0] = JSON.parse(JSON.stringify(MARKED || {}));
+    if (window._SELF_PUB.prices) window._SELF_PUB.prices[0] = JSON.parse(JSON.stringify(PRICES || {}));
+  } catch(e){}
+}
 /* ---------- 发布记录云端化（跟账号走，换电脑登录也在） ----------
    KV 存 pub_<账号>；登录后整包合并一次，之后每标记/取消一条即时推一条。 */
 function draftCs(c){
@@ -1039,7 +1050,7 @@ function syncMarks(){
       }
     });
 }
-function savePrices(){ save(PRICE_KEY, PRICES); priceSyncSoon(); }
+function savePrices(){ save(PRICE_KEY, PRICES); priceSyncSoon(); syncSelfPubCache(); }
 /* 定价上云不再挑「已标记发布」的型号 —— 本地一变就整包推 /pubsync；
    防抖 2.5s，打字/连续点击不会一格一包（worker 端已改成全量收）。
    xyp（2026-10-12 多闲鱼号）：改过的型号把各号现价一并带上，worker 只改已存在的标记 */
