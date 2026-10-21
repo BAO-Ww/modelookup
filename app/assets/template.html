@@ -958,6 +958,22 @@ function syncSelfPubCache(){
     if (!window._SELF_PUB || !window._SELF_PUB.all) return;
     window._SELF_PUB.all[0] = JSON.parse(JSON.stringify(MARKED || {}));
     if (window._SELF_PUB.prices) window._SELF_PUB.prices[0] = JSON.parse(JSON.stringify(PRICES || {}));
+    /* 2026-10-21 晚实锤（用户截图：ID 填了「没ID」筛选还数它）：SUBVIEW.info 是进视图
+       那刻从缓存拷的一次性快照，只刷缓存不刷快照，筛选/排序/成员名单全读旧值。
+       自看视图正开着就把 set/info 原地重建（u/disp/筛选状态都保留），run() 一跑就新 */
+    if (SUBVIEW && SUBVIEW.u === '0'){
+      var _m = window._SELF_PUB.all[0] || {}, _p = (window._SELF_PUB.prices || {})[0] || {};
+      var _set = {}, _info = {};
+      Object.keys(_m).forEach(function(_k){
+        _set[_k] = 1;
+        _info[_k] = { t: tsOf(_m[_k]), k: (typeof _m[_k] === 'object' && _m[_k]) ? _m[_k].k : null, p: _p[_k],
+                      xs: (typeof _m[_k] === 'object' && _m[_k] && _m[_k].xys) ? _m[_k].xys : null,
+                      cs: (typeof _m[_k] === 'object' && _m[_k] && _m[_k].cs) || null,
+                      bn: (typeof _m[_k] === 'object' && _m[_k] && _m[_k].bn) || null,
+                      nat: (typeof _m[_k] === 'object' && _m[_k]) ? _m[_k].nat : null };
+      });
+      SUBVIEW.set = _set; SUBVIEW.info = _info;
+    }
   } catch(e){}
 }
 /* ---------- 发布记录云端化（跟账号走，换电脑登录也在） ----------
