@@ -3944,6 +3944,26 @@ function openPickKind(k, recKey){
     var _kd = m.querySelector('#kindxiddel');
     if (_kd) _kd.hidden = !_x0;
   }
+  /* 切号联动 ID 框（2026-10-21 TB 两号同 ID 实锤）：切到哪个号，ID 框就换成那个号
+     自己已有记录的 ID（取最新一条），没有就清空——绝不能把上一个号的 ID 留在框里，
+     确认时抄到新号上。xyName=null（手输新号）一律清空 */
+  function syncXidBox(xyName){
+    var _kx2 = m.querySelector('#kindxid');
+    if (!_kx2) return;
+    var _nid = null;
+    if (xyName && MARKED[k] && MARKED[k].xys){
+      var _cands = [];
+      for (var _nk0 in MARKED[k].xys){
+        if (String(_nk0).split('|')[0] !== xyName) continue;
+        var _ne = MARKED[k].xys[_nk0] || {};
+        if (_ne.xid != null) _cands.push([+_ne.t || 0, String(_ne.xid)]);
+      }
+      if (_cands.length){ _cands.sort(function(a,b){ return b[0] - a[0]; }); _nid = _cands[0][1]; }
+    }
+    _kx2.value = _nid || '';
+    var _kd2 = m.querySelector('#kindxiddel');
+    if (_kd2) _kd2.hidden = !_nid;
+  }
   m.addEventListener('click', function(e){
     /* 弹窗里的删除键（2026-10-14）：删这条记录的闲鱼ID——本地+云端（xid:null）同步清，弹窗留着继续改价 */
     var kxd = e.target.closest ? e.target.closest('[data-kxdel]') : null;
@@ -3979,12 +3999,14 @@ function openPickKind(k, recKey){
         _prevXy = curXy;                   // 记住来路，「返回」回到原来选中的号
         curXy = '__input__';
         var _kr2 = m.querySelector('#kindkkrow'); if (_kr2) _kr2.innerHTML = kindRowHTML();
+        syncXidBox(null);                  // 手输新号 = 全新记录，ID 框清空
         return;
       }
       if (xyb.getAttribute('data-xy') === '__back'){
         curXy = _prevXy || '默认';
         m.querySelector('#kindxyrow').innerHTML = xyChipHTML();
         var _kr3 = m.querySelector('#kindkkrow'); if (_kr3) _kr3.innerHTML = kindRowHTML();
+        syncXidBox(curXy);
         return;
       }
       curXy = xyb.getAttribute('data-xy');
@@ -3994,6 +4016,7 @@ function openPickKind(k, recKey){
       });
       var _kr = m.querySelector('#kindkkrow');   // 切号 = 换一条发布记录，口径选中态跟着重画
       if (_kr) _kr.innerHTML = kindRowHTML();
+      syncXidBox(curXy);
       return;
     }
     var b = e.target.closest ? e.target.closest('[data-kk]') : null;
@@ -4028,7 +4051,9 @@ function openPickKind(k, recKey){
       var _e0 = cur.xys[_k0] || {};
       if (String(_k0).split('|')[0] === xy && (_e0.k === 's' ? 's' : 'l') === kk){ _rk = _k0; break; }
     }
-    var _mig = (recKey && recKey !== _rk) ? recKey : null;   // 编辑态落在别的键 = 搬家，老键要删
+    /* 2026-10-21 TB 实锤补丁：搬家只限「同号换口径」——recKey 的号名段 ≠ 当前选的号 =
+       用户在弹窗里切了号 = 新发一条，老号记录原样保留（老键一删，老号的宝贝记录就丢了） */
+    var _mig = (recKey && recKey !== _rk && String(recKey).split('|')[0] === xy) ? recKey : null;   // 编辑态落在同号别的键 = 搬家，老键要删
     /* 闲鱼ID（2026-10-13）：弹窗填了用新值；留空保留这条原本的ID（改价不抹ID） */
     var _xidv = String((m.querySelector('#kindxid') || {}).value || '').trim().slice(0, 40);
     var _oldxid = cur.xys[_rk] && cur.xys[_rk].xid != null ? String(cur.xys[_rk].xid) : null;
