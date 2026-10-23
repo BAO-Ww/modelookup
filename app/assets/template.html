@@ -532,7 +532,7 @@ footer a:hover{text-decoration:underline}
       <!-- 吸顶条（2026-10-13 三改）：闲鱼号 + 价格类型 + 四个开关（从侧栏挪回来） -->
       <div class="stickhead" id="stickhead">
       <div class="topbar" id="ptbar">
-        <span class="tlbl">闲鱼号</span>
+        <span id="xyseg" style="display:none"><span class="tlbl">闲鱼号</span>
         <select id="xysel" title="只看标记到这个闲鱼号名下的型号（全部=不按号筛）"
                 style="max-width:130px;padding:5px 8px;border:1px solid #d7dce6;border-radius:8px;font-size:12.5px;background:#fff;outline:0;color:#333">
           <option value="">全部</option>
@@ -543,7 +543,7 @@ footer a:hover{text-decoration:underline}
         <!-- 闲鱼宝贝数据（2026-10-17 用户定稿）：只留数据入口（后台入口 15:47 删），主区内嵌显示不开小窗；
              权限键 xysj（账号管理里勾），显隐在 applyPermBar 管 -->
         <button id="xysjbtn" hidden title="在主区里打开闲鱼宝贝数据（数据管家，内嵌显示；再点一次收起）"
-                style="padding:4px 10px;border:1px solid #c6d8ff;border-radius:8px;font-size:12px;background:#eaf1ff;color:#2e6be6;cursor:pointer;font-weight:600;white-space:nowrap;flex:none">数据</button>
+                style="padding:4px 10px;border:1px solid #c6d8ff;border-radius:8px;font-size:12px;background:#eaf1ff;color:#2e6be6;cursor:pointer;font-weight:600;white-space:nowrap;flex:none">数据</button></span>
         <span class="tsep"></span>
         <span class="tlbl">价格类型</span>
         <button class="chip" data-pt="tax"     title="只有价格含税，没有滞销/样机清理价">含税</button>
@@ -720,6 +720,7 @@ document.addEventListener('click', function(e){
 (function(){
   var lu = null; try { lu = localStorage.getItem('ml_lastuser'); } catch(e){}
   var au = ''; try { var a = JSON.parse(localStorage.getItem('ml_auth') || 'null'); au = (a && a.u) || ''; } catch(e){}
+  window.__ML_U = au;   /* 本机当前账号：MARK/PRICE/IMG 本地键按账号分家（2026-10-23 串号根治） */
   if (lu !== au){
     try {
       ['xy2-published', 'xy2-prices', 'xy2-imgs', 'xy-published-v1', 'xy-prices-v1', 'xy-imgs-v1']
@@ -729,10 +730,12 @@ document.addEventListener('click', function(e){
     if (lu !== null) location.reload(); // 首次部署只写标记不刷；真换了账号才刷
   }
 })();
-var MARK_KEY = 'xy2-published';
+/* 2026-10-23 串号根治：发布/价格/补图三个本地键按账号分家（配合登录成功整页刷新）。
+   旧的全账号共用键 xy2-published 等在上面 IIFE 里清掉，不迁移（云端才是事实源） */
+var MARK_KEY = 'xy2-published_' + (window.__ML_U || '__anon__');
 var HIDE_KEY = 'xy2-hidemarked';
-var PRICE_KEY = 'xy2-prices';
-var IMG_KEY = 'xy2-imgs';
+var PRICE_KEY = 'xy2-prices_' + (window.__ML_U || '__anon__');
+var IMG_KEY = 'xy2-imgs_' + (window.__ML_U || '__anon__');
 function load(k, d){ try { var v = JSON.parse(localStorage.getItem(k)); return v && typeof v === 'object' ? v : d; } catch(e){ return d; } }
 function save(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
 var MARKED = load(MARK_KEY, {});
@@ -884,8 +887,8 @@ var PRICES = load(PRICE_KEY, {});
 var MYIMGS = load(IMG_KEY, {});
 /* 补图归属（2026-10-12）：myimgs 是公共池，同步下来人人都有；× 删图钮只给
    「本人补的」和「管理号（sys 整库图除外）」，旧数据 __legacy__ 也只有管理号能删 */
-var MYIMGOWN = load('xy2-imgown', {});
-function saveMyImgOwn(){ save('xy2-imgown', MYIMGOWN); }
+var MYIMGOWN = load('xy2-imgown_' + (window.__ML_U || '__anon__'), {});
+function saveMyImgOwn(){ save('xy2-imgown_' + (window.__ML_U || '__anon__'), MYIMGOWN); }
 /* 成本口径（2026-10-13 用户定稿终版）：**只认云端**——口径存在发布记录 MARKED[c].cs
    里，渲染/亏钱哨兵/缺货哨兵只从 MARKED 读，本机不再存任何口径记忆。
    没发布的卡改口径 = 当场算账不落库（跟定价同款规矩）。 */
@@ -1545,6 +1548,7 @@ var PERM_DEFS = [
   ['xyops',       '闲鱼链接（编辑宝贝/查看宝贝）', '操作按钮'],
   ['xysoft',      '闲鱼链接在软件内打开（不勾=浏览器打开）', '操作按钮'],
   ['tbyp',        '配文（出图出文案）',  '操作按钮'],
+  ['kitset',      '蓝底套图',  '操作按钮'],
 ];
 function authSave(){
   try { localStorage.setItem('ml_auth', JSON.stringify(AUTH)); } catch(e){}
@@ -1727,7 +1731,12 @@ function ensureAuth(){
               } catch(e){}
               AUTH = { u: j.u, token: j.token, role: j.role, perm: j.perm || {} };
               authSave();
-              m.remove(); afterAuth(); finish();
+              m.remove();
+              /* 2026-10-23 串号根治：换号必须整页重启——换号清键 IIFE 和按账号分家的
+                 本地存储键都只在页面加载时跑，软件内原地换号会让上一账号的本地发布
+                 记录残留到这一账号（「旧名 · 122 条」孤儿实锤）。云端是事实源，刷完即净 */
+              location.reload();
+              return;
             } else {
               go.disabled = false; go.classList.remove('loading'); go.textContent = '登 录';
               m.querySelector('#aerr').textContent = (j && j.msg) || '登录失败，请重试';
@@ -2853,6 +2862,7 @@ function renderItem(it){
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
     + (pok('copy') ? '<button class="copy" data-copydoc="' + esc(it.c) + '" data-copykind="' + esc(it.k || 'z') + '" title="打开闲鱼配文 PRO：抓真实参数写文案 + AI 出发布图（15:59 用户要的常驻入口）">写文案</button>' : '')
     + (pok('tbyp') ? '<button class="copy" data-tbdoc="' + esc(it.c) + '" data-tbkind="' + esc(it.k || 'z') + '" title="打开配文：型号一键出图出文案（独立权限，管理号决定给谁用）">配文</button>' : '')
+    + (pok('kitset') ? '<button class="copy" data-kitdoc="' + esc(it.c) + '" title="蓝底套图（独立工具）：四张1080图+三档标题+两段文案，与写文案/配文零关系">蓝底</button>' : '')
     + (webUrl ? '<a class="markbtn web" href="' + esc(webUrl) + '" target="_blank" rel="noopener" title="打开品牌官网（对应型号）">官网</a>' : '')
     + '</span></div>'
     + '<div class="tags">'
@@ -3106,25 +3116,50 @@ function search(qRaw){
   });
   return hit;
 }
-/* 三无卡片（2026-10-10 用户定稿）：没库存 + 价格含税/滞销清理价/样机清理价一个都没有
-   → 浏览列表不显示；等有库存或有价格了自动回来。
-   · 只影响浏览（allFiltered），搜索路径不碰——「不显示 ≠ 搜不到」；
+/* 不可发布卡（2026-10-10 三无规则 + 2026-10-23 用户定稿「有货有价才显示」）：
+   浏览列表只显示能卖的——
+   ① 新机有库存（非样机/非次品仓可用量 >0）且有 含税价 或 滞销价（或两个都有）；
+   ② 样机有库存（样机仓可用量 >0）且有 样机价。
+   其余一律浏览不显示：三无比不上、**样机仓有货但没样机价**（CWBMGHU1 实锤）、
+   **全仓无货但有价**——都不给显示。
+   · 只影响浏览（allFiltered + 标签计数），搜索路径不碰——「不显示 ≠ 搜不到」；
    · 已发布的（自己的 MARKED / 正在看的 SUBVIEW.set）永远显示，取消发布后自然回到隐藏规则；
-   · 实时库存没拉过时，退公布版可用量/现存量（lav/sav）判断有没有货；
-   · 美的/容声表（_md）价格字段是另一套，不参与这条规则；
-   · 豁免名单（HM夏货源/美的/容声/科沃斯）不走用友库存，永不按三无隐藏（2026-10-10 晚补） */
+   · 实时库存还没拉过时，退公布版可用量/现存量 + 有任一价就显示（老口径兜底，免得启动瞬间空列表）；
+   · 美的/容声表（_md）与豁免名单（HM夏货源/美的/容声/科沃斯）不走用友库存，永不隐藏 */
 function isBlankCard(it){
   if (it._md || extStockFree(it)) return false;
   if (MARKED[it.c]) return false;
   if (SUBVIEW && SUBVIEW.set && SUBVIEW.set[it.c]) return false;
-  var live = stockOf(it.mo, nameOf(it));
-  if (live && ((live.a || 0) > 0 || (live.q || 0) > 0)) return false;
+  var pt = isNum(it.pt) && it.pt > 0,
+      lz = (isNum(it.lpz) && it.lpz > 0) || it.lpz === '送',
+      sj = (isNum(it.spz) && it.spz > 0) || it.spz === '送';
+  /* 实时库存还没拉过：退公布版可用量/现存量，有货或有价就显示（老口径兜底） */
   if (!(STOCKDATA && STOCKDATA.stock && Object.keys(STOCKDATA.stock).length)){
     var _gp = isNum(it.lav) ? it.lav : 0, _sp = isNum(it.sav) ? it.sav : 0;
-    if (_gp > 0 || _sp > 0) return false;
+    if (_gp > 0 || _sp > 0 || pt || lz || sj) return false;
+    return true;
   }
-  if (ptypeOf(it)) return false;   // 三个价一个都没有（0 元不算，同价格类型口径）
-  return true;
+  /* 用友实时库存（唯一准绳）：按仓拆可售量——
+     样机仓 → 只配样机价卖；次品仓 → 不可售；其余仓（正品仓/特价·待送/机壳·虚拟…）
+     都按新机口径（同 pubLeftOf 非样机非次品约定）。没有 wt 明细时全仓可用量按新机。 */
+  var live = stockOf(it.mo, nameOf(it), it.code);
+  var zQty = 0, sQty = 0;
+  if (live){
+    if (live.wt && Object.keys(live.wt).length){
+      for (var _wk in live.wt){
+        var _wv = Math.round(isNum(live.wt[_wk]) ? live.wt[_wk] : 0);
+        if (_wv <= 0) continue;
+        if (_wk === '样机仓') sQty += _wv;
+        else if (_wk === '次品仓') continue;
+        else zQty += _wv;
+      }
+    } else if (isNum(live.a) && live.a > 0){
+      zQty = Math.round(live.a);
+    }
+  }
+  if (zQty > 0 && (pt || lz)) return false;   // 新机有货有价（含税或滞销，或双价都有）
+  if (sQty > 0 && sj) return false;           // 样机有货有样机价
+  return true;                                // 其余（样机货没样机价 / 无货有价 / 三无）浏览全藏，搜索照常
 }
 function allFiltered(){
   var hit = [], i;
@@ -3227,6 +3262,21 @@ function viewSig(){
                          flagStock, flagSend, flagPub, pminV, pmaxV, SUBVIEW, selXy]);
 }
 function run(){
+  /* 闲鱼号条（号选择/管理/数据）只在「已发布」自看视图显示（2026-10-23 用户定稿）：
+     平时收起；从显示转收起时顺手把号筛选清回全部，免得列表被看不见的筛选缩着 */
+  var _xyseg = document.getElementById('xyseg');
+  if (_xyseg){
+    var _on = !!(SUBVIEW && SUBVIEW.u === '0');
+    var _want = _on ? 'contents' : 'none';
+    if (_xyseg.style.display !== _want){
+      _xyseg.style.display = _want;
+      if (!_on && selXy){
+        selXy = '';
+        var _xsel = document.getElementById('xysel');
+        if (_xsel) _xsel.value = '';
+      }
+    }
+  }
   var q = input.value.trim();
   clrBtn.hidden = !q;
   readPrice();
@@ -4166,7 +4216,6 @@ function openPickKind(k, recKey){
     if (_mig) pubPush(k, false, _mig);   // 云端同步删老键（pub_ 记录+pubp_ 价镜像一起清）
     m.remove();
     run();
-    askCopy(k, kk);                      /* 2026-10-12：发布完顺手问一句要不要写文案 */
   });
 }
 function kindLabel(v){ return v && v.k === 's' ? '样机' : '正品'; }
@@ -4356,29 +4405,120 @@ function openUnmarkPick(c){
 }
 
 /* ================= 文案生成（2026-10-12，纯追加） ================= */
-function askCopy(k, kind){
-  /* 2026-10-17：给了婷宝权限（tbyp）的人，这里直接跳婷宝版窗口；
-     没给婷宝但有写文案（copy）权限的，走原 Pro 版。两个都没权限不弹。 */
-  var isTb = pok('tbyp');
-  if (!isTb && !pok('copy')) return;
-  var old = document.getElementById('askcopy'); if (old) old.remove();
-  var m = document.createElement('div'); m.id = 'askcopy';
-  m.style.cssText = 'position:fixed;inset:0;background:rgba(16,24,40,.35);z-index:61;display:flex;align-items:center;justify-content:center';
-  m.innerHTML = '<div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:var(--shadow);font-size:14px">'
-    + '<div style="font-weight:700;margin-bottom:10px">「' + esc(k) + '」顺手' + (isTb ? '出配文' : '写文案') + '吗？</div>'
-    + '<div style="font-size:12.5px;color:#7a8699;margin-bottom:14px">' + (kind === 's' ? '样机' : '正品')
-    + '口吻 · 抓官网/商城真实参数 · 首次约 30-60 秒</div>'
-    + '<div style="display:flex;gap:10px">'
-    + '<button class="achip" data-ac="y" style="background:#eaf1ff;border-color:#c6d8ff">✍ ' + (isTb ? '出' : '写') + '</button>'
-    + '<button class="achip" data-ac="n">先不' + (isTb ? '出' : '写') + '</button>'
-    + '</div></div>';
-  document.body.appendChild(m);
-  m.addEventListener('click', function(e){
-    var b = e.target.closest ? e.target.closest('[data-ac]') : null;
-    if (!b) { if (e.target === m) m.remove(); return; }
-    m.remove();
-    if (b.getAttribute('data-ac') === 'y') openCopyView(k, kind, false, isTb);
+/* 2026-10-21 用户拍板：发布完的「顺手写文案吗」自动弹窗删除——
+   卡片上的「写文案」「配文」按钮就是这两套的入口，想用时手动点。
+   （新首图文案套图工具另做独立入口，与这两套零关系，方案待用户拍板） */
+
+/* ================= 蓝底套图（2026-10-21，独立第三工具） ================= */
+function openKitView(k){
+  var old = document.getElementById('kitview'); if (old) old.remove();
+  var wrap = document.createElement('div'); wrap.id = 'kitview';
+  wrap.style.cssText = 'position:fixed;inset:0;background:#f7f7f5;z-index:70;display:flex;flex-direction:column;font-size:13px;color:#1c1e22';
+  wrap.innerHTML =
+    '<div style="display:flex;align-items:baseline;gap:10px;padding:8px 16px;background:#1c1e22;color:#e8eaee;flex:0 0 auto">'
+    +   '<b style="font-size:14px">蓝底套图</b>'
+    +   '<span style="font-size:12px;color:#8a929e">' + esc(k) + '</span>'
+    +   '<span style="flex:1"></span>'
+    +   '<span id="kv_msg" style="font-size:11.5px;color:#9fe0a8"></span>'
+    +   '<button id="kv_folder" title="打开这套图的保存文件夹（img_1~4.jpg 就在里面，跟写文案图片一个存法）" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">图片文件夹</button>'
+    +   '<button id="kv_force" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">重新生成</button>'
+    +   '<button id="kv_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
+    + '</div>'
+    + '<div style="flex:1;overflow:hidden;padding:12px 16px;display:flex"><div id="kv_body" style="max-width:1280px;margin:0 auto;width:100%;display:flex"></div></div>';
+  document.body.appendChild(wrap);
+  wrap.querySelector('#kv_close').addEventListener('click', function(){ wrap.remove(); });
+  wrap.querySelector('#kv_folder').addEventListener('click', function(){
+    fetch('/api/kitset?model=' + encodeURIComponent(k) + '&open=1');
   });
+  var D = null, cur = 1;
+  function imgSrc(n){ return '/api/kitimg/' + encodeURIComponent(k) + '/img_' + n + '.jpg'; }
+  function render(){
+    var body = wrap.querySelector('#kv_body');
+    body.innerHTML =
+      '<div style="flex:0 0 430px;display:flex;flex-direction:column;background:#fff;border-radius:14px;border:1px solid #e8e8e4;overflow:hidden;height:100%">'
+      +   '<div style="padding:10px 16px;border-bottom:1px solid #f0f0ec;display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">配 图 · 一套四张</b><span style="font-size:11px;color:#9a9ea6">1080 × 1080 · 无价格</span></div>'
+      +   '<div style="flex:1;display:flex;align-items:center;justify-content:center;background:#fff;min-height:0"><img id="kv_img" src="' + imgSrc(cur) + '?t=' + Date.now() + '" style="max-width:100%;max-height:100%;object-fit:contain;display:block"></div>'
+      +   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px 14px" id="kv_switch"></div>'
+      + '</div>'
+      + '<div style="flex:1;display:flex;flex-direction:column;gap:10px;min-width:0;margin-left:16px;min-height:0">'
+      +   '<div style="background:#fff;border-radius:14px;border:1px solid #e8e8e4;padding:10px 16px;flex:0 0 auto">'
+      +     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px"><b style="font-size:13px">标 题 候 选</b><span style="font-size:11px;color:#9a9ea6">3 个 · 闲鱼专用</span></div>'
+      +     '<div id="kv_titles"></div>'
+      +   '</div>'
+      +   '<div style="background:#fff;border-radius:14px;border:1px solid #e8e8e4;padding:10px 16px;flex:0 0 auto">'
+      +     '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.2em;margin-bottom:4px">① 卖 点（一话一行）</div>'
+      +     '<div id="kv_c2" style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33;max-height:24vh;overflow:auto"></div>'
+      +     '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.2em;margin:8px 0 4px">② 售 后</div>'
+      +     '<div id="kv_c3" style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33"></div>'
+      +     '<button id="kv_copyall" style="margin-top:10px;width:100%;padding:10px 0;border:none;border-radius:10px;background:#1c1e22;color:#fff;font-size:12.5px;cursor:pointer;letter-spacing:.2em">一 键 复 制 全 套</button>'
+      +   '</div>'
+      +   '<div style="background:#fff;border-radius:14px;border:1px solid #e8e8e4;padding:10px 16px;flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column">'
+      +     '<b style="font-size:13px">官 网 真 实 参 数</b>'
+      +     '<div id="kv_params" style="display:grid;grid-template-columns:repeat(2,1fr);gap:2px 18px;margin-top:8px"></div>'
+      +     '<div id="kv_src" style="font-size:11.5px;color:#9a9ea6;margin-top:8px;word-break:break-all"></div>'
+      +   '</div>'
+      + '</div>';
+    var sw = body.querySelector('#kv_switch');
+    for (var i = 1; i <= 4; i++){
+      (function(n){
+        var b = document.createElement('button');
+        b.textContent = ['① 主图','② 参数','③ 卖点','④ 尺寸'][n-1];
+        b.style.cssText = 'padding:9px 0;border-radius:10px;border:1px solid #e0e0dc;background:' + (n===cur?'#1c1e22':'#fff') + ';color:' + (n===cur?'#fff':'#43464c') + ';font-size:12px;cursor:pointer';
+        b.addEventListener('click', function(){
+          cur = n;
+          body.querySelector('#kv_img').src = imgSrc(n) + '?t=' + Date.now();
+          render();
+        });
+        sw.appendChild(b);
+      })(i);
+    }
+    var tl = body.querySelector('#kv_titles');
+    tl.innerHTML = '';
+    (D.titles || []).forEach(function(t){
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:10px;align-items:baseline;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f2f2ee';
+      row.innerHTML = '<span style="font-size:12.5px;line-height:1.5">' + esc(t) + '</span>';
+      var btn = document.createElement('button');
+      btn.textContent = '复制'; btn.style.cssText = 'border:none;background:none;color:#9a9ea6;font-size:11.5px;cursor:pointer;flex-shrink:0';
+      btn.addEventListener('click', function(){
+        navigator.clipboard.writeText(t).then(function(){ btn.textContent='已复制'; setTimeout(function(){ btn.textContent='复制'; },1200); });
+      });
+      row.appendChild(btn); tl.appendChild(row);
+    });
+    body.querySelector('#kv_c2').textContent = (D.points || []).join('\n');
+    body.querySelector('#kv_c3').textContent = D.aftersale || '';
+    var pg = body.querySelector('#kv_params');
+    pg.innerHTML = '';
+    Object.keys(D.params || {}).forEach(function(kk){
+      var dd = document.createElement('div');
+      dd.style.cssText = 'display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#43464c;border-bottom:1px solid #f2f2ee;padding:4px 0';
+      dd.innerHTML = '<span style="color:#9a9ea6;flex-shrink:0">' + esc(kk) + '</span><span style="text-align:right">' + esc(D.params[kk]) + '</span>';
+      pg.appendChild(dd);
+    });
+    body.querySelector('#kv_src').textContent = D.src ? ('来源：' + D.src) : '';
+    body.querySelector('#kv_copyall').onclick = function(){
+      navigator.clipboard.writeText((D.points || []).join('\n') + '\n\n' + (D.aftersale || ''));
+      this.textContent = '已复制全套'; var b = this; setTimeout(function(){ b.textContent = '一 键 复 制 全 套'; }, 1500);
+    };
+  }
+  function load(force){
+    wrap.querySelector('#kv_msg').textContent = '正在抓参数/机图并渲染…（首次约 1-2 分钟）';
+    wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#8a929e;font-size:14px;line-height:2">正在生成套图：爬虫 → 官网 → 欣盛 抓参数与机图，再渲染四张 1080×1080…<br>第一次跑这个型号要 1-2 分钟，生成过一次秒开。</div>';
+    fetch('/api/kitset?model=' + encodeURIComponent(k) + (force ? '&force=1' : ''))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j || !j.ok){ throw new Error((j && j.msg) || '生成失败'); }
+        D = j; cur = 1;
+        wrap.querySelector('#kv_msg').textContent = j.cached ? '缓存秒出' : '生成完成';
+        render();
+      })
+      .catch(function(err){
+        wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#b42318;font-size:14px">生成失败：' + esc(String(err.message || err)) + '</div>';
+        wrap.querySelector('#kv_msg').textContent = '';
+      });
+  }
+  wrap.querySelector('#kv_force').addEventListener('click', function(){ load(true); });
+  load(false);
 }
 
 function openCopyView(k, kind, force, tb){
@@ -5255,10 +5395,16 @@ listEl.addEventListener('click', function(e){
     openCopyView(cw.getAttribute('data-copydoc'), cw.getAttribute('data-copykind') || 'z', false);
     return;
   }
+  var kb = e.target.closest('[data-kitdoc]');
+  if (kb){
+    /* 蓝底套图入口（2026-10-21 用户定稿）：完全独立的第三工具——四张1080图+三档标题
+       +两段文案。与写文案/配文零共用窗口零共用引擎，数据走爬虫→官网→欣盛抓取链 */
+    openKitView(kb.getAttribute('data-kitdoc'));
+    return;
+  }
   var tw = e.target.closest('[data-tbdoc]');
   if (tw){
-    /* 婷宝电器优选入口（2026-10-17）：内嵌婷宝版文案窗（独立权限 tbyp，管理号决定给谁用） */
-    openCopyView(tw.getAttribute('data-tbdoc'), tw.getAttribute('data-tbkind') || 'z', false, true);
+    /* 婷宝电器优选入口（2026-10-17）：内嵌婷宝版文案窗（独立权限 tbyp，管理号决定给谁用） */    openCopyView(tw.getAttribute('data-tbdoc'), tw.getAttribute('data-tbkind') || 'z', false, true);
     return;
   }
   var f = e.target.closest('[data-fill]');

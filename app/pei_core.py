@@ -18,6 +18,7 @@ IMGHOSTS = {"haier": "https://image.haier.com", "casarte": "https://image.casart
 BRAND_CN = {"haier": "海尔", "casarte": "卡萨帝", "leader": "统帅", "xdjdy": "兴达商城"}
 
 CAT_CN = {"cooling": "冰箱", "freezer": "冷柜", "laundry": "洗衣机", "xjd": "洗衣机",
+          "jsj": "净水器",  # 净水机挂在二级段 /xjd/jsj/，深段优先（2026-10-22 HKC3000 实锤）
           "air_conditioners": "空调", "central-air-conditioning": "中央空调",
           "water-heater": "热水器", "water_heaters": "热水器", "televisions": "电视",
           "tv": "电视", "kitchen_appliances": "厨电", "kitchen-appliances": "厨电",
@@ -327,13 +328,21 @@ def _sitemap_urls(site):
     return locs
 
 
-def _is_strong(score, key):
+def _is_strong(score, key, cand=None):
     """判定一次匹配是否足够可信，避免在大索引里误命中无关型号。
     - 完全相等 / 包含关系 (score>=5000)：可信
-    - 仅公共子串：需覆盖 query 的 70% 以上，否则视为巧合"""
+    - 2026-10-23 用户定稿「型号对不上的就不要了」：LCS 公共子串一律不算强命中——
+      XQG100-28E 与统帅 LHD559WU1 的 LCS=7，全靠系列前缀「XQG100-」撑着，
+      旧阈值(≥70%覆盖)把人家白机页误当强命中，素材/发布图全成了别家型号（实锤）。
+      仅放宽「连字符写法差异」（XQG10028E = XQG100-28E）。"""
     if score >= 5000:
         return True
-    return score >= max(6, int(len(key) * 0.7))
+    if cand:
+        _nd = re.sub(r"[-\-－—]+", "", _normalize_key(cand))
+        _nk = re.sub(r"[-\-－—]+", "", _normalize_key(key))
+        if _nk and _nk == _nd:
+            return True
+    return False
 
 
 def find_page(model, sites=("haier", "casarte", "leader"), log=None):
@@ -384,7 +393,7 @@ def find_page(model, sites=("haier", "casarte", "leader"), log=None):
             matched_model, score = _model_scores(h, key)
             # 用原始 match_score（不含 _model_scores 的 bonus）判断可信度，避免
             # 无关页面里某个 HTML 属性值因 +50 bonus 被误判为强匹配
-            if matched_model and _is_strong(match_score(key, matched_model), key):
+            if matched_model and _is_strong(match_score(key, matched_model), key, matched_model):
                 with lock:
                     found.append((u, matched_model, score))
 
@@ -459,7 +468,18 @@ def fetch_product(site, url, outdir, log=None, progress=None):
     if not h:
         cb(100, "抓取失败")
         return None
-    cat = url.split("/")[3]
+    path = re.sub(r"[?#].*$", "", url)
+    segs = [s for s in path.split("/") if s]
+    if segs and "." in segs[-1]:
+        segs = segs[:-1]
+    catpath = "/".join(segs[2:] if len(segs) > 2 and ":" in url else segs)  # 相对图片路径前缀 'xjd/jsj'
+    cat = ""
+    for s in reversed(segs):
+        if s in CAT_CN:
+            cat = s  # 品类取最深匹配段：/xjd/jsj/ 是净水器不是洗衣机（2026-10-22 实锤）
+            break
+    if not cat and segs:
+        cat = segs[0]
     p = parse_ld(h)
     model = p.get("sku", "") or ""
     if not model:
@@ -478,7 +498,7 @@ def fetch_product(site, url, outdir, log=None, progress=None):
     m = re.search(r'itemprop="image"\s+content="([^"]+)"', h)
     if m:
         main_img = m.group(1)
-    imgs = collect_images(h, site, cat)
+    imgs = collect_images(h, site, catpath)
     order = ([main_img] if main_img else []) + [u for u in imgs if u != main_img]
     # 不再截断：尺寸图/规格图等全部下载，用户自行挑选
 
@@ -811,6 +831,18 @@ def sellpoints(info, exclude=None):
 
 CAT_WORDS = ("冰箱", "冷柜", "洗衣机", "干衣机", "空调", "热水器", "油烟机",
              "洗碗机", "烤箱", "燃气灶", "集成灶", "净水器", "电视", "消毒柜")
+
+
+def cat_from_url(url):
+    """URL → 品类中文：取最深匹配 CAT_CN 的路径段（/xjd/jsj/ → 净水器，2026-10-22）。"""
+    path = re.sub(r"[?#].*$", "", url or "")
+    segs = [s for s in path.split("/") if s]
+    if segs and "." in segs[-1]:
+        segs = segs[:-1]
+    for s in reversed(segs):
+        if s in CAT_CN:
+            return CAT_CN[s]
+    return ""
 
 
 def cat_name(info):
@@ -1454,7 +1486,7 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
         cands.append(f)
     if len(cands) < 3:
         return None
-    cache = p / "_ai_pick.json"
+    cache = p / "_ai_pick_v2.json"   # v2：提示词加了「front 必须关门」，旧缓存作废
     try:
         if cache.exists():
             return json.loads(cache.read_text(encoding="utf-8"))
@@ -1464,8 +1496,9 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
     data_url = "data:image/jpeg;base64," + base64.b64encode(sheet).decode("ascii")
     prompt = (
         "这是%s的商品图拼版，每张左上角有红色编号。请按角色选出编号：\n"
-        "1) front：产品整机正面（白底/透明/干净背景，能看到完整机器正面）\n"
-        "2) angle：立体角度或侧面（能看到机器厚度或斜视角，与正面不同）\n"
+        "1) front：产品整机正面（白底/透明/干净背景，能看到完整机器正面）。"
+        "门/盖必须处于关闭状态——门开着的图只能填 open，绝不填 front\n"
+        "2) angle：立体角度或侧面（门也关着，能看到机器厚度或斜视角，与正面不同）\n"
         "3) open：开门或看到内部（门打开/看到内胆或内部结构的图）\n"
         "4) scene：真实家居/阳台/卫生间/厨房的实景照片（人生活的环境里摆着这台机器）。\n"
         "   注意：纯参数图、功能原理图、内部结构渲染图、效果图、宣传长图都【不算】实景，请填 null。\n"

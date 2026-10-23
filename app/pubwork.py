@@ -165,15 +165,50 @@ def work(model, prog=None):
         prog(15, "新爬虫未命中，回退旧检索 ...")
         site, url = pei_core.find_page(model, sites=("haier", "casarte", "leader", "xdjdy"), log=log)
         prod = None
+    info = None
     if not url:
-        raise RuntimeError("没找到这个型号，检查一下型号是否正确（海尔/卡萨帝/统帅/实体店）")
-    prog(30, "抓取详情页与图片 ...")
-    if site == "xdjdy":
-        info = pei_xdjdy.fetch_xdjdy(url, d, log=log, progress=prog)
+        # 2026-10-23 用户定稿「型号对不上的就不要了」：官网对不上宁可不抓，绝不抓错型号——
+        # 欣盛商城相册兜底（写文案 Pro 同款源）。XQG100-28E 实锤：海尔/统帅官网、兴达都没有，
+        # 旧逻辑 LCS 前缀误命中统帅 LHD559WU1 白机页，发布图全成别家机器。
+        prog(18, "官网未命中，试欣盛商城 ...")
+        log("官网未命中，试欣盛商城 ...")
+        try:
+            import copywriter
+            xs = copywriter.fetch_xinsheng(model, log=log)
+        except Exception as e:
+            xs = None
+            log("欣盛兜底异常：%s" % e)
+        album = [u for u in ((xs or {}).get("imgs") or []) if u]
+        if not album:
+            raise RuntimeError("没找到这个型号，检查一下型号是否正确（海尔/卡萨帝/统帅/实体店）")
+        _pn = str(xs.get("pname") or "")
+        _brand = next((b for b in ("卡萨帝", "统帅", "海尔") if b in _pn), "")
+        try:
+            _price = str(int(float(str(xs.get("price") or "0"))))   # 欣盛价 "1899.0" 浮点串
+        except Exception:
+            _price = "0"
+        import pei_core as _pc
+        _cat = _pc.guess_cat(_pn)   # 品类从商品名猜（空 cat 会让选图/背景风格走不到品类分支）
+        # 整目录重来：能走到这说明没有有效 info.json，目录里只可能是上次失败/错型号的残留
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d, exist_ok=True)
+        try:
+            imgs = copywriter.dl_images([(u, "欣盛") for u in album], d, log)
+        except Exception as e:
+            log("欣盛图下载失败：%s" % e)
+            raise RuntimeError("欣盛商城图片下载失败，稍后再试")
+        info = {"site": "xinsheng", "brand": _brand, "model": model,
+                "title": _pn or model, "price": _price,
+                "avail": "", "props": [], "url": str(xs.get("url") or ""),
+                "cat": _cat, "dir": d, "imgs": imgs, "source": "欣盛商城"}
     else:
-        info = pei_core.fetch_product(site, url, d, log=log, progress=prog)
-        if info:
-            info = pei_core.spider_enrich_info(info, site, url, prod, log=log)
+        prog(30, "抓取详情页与图片 ...")
+        if site == "xdjdy":
+            info = pei_xdjdy.fetch_xdjdy(url, d, log=log, progress=prog)
+        else:
+            info = pei_core.fetch_product(site, url, d, log=log, progress=prog)
+            if info:
+                info = pei_core.spider_enrich_info(info, site, url, prod, log=log)
     if not info:
         raise RuntimeError("页面抓取失败，稍后再试")
     info = _normalize_info(info)
