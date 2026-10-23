@@ -137,6 +137,58 @@ class ApiGetMixin:
                                             "images": []}, ensure_ascii=False))
             return
 
+        # ---------- 蓝底套图（2026-10-21，独立第三工具，与 /copy 写文案/婷宝配图零关系） ----------
+        if path == "/api/kitset":
+            q = urllib.parse.parse_qs(u.query)
+            model = (q.get("model") or [""])[0].strip()
+            force = (q.get("force") or ["0"])[0] in ("1", "true")
+            openfolder = (q.get("open") or ["0"])[0] in ("1", "true")
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            import kitset
+            if openfolder:
+                # 打开蓝底套图的图片文件夹（资源管理器），跟写文案的 open=1 同款
+                d = kitset.model_dir(model)
+                try:
+                    os.makedirs(d, exist_ok=True)
+                    os.startfile(d)  # noqa 仅 Windows 桌面端
+                    self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+                except Exception as e:
+                    self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+                return
+            try:
+                import kitset
+                res = kitset.generate(model, force,
+                                      log=lambda s: state.LOG.append("[蓝底] " + s))
+                res["dir"] = kitset.model_dir(model)
+                self._send(200, json.dumps(res, ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": "蓝底套图生成失败：%s" % e},
+                                           ensure_ascii=False))
+            return
+
+        if path.startswith("/api/kitimg/"):
+            # 蓝底套图产物（kitset/<型号>/img_N.jpg / set.json / product.jpg），只许读 kitset 目录
+            import kitset
+            core = urllib.parse.unquote(path[len("/api/kitimg/"):])
+            root = os.path.abspath(kitset.kit_root())
+            fp = os.path.abspath(os.path.join(kitset.kit_root(), core))
+            if not fp.startswith(root) or not os.path.isfile(fp):
+                self._send(404, json.dumps({"ok": False, "msg": "no such kit file"}, ensure_ascii=False))
+                return
+            ctype = "image/jpeg" if fp.lower().endswith((".jpg", ".jpeg")) else (
+                "image/png" if fp.lower().endswith(".png") else "application/json")
+            with open(fp, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if path.startswith("/copyimg/"):
             # 文案配图（copy/<型号>/img_NN.jpg）：路径穿越防护，只许读 copy 目录
             import copywriter

@@ -780,7 +780,31 @@ def _is_photo(f, min_side=420):
     return True
 
 
-def pick_images(src_dir):
+# 品类正面目标宽高比（量 alpha 非透明 bbox）：立式机器关门正面 ≈0.65 瘦长，
+# 横式机器（油烟机/灶具/电视等）≈1.4 扁宽。开门图门往外甩 bbox 变宽（≥1.0）、
+# 特写/顶板异形 —— 靠 ar 就能跟关门正面分开（XQG100-28E 欣盛图实锤：
+# 开门 02/03 ar=1.05/1.20，关门正面 06 ar=0.70，老规则按文件名顺序取第一张抠图
+# 结果首图/机器图全用了开门图）。
+_WIDE_CATS = ("油烟", "灶", "电视", "微波", "烤箱", "空调")
+
+
+def _bbox_ar(f):
+    """抠图内容（alpha 非透明区）宽高比；量不出返回 None。
+    商城相册图全是 2000×2000 方画布，画布 ar 恒为 1，必须量内容 bbox。"""
+    try:
+        rgba = Image.open(f).convert("RGBA")
+        bb = rgba.getchannel("A").getbbox()
+        if not bb:
+            return None
+        w, h = bb[2] - bb[0], bb[3] - bb[1]
+        if w < 220 or h < 220:
+            return None
+        return w / h
+    except Exception:
+        return None
+
+
+def pick_images(src_dir, cat=None):
     p = Path(src_dir)
     imgs = [f for f in sorted(p.iterdir())
             if f.is_file() and f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")]
@@ -800,22 +824,50 @@ def pick_images(src_dir):
                 return f
         return None
 
-    # 正面：第一张合格抠图；实在没有才兜底首图（极少见）
-    front = None
+    cuts = []
     for f in imgs:
         if _is_cutout(f):
-            front = f
-            break
-    if front is None:
-        front = imgs[0]
+            ar = _bbox_ar(f)
+            if ar:
+                cuts.append((f, ar))
 
-    # 角度：关键词命中且不=front；否则换一张别的抠图；否则回退正面
-    angle = find_cut("07", "45", "角度", "angle", "侧面")
-    if angle is None or angle == front:
+    wide = any(w in str(cat or "") for w in _WIDE_CATS)
+    tgt = 1.4 if wide else 0.65
+    # 正面 = 关门正面：bbox ar 最贴近品类目标的那张抠图。
+    # 立式关门带 ≤0.92（开门/特写 ≥0.98 分出去）；找不到合格关门图才走老兜底
+    closed = [t for t in cuts if t[1] <= (2.0 if wide else 0.92)]
+    front = None
+    if closed:
+        front = min(closed, key=lambda t: abs(t[1] - tgt))[0]
+    if front is None:
+        for f in imgs:
+            if _is_cutout(f):
+                front = f
+                break
+        if front is None:
+            front = imgs[0]
+
+    # 角度：除正面外另一张关门/斜角（比正面略宽的优先）。
+    # 老关键词("07"/角度)碰上编号命名的特写图会翻车（28E 顶板特写 07 实锤），只在排序没得选时用
+    rest = [t for t in closed if t[0] != front]
+    angle = None
+    if rest:
+        angle = min(rest, key=lambda t: abs(t[1] - (tgt + (0.1 if not wide else 0.2))))[0]
+    if angle is None:
+        angle = find_cut("45", "角度", "angle", "侧面")
+        if angle is None or angle == front:
+            angle = other_cut({front}) or front
+    if angle == front:
         angle = other_cut({front}) or front
 
-    # 开门/内部：关键词命中且≠front/angle；否则回退正面（绝不留白、绝不带底图）
+    # 开门/内部：关键词优先；没有就用「开门特征 ar」（立式 ≥0.98，门甩出来/内部
+    # 特写的 bbox 都在这个带里）；再没有回退正面（绝不留白、绝不带底图）
     openv = find_cut("09", "开门", "内部", "open", "冷藏")
+    if openv is None or openv in (front, angle):
+        if not wide:
+            opened = [t for t in cuts if t[0] not in (front, angle) and t[1] >= 0.98]
+            if opened:
+                openv = min(opened, key=lambda t: abs(t[1] - 1.2))[0]
     if openv is None or openv in (front, angle):
         openv = front
 
@@ -1165,7 +1217,7 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
     step(12, "正在挑选素材图 ...")
     BG_DIR = bg_dir or (Path(src_dir) / "AI背景")
     API_KEY = api_key
-    front_f, angle_f, open_f, scene_f = pick_images(src_dir)
+    front_f, angle_f, open_f, scene_f = pick_images(src_dir, cat=GEN_CAT)
     if not front_f:
         raise RuntimeError("素材目录没有可用的图片：%s" % src_dir)
 
