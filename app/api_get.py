@@ -285,6 +285,11 @@ class ApiGetMixin:
                     s["built"] = (get_payload().get("meta") or {}).get("built")
                 except Exception:
                     pass
+            # 闲鱼页自动化（CDP）开关状态（2026-10-24）：设置面板显示用，本机文件为准
+            try:
+                s["cdp_on"] = not os.path.isfile(wp("xy_cdp_off.txt"))
+            except Exception:
+                s["cdp_on"] = True
             # 告警只给管理号看（子账号 machines 不轮询，字段清空省事）
             if state.PERM_STATE.get("role") != "admin":
                 s["alert_ts"] = 0

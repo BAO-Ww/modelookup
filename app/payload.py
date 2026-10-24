@@ -13,6 +13,7 @@ import time
 
 import state
 from config import CLEAN_XLSX, PRICE_XLSX, PAYLOAD_VER, SOURCES, ONLINE_SHARE, FILE_ID, SUBSIDY_XLSX
+from paths import rp
 from parsers_yr import load_records_from_path, merge_records, parse_subsidy_rows
 from normalize import norm_model
 from paths import rp, wp
@@ -30,15 +31,30 @@ def load_img_library():
     return {}
 
 
+def _stock_rules():
+    """库存口径单源（2026-10-24）：读 assets/stock_rules.json，坏了返回 None（前端兜底硬编码）。
+    主程序与 CI 手机端共用 build_payload → meta.stock_rules 一处注入全端同源。"""
+    try:
+        with io.open(rp("stock_rules.json"), "r", encoding="utf-8") as f:
+            r = json.load(f)
+        return r if isinstance(r, dict) and r.get("ext_free_brands") else None
+    except Exception:
+        return None
+
+
 def build_payload(allrecs, imgs_cache, month=""):
     rows = merge_records(allrecs)
     imgs = {ck: v for ck, v in (imgs_cache or {}).items()
             if ck in rows and isinstance(v, str) and v.startswith("data:image/")}
     now = time.strftime("%Y-%m-%d %H:%M")
+    meta = {"month": month, "src": "", "built": now,
+            "online": {"share": ONLINE_SHARE, "fileId": FILE_ID},
+            "sources": SOURCES}
+    _sr = _stock_rules()
+    if _sr:
+        meta["stock_rules"] = _sr
     return {
-        "meta": {"month": month, "src": "", "built": now,
-                 "online": {"share": ONLINE_SHARE, "fileId": FILE_ID},
-                 "sources": SOURCES},
+        "meta": meta,
         "rows": sorted(rows.values(),
                        key=lambda r: (r.get("b") or "", r.get("cat") or "", r["mo"])),
         "imgs": imgs,
@@ -154,8 +170,11 @@ def load_current_payload():
                 return d
         except Exception:
             pass
-    return {"meta": {"pv": PAYLOAD_VER, "built": "等待云端同步", "sources": []},
-            "rows": [], "imgs": {}, "web": None}
+    _sr = _stock_rules()
+    _meta = {"pv": PAYLOAD_VER, "built": "等待云端同步", "sources": []}
+    if _sr:
+        _meta["stock_rules"] = _sr          # 空载荷也带口径单源（首装未同步时前端就有）
+    return {"meta": _meta, "rows": [], "imgs": {}, "web": None}
 
 
 def attach_subsidy(payload, log):

@@ -177,6 +177,64 @@ def _ver_gt(a, b):
         return False
 
 
+# ---------------- 数据链路哨兵（2026-10-24）----------------
+# 背景：kdocs/用友 cron 挂了、或云端不可达时，软件只是安静地显示旧数据，没人知道。
+# 信号：① /xlsxmeta 探测连续失败（网络/接口挂）；② xlsxlive.up（kdocs 每小时 :40 一轮，
+#   CI 内容没变也走 /xlsxping 报到）停在 3 小时前；③ stocklive.up（用友每 30 分钟一轮）
+#   停在 2 小时前。各自带营业窗口保护（开跑几小时后才报，防清晨误报）。
+# 写进 state.data_alert → 前端 30 秒轮询亮红条；恢复自动清。写额度零增加（不进 KV）。
+_PROBE_FAIL = [0]                    # [n] 用列表躲 global
+def _in_business(now=None):
+    """告警窗口：kdocs 8:40-23:40（11:40 后才报）∪ 用友 10:30-23:00（13:30 后才报）"""
+    t = time.localtime(now if now is not None else time.time())
+    hm = t.tm_hour * 60 + t.tm_min
+    kd = 8*60+40 <= hm <= 23*60+40 and hm >= 11*60+40
+    yy = 10*60+30 <= hm <= 23*60 and hm >= 13*60+30
+    return kd, yy
+
+def _sentinel_put(msg):
+    from state import set_state as _ss, STATE as _ST
+    if _ST.get("data_alert", "") != msg:
+        _ss(data_alert=msg)
+
+def _stale_msg(tag, up_ms, hours):
+    import time as _t
+    return "%s定时任务自 %s 起没有成功跑批（可能停了，现在显示的是旧数据）" % (
+        tag, _t.strftime("%m-%d %H:%M", _t.localtime(up_ms / 1000)))
+
+def _data_sentinel(j, err, ts):
+    import time as _t
+    from state import STATE as _ST
+    cur = _ST.get("data_alert", "")
+    if err or not j:                 # 探测失败：连续 3 次（约 3 分钟）才报，抖一下不吓人
+        _PROBE_FAIL[0] += 1
+        if _PROBE_FAIL[0] >= 3 and not cur:
+            _sentinel_put("云端数据探测连续 %d 次失败（%s），云端可能不可达" % (_PROBE_FAIL[0], err or "无响应"))
+        return
+    _PROBE_FAIL[0] = 0
+    _, yyok = _in_business()
+    msgs = []
+    # ① kdocs 跑批停摆（up 停 3h+ 且在告警窗口）
+    try:
+        up = int((j.get("up") if isinstance(j, dict) else 0) or 0)
+        if up and _t.time() * 1000 - up > 3 * 3600 * 1000 and yyok:
+            msgs.append(_stale_msg("金山表格", up, 3))
+    except Exception:
+        pass
+    # ② 用友跑批停摆（up 停 2h+ 且在告警窗口；管理号机器才探得到——子账号 /stockmeta 也开放，一并看）
+    try:
+        js, errs = cloud_req("/stockmeta", "GET", timeout=30)
+        up2 = int((js or {}).get("up") or 0) if (js and js.get("ok")) else 0
+        if up2 and _t.time() * 1000 - up2 > 2 * 3600 * 1000 and yyok:
+            msgs.append(_stale_msg("用友库存", up2, 2))
+    except Exception:
+        pass
+    if msgs:
+        _sentinel_put("；".join(msgs))
+    elif cur:
+        _sentinel_put("")
+
+
 def sync_xlsx_cloud(log, touch=False):
     """从云端同步金山表格（2026-10-09 v2.8 全云端口径）：
     轻探 /xlsxmeta（ts=各文件内容哈希）→ 有新内容拉 /xlsxcloud 全量 →
@@ -187,6 +245,7 @@ def sync_xlsx_cloud(log, touch=False):
     try:
         j, err = cloud_req("/xlsxmeta", "GET", timeout=30)
         ts = str((j or {}).get("ts") or "") if (j and j.get("ok")) else ""
+        _data_sentinel(j, err, ts)          # 数据链路哨兵（2026-10-24）：异常亮牌，正常清牌
         if not ts:
             return "unchanged"           # 云端还没有数据 / 探测失败：当没新东西
         local = ""

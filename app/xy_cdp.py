@@ -142,9 +142,24 @@ def routes_seen():
 
 
 def start_autoclick():
-    """后台守护线程：每 2.5s 扫一轮（幂等；没点中是常态，点中即完成选号）"""
+    """后台守护线程：每 2.5s 扫一轮（幂等；没点中是常态，点中即完成选号）。
+    2026-10-24 不再纯静默：调试口连续 ~20s 不通 → state.LOG 留痕（30 分钟限频），
+    用户在更新面板能看到「自动点选号失效了」，而不是无声失灵。"""
+    _fail = [0, 0.0]                     # [连续探测失败次数, 上次留痕时间]
     def _loop():
         while True:
+            try:
+                _http("/json/version", timeout=2.0)
+                _fail[0] = 0
+            except Exception as e:
+                _fail[0] += 1
+                if _fail[0] >= 8 and time.time() - _fail[1] > 1800:
+                    _fail[1] = time.time()
+                    try:
+                        import state as _st
+                        _st.LOG.append("[闲鱼] CDP 调试口连续不通：%s（自动点选号失效，选号要手点）" % e)
+                    except Exception:
+                        pass
             try:
                 autoclick_once()
             except Exception:
