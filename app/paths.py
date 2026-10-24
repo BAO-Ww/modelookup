@@ -34,3 +34,45 @@ def rp(name):
 
 def wp(name):
     return os.path.join(work_dir(), name)
+
+
+# ---------------- 素材存储根设置（2026-10-24 用户定稿：可改存储路径，peiwork+copy 共用，老数据搬） ----------------
+# 存本机 settings.json（{"data_root": "<绝对路径>"}），跟机器走不跟账号走；
+# 没设置时 = work_dir()（原行为，零变化）。设置后 素材库peiwork/ 文案库copy/ 都落在 data_root 下。
+
+_SETTINGS_CACHE = [None]
+
+
+def _settings():
+    if _SETTINGS_CACHE[0] is None:
+        try:
+            import json as _json
+            with open(wp("settings.json"), "r", encoding="utf-8") as f:
+                v = _json.load(f)
+                _SETTINGS_CACHE[0] = v if isinstance(v, dict) else {}
+        except Exception:
+            _SETTINGS_CACHE[0] = {}
+    return _SETTINGS_CACHE[0]
+
+
+def data_root():
+    """素材存储根：settings.json 里的 data_root（绝对路径），没设就返回 None（用默认 work_dir）。"""
+    v = str((_settings() or {}).get("data_root") or "").strip()
+    return v or None
+
+
+def set_data_root(p):
+    """设置素材存储根（None/空串=恢复默认）。写 settings.json 并清缓存。"""
+    import json as _json
+    p = str(p or "").strip() or None
+    if p and not os.path.isabs(p):
+        raise ValueError("必须是绝对路径")
+    s = _settings()
+    if p:
+        s["data_root"] = p
+    else:
+        s.pop("data_root", None)
+    _SETTINGS_CACHE[0] = s
+    with open(wp("settings.json"), "w", encoding="utf-8") as f:
+        _json.dump(s, f, ensure_ascii=False, indent=1)
+    return p

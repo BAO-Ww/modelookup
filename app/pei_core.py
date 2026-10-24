@@ -1430,7 +1430,76 @@ def _zhipu_vision(api_key, data_url, prompt):
     return d["choices"][0]["message"]["content"]
 
 
-def _parse_pick(text, cands):
+def _sn_key():
+    """商汤 SenseNova key：env ML_SN_KEY → wp("sn_key.txt")。没有返回空串。
+    2026-10-24 用户接入（sk- 开头，token.sensenova.cn 免费额度）。"""
+    k = os.environ.get("ML_SN_KEY") or ""
+    if k:
+        return k.strip()
+    try:
+        from paths import wp
+        p = wp("sn_key.txt")
+        if os.path.isfile(p):
+            with io.open(p, encoding="utf-8-sig") as f:
+                t = (f.read() or "").strip()
+                if t:
+                    return t
+    except Exception:
+        pass
+    return ""
+
+
+def _sn_vision(api_key, data_url, prompt):
+    """商汤 SenseNova 多模态看图（OpenAI 兼容，token.sensenova.cn）。
+    2026-10-24 实测 sensenova-6.8-flash-lite 认机型/判开门正常。
+    注意：U1.5 Lite 是文生图模型（/v1/images/generations），不会看图，别拿来干这个。"""
+    req = urllib.request.Request(
+        "https://token.sensenova.cn/v1/chat/completions",
+        data=json.dumps({
+            "model": "sensenova-6.8-flash-lite",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": data_url}}]}],
+            "temperature": 0.3,
+            "max_tokens": 4000,   # 6.8 是推理模型，reasoning 也占 token，给足防截断
+        }, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json",
+                 "Authorization": "Bearer " + str(api_key).strip()})
+    with urllib.request.urlopen(req, timeout=90, context=ctx) as r:
+        d = json.loads(r.read())
+    return d["choices"][0]["message"]["content"]
+
+
+def _vision_call(api_key, data_url, prompt, log=None):
+    """视觉调用分发：商汤 sn_key.txt 有 key 优先走 SenseNova（免费额度），
+    失败自动落到智谱 GLM（原 api_key）。都没有返回 None。"""
+    pairs = []
+    _snk = _sn_key()
+    if _snk:
+        pairs.append(("SenseNova", _sn_vision, _snk))
+    if api_key and str(api_key).strip():
+        pairs.append(("GLM", _zhipu_vision, api_key))
+    if not pairs:
+        return None
+    _last_err = None
+    for _pname, _fn, _k in pairs:
+        try:
+            txt = _fn(_k, data_url, prompt)
+            if txt:
+                return txt
+        except Exception as e:
+            _last_err = e
+            try:
+                if log:
+                    log("视觉调用 %s 失败（%s），换下一家" % (_pname, e))
+            except Exception:
+                pass
+    if _last_err:
+        raise _last_err
+    return None
+
+
+def _parse_pick(text, cands, names=None):
     s = (text or "").strip()
     if s.startswith("```"):
         s = s.split("```", 2)[1]
@@ -1442,51 +1511,165 @@ def _parse_pick(text, cands):
         return None
     if not isinstance(obj, dict):
         return None
+    if names is None:                     # 旧调用兜底：编号→文件名
+        names = [c.name for c in cands]
     def name_of(v):
+        # 2026-10-24 实锤：GLM-4V 会把编号吐成数组（front:[1,2,3]）——数组取第一个当首选
+        if isinstance(v, (list, tuple)):
+            v = v[0] if v else None
         try:
             idx = int(v) - 1
         except Exception:
             return None
-        return cands[idx].name if 0 <= idx < len(cands) else None
-    lab = str(obj.get("scene_label") or "").strip()
+        return names[idx] if 0 <= idx < len(names) else None
+    lab = obj.get("scene_label")
+    if isinstance(lab, (list, tuple)):   # 模型把逐图标签吐成列表（BCD-351 实锤）——取第一个
+        lab = next((str(x) for x in lab if str(x).strip()), "")
+    lab = str(lab or "").strip()
     if lab and lab != "无" and not lab.endswith(("实拍", "实景", "安装")):
         lab = lab + "实拍"
+    front = name_of(obj.get("front"))
+    angle = name_of(obj.get("angle"))
+    openv = name_of(obj.get("open"))
+    scene = name_of(obj.get("scene"))
+    # 2026-10-24 实锤：模型有时吐废答案（四项全空 + scene_label 变列表），
+    # 这种必须判失败返回 None —— 既不能覆盖规则选图，也绝不能缓存下来反复用
+    if not (front or angle or openv or scene):
+        return None
     return {
-        "front": name_of(obj.get("front")),
-        "angle": name_of(obj.get("angle")),
-        "open": name_of(obj.get("open")),
-        "scene": name_of(obj.get("scene")),
+        "front": front,
+        "angle": angle,
+        "open": openv,
+        "scene": scene,
         "scene_label": (lab if lab and lab != "无" else None),
         "scene_sub": str(obj.get("scene_sub") or "").strip() or None,
     }
 
 
+def is_junk_cut(f):
+    """透明底「非机器图」守门（2026-10-24 实锤后加，选图规则层与 AI 视觉选图共用）：
+    官网相册会混进二维码/能效标识/logo/白幽灵图标这类透明 PNG，_is_cutout 全过、
+    bbox ar 又正好落进关门/开门带（BCD-351WLHD3E7SFU1 的 25.png 二维码当上机器图实锤）。
+    拦四类：① 二维码（灰度跳变极多，实测 1212 vs 机器图 ≤274）
+            ② 能效标识表（白底 + ≥3 段彩色横条；机器色块只有 1-2 段连片，实锤 segs=0）
+            ③ 近空白/白幽灵（整图近白、无暗无彩——透明底白图标在影棚底=隐身）
+            ④ 扁平单色 logo/图标（单一色相族占绝对多数、几乎无暗部；实物照片有光影层次）"""
+    try:
+        im = Image.open(f)
+        w, h = im.size
+        if w < 200 or h < 200:
+            return False
+        rgba = im.convert("RGBA")
+        bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        im2 = Image.alpha_composite(bg, rgba).convert("RGB").resize((64, 64))
+        px = list(im2.getdata())
+    except Exception:
+        return False
+    n = len(px)
+    gray = [(r * 299 + g * 587 + b * 114) // 1000 for r, g, b in px]
+    trans = sum(1 for y in range(64) for x in range(1, 64)
+                if abs(gray[y * 64 + x] - gray[y * 64 + x - 1]) > 70)
+    if trans >= 650:                    # ① 二维码
+        return True
+    sat_rows = []
+    for y in range(64):
+        row = px[y * 64:(y + 1) * 64]
+        sat = sum(1 for r, g, b in row
+                  if max(r, g, b) - min(r, g, b) > 60 and not (r > 235 and g > 235 and b > 235))
+        sat_rows.append(sat > 20)
+    segs, prev = 0, False
+    for s in sat_rows:
+        if s and not prev:
+            segs += 1
+        prev = s
+    colored = sum(1 for r, g, b in px
+                  if not (r > 225 and g > 225 and b > 225) and not (r < 70 and g < 70 and b < 70))
+    dark = n - colored - sum(1 for r, g, b in px if r > 225 and g > 225 and b > 225)
+    if segs >= 3 and colored > n * 0.15:   # ② 能效标识表
+        return True
+    if colored < n * 0.02 and dark < n * 0.02:   # ③ 白幽灵/近空白
+        return True
+    # ④ 扁平单色 logo：主色相族占绝对多数且几乎无暗部（蓝色渐变圆标实锤：
+    #   渐变会把单色桶打散成 41%+26%，相邻色相桶合并后 67% 就现形）
+    hue_n = {}
+    for r, g, b in px:
+        mx, mn = max(r, g, b), min(r, g, b)
+        if mx - mn > 60 and mx > 70:
+            hue_n[int(_h_deg(r, g, b) // 20) % 18] = hue_n.get(int(_h_deg(r, g, b) // 20) % 18, 0) + 1
+    if hue_n:
+        # 相邻 20° 桶两两合并（渐变会跨桶）：取所有相邻对的最大和
+        _best = 0
+        for _i in range(18):
+            _best = max(_best, hue_n.get(_i, 0) + hue_n.get((_i + 1) % 18, 0))
+        if _best > n * 0.5 and dark < n * 0.05:
+            return True
+    # ⑤ 扁平灰方块标（智家白标实锤：gray_top3=0.96 vs 机器 ≤0.84）：
+    #   无饱和色、无暗部、灰阶集中在 3 桶内 —— 实物照片有光影层次，灰阶必然散
+    if dark < n * 0.02 and sum(hue_n.values()) < n * 0.02:
+        _gh = [0] * 16
+        for _v in gray:
+            _gh[min(15, _v // 16)] += 1
+        if sum(sorted(_gh, reverse=True)[:3]) > n * 0.93:
+            return True
+    return False
+
+
+def _h_deg(r, g, b):
+    """RGB → 色相角（0-360），算不出发 0"""
+    mx, mn = max(r, g, b), min(r, g, b)
+    d = mx - mn
+    if d == 0:
+        return 0
+    if mx == r:
+        return (60 * ((g - b) / d)) % 360
+    if mx == g:
+        return 60 * ((b - r) / d) + 120
+    return 60 * ((r - g) / d) + 240
+
+
+def _src_cands(p, min_side=220):
+    """AI 视觉候选图（2026-10-24 A 方案）：根目录 + 官网/欣盛/其他 子文件夹。
+    返回 [(Path, rel)]；尺寸/长宽比门闩与旧口径一致。"""
+    out = []
+    for base in (p,) + tuple(p / s for s in ("官网", "欣盛", "其他")):
+        if not base.is_dir():
+            continue
+        for f in sorted(base.iterdir()):
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                continue
+            try:
+                im = Image.open(f); w, h = im.size
+            except Exception:
+                continue
+            if w < min_side or h < min_side:
+                continue
+            if w / h < 0.18 or w / h > 5.5:
+                continue
+            rel = f.name if base == p else (base.name + "/" + f.name)
+            out.append((f, rel))
+    return out
+
+
 def zhipu_pick_images(api_key, src_dir, kind, log=None):
     """用 GLM-4V 看候选图，按角色（正面/角度/开门/实景）选图。返回 dict：
-    front/angle/open/scene = 文件名或 None；scene_label/scene_sub = 实景页标题。
+    front/angle/open/scene = 相对 src_dir 的文件路径（新抓图可能带 官网/ 子目录）或 None；
+    scene_label/scene_sub = 实景页标题。
     结果缓存到 <src_dir>/_ai_pick.json，避免每次点发布图都调视觉模型。
     拿不到 key / 调用失败 / 候选太少 → 返回 None（调用方回退规则选图）。"""
     if not api_key or not str(api_key).strip():
         return None
     p = Path(src_dir)
-    cands = []
-    for f in sorted(p.iterdir()):
-        if not f.is_file():
-            continue
-        if f.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
-            continue
-        try:
-            im = Image.open(f); w, h = im.size
-        except Exception:
-            continue
-        if w < 220 or h < 220:
-            continue
-        if w / h < 0.18 or w / h > 5.5:
-            continue
-        cands.append(f)
+    cands_all = _src_cands(p)
+    cands = [f for f, _r in cands_all]
+    names = [r for _f, r in cands_all]
+    # 2026-10-24：废图（二维码/logo/能效标识/白幽灵）根本不进拼版 —— AI 只看真图，
+    # 编号也是纯真图序列，模型再误返列表号也只会落在真图上
+    cands = [f for f in cands if not is_junk_cut(f)]
     if len(cands) < 3:
         return None
-    cache = p / "_ai_pick_v2.json"   # v2：提示词加了「front 必须关门」，旧缓存作废
+    cache = p / "_ai_pick_v4.json"   # v4：2026-10-24 废图先过滤+单编号契约+logo 铁律，旧缓存作废
     try:
         if cache.exists():
             return json.loads(cache.read_text(encoding="utf-8"))
@@ -1498,28 +1681,39 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
         "这是%s的商品图拼版，每张左上角有红色编号。请按角色选出编号：\n"
         "1) front：产品整机正面（白底/透明/干净背景，能看到完整机器正面）。"
         "门/盖必须处于关闭状态——门开着的图只能填 open，绝不填 front\n"
-        "2) angle：立体角度或侧面（门也关着，能看到机器厚度或斜视角，与正面不同）\n"
-        "3) open：开门或看到内部（门打开/看到内胆或内部结构的图）\n"
+        "2) angle：这台机器本身的立体角度或侧面实拍（门也关着，能看到机器厚度或斜视角，与正面不同）\n"
+        "3) open：这台机器本身的开门/内部实拍（门打开/看到内胆或内部结构的图）\n"
         "4) scene：真实家居/阳台/卫生间/厨房的实景照片（人生活的环境里摆着这台机器）。\n"
         "   注意：纯参数图、功能原理图、内部结构渲染图、效果图、宣传长图都【不算】实景，请填 null。\n"
-        "只回答一个 JSON：{\"front\":编号,\"angle\":编号,\"open\":编号,\"scene\":编号或null,"
+        "【铁律】下面这些【不是产品图】，front/angle/open 绝不能选它们，"
+        "哪怕某类实在没有合适的图也宁可填 null，绝不用它们充数：\n"
+        "· 二维码图片；· 品牌 logo、圆形图标、文字标（如 Haier/CASARTE/智家 字样，"
+        "无论白字灰字蓝字）；· 中国能效标识/能源效率标识（白底带彩色能效等级表格或二维码的那张）；"
+        "· 参数表/规格表；· 尺寸线稿图；· 纯文字公告图。\n"
+        "只回答一个 JSON，每个编号值必须是【单个数字】（如 \"front\":3），"
+        "绝不要输出数组/列表：\n"
+        "{\"front\":编号,\"angle\":编号,\"open\":编号,\"scene\":编号或null,"
         "\"scene_label\":\"阳台实拍/厨房实拍/卫生间实拍/客厅实拍/安装实拍/无\","
         "\"scene_sub\":\"一句话说明该实景\"}\n"
+        "示例：{\"front\":3,\"angle\":7,\"open\":12,\"scene\":null,"
+        "\"scene_label\":\"无\",\"scene_sub\":\"\"}\n"
+        "scene_label 必须是一个字符串（如 厨房实拍），绝不要输出列表。\n"
         "若某类没有合适图就填 null；scene_label 在没有实景时填 无。"
     ) % kind
-    try:
-        if log:
-            try:
-                log("正在用 AI 视觉选图 ...")
-            except Exception:
-                pass
-        txt = _zhipu_vision(api_key, data_url, prompt)
-        obj = _parse_pick(txt, cands)
-        if obj:
-            cache.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
-            return obj
-    except Exception:
-        pass
+    for _attempt in (1, 2):   # 废答案（解析后全空）自动重试一次
+        try:
+            if log:
+                try:
+                    log("正在用 AI 视觉选图 ..." + ("（重试）" if _attempt > 1 else ""))
+                except Exception:
+                    pass
+            txt = _vision_call(api_key, data_url, prompt, log=log)
+            obj = _parse_pick(txt, cands, names)
+            if obj:
+                cache.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+                return obj
+        except Exception:
+            continue
     return None
 
 
@@ -2054,21 +2248,7 @@ def zhipu_product_read(api_key, src_dir, info, log=None):
     if not api_key or not str(api_key).strip():
         return None
     p = Path(src_dir)
-    cands = []
-    for f in sorted(p.iterdir()):
-        if not f.is_file():
-            continue
-        if f.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
-            continue
-        try:
-            im = Image.open(f); w, h = im.size
-        except Exception:
-            continue
-        if w < 220 or h < 220:
-            continue
-        if w / h < 0.18 or w / h > 5.5:
-            continue
-        cands.append(f)
+    cands = [f for f, _r in _src_cands(p)]     # 根目录 + 官网/欣盛/其他 子文件夹（A 方案）
     if len(cands) < 2:
         return None
     # v2：提示词加入「官网产品介绍原文」后改版本号，让旧缓存失效、重新生成一次（只一次，之后照旧缓存）
@@ -2110,7 +2290,7 @@ def zhipu_product_read(api_key, src_dir, info, log=None):
                 log("正在用 AI 视觉读懂产品 ...")
             except Exception:
                 pass
-        txt = _zhipu_vision(api_key, data_url, prompt)
+        txt = _vision_call(api_key, data_url, prompt, log=log)
         obj = _parse_ai9_copy(txt)
         if obj:
             try:
@@ -2197,7 +2377,7 @@ def qa_render(api_key, image_paths, info=None, log=None):
                 log("正在 AI 成片自检 ...")
             except Exception:
                 pass
-        txt = _zhipu_vision(api_key, data_url, prompt)
+        txt = _vision_call(api_key, data_url, prompt, log=log)
         arr = _extract_json_array(txt)
         if not isinstance(arr, list):
             return None

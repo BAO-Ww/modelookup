@@ -409,6 +409,14 @@ def run_app(httpd, port, startup_xlsx=None):
             except Exception:
                 pass
 
+        def pick_folder(self):
+            """系统选文件夹对话框（2026-10-24：素材存储路径设置用）。取消返回空串。"""
+            try:
+                res = winref.MAIN_WIN.create_file_dialog(webview.FOLDER_DIALOG)
+                return str(res[0]) if res else ""
+            except Exception:
+                return ""
+
     _dpi()                                  # 必须在量屏幕 / 建窗前：否则算出来是缩放前的尺寸
     w, h, x, y = fit_window(1480, 940)
     lw, lh, lx, ly = fit_window(1180, 860)

@@ -15,6 +15,7 @@ AI9张 · 通用版（按当前型号生成，深灰高级风）
 依赖：同目录 core（用于字体 core.font）
 """
 import os
+import json
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageStat
 
@@ -765,6 +766,46 @@ def _is_cutout(f, min_side=220):
     return a0 < 255                     # 真有透明像素才算抠图
 
 
+def _is_junk_cut(f):
+    """透明底「非机器图」守门（2026-10-24）：实现统一在 pei_core.is_junk_cut，
+    选图规则层与 AI 视觉选图候选池共用同一份，口径绝不分叉。"""
+    try:
+        return core.is_junk_cut(f)
+    except Exception:
+        return False
+
+
+def _src_tiers(src_dir):
+    """来源层（2026-10-24 用户定稿：官网 > 欣盛 > 其他）。
+    读 src_dir/info.json 的 srcmap（文件名→来源，pubwork.work 抓取时写入），
+    没有逐图记录的用 site 兜底（haier/casarte/leader=官网 0、xinsheng=欣盛 1、其余=2）。
+    返回 tier(name) 函数；info 缺失时恒 0（行为与旧版一致）。"""
+    try:
+        info = json.loads((Path(src_dir) / "info.json").read_text(encoding="utf-8"))
+    except Exception:
+        return lambda name: 0
+    sm = info.get("srcmap") if isinstance(info.get("srcmap"), dict) else {}
+    site = str(info.get("site") or "")
+    base = 0 if site in ("haier", "casarte", "leader") else (1 if site == "xinsheng" else 2)
+    m = {}
+    for k, v in sm.items():
+        v = str(v)
+        m[str(k)] = 0 if v == "官网" else (1 if v == "欣盛" else 2)
+
+    def tier(name):
+        n = str(name).replace("\\", "/")
+        if n.startswith("官网/"):              # 2026-10-24 A 方案：子文件夹即来源
+            return 0
+        if n.startswith("欣盛/"):
+            return 1
+        if n.startswith("其他/"):
+            return 2
+        if n in m:
+            return m[n]
+        return m.get(n.rsplit("/", 1)[-1], base)
+    return tier
+
+
 def _is_photo(f, min_side=420):
     """实景照（带底也行）：尺寸不能太小、不能超长（剔除 750×4604 这类规格长图）。"""
     try:
@@ -804,44 +845,63 @@ def _bbox_ar(f):
         return None
 
 
+def _iter_src_images(p):
+    """素材目录原图清单（2026-10-24 A 方案）：根目录 + 官网/欣盛/其他 子文件夹。
+    返回 [(Path, rel)]；rel = 相对 src_dir 的路径（根目录文件就是文件名），用于来源分层。"""
+    out = []
+    for f in sorted(p.iterdir()):
+        if f.is_file() and f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+            out.append((f, f.name))
+    for sub in ("官网", "欣盛", "其他"):
+        sd = p / sub
+        if sd.is_dir():
+            for f in sorted(sd.iterdir()):
+                if f.is_file() and f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                    out.append((f, sub + "/" + f.name))
+    return out
+
+
 def pick_images(src_dir, cat=None):
     p = Path(src_dir)
-    imgs = [f for f in sorted(p.iterdir())
-            if f.is_file() and f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")]
-    if not imgs:
+    imgs_all = _iter_src_images(p)
+    if not imgs_all:
         return None, None, None, None
+    imgs = [f for f, _r in imgs_all]
+    rel_of = dict(imgs_all)      # Path -> rel
+    tier = _src_tiers(src_dir)   # 官网 0 > 欣盛 1 > 其他 2：同层内才比 ar
 
     def find_cut(*keys):
-        for f in imgs:
+        for f in sorted(imgs, key=lambda x: (tier(rel_of[x]), rel_of[x])):
             n = f.stem.lower()
-            if any(k in n for k in keys) and _is_cutout(f):
+            if any(k in n for k in keys) and _is_cutout(f) and not _is_junk_cut(f):
                 return f
         return None
 
     def other_cut(exclude):
-        for f in imgs:
-            if f not in exclude and _is_cutout(f):
+        for f in sorted(imgs, key=lambda x: (tier(rel_of[x]), rel_of[x])):
+            if f not in exclude and _is_cutout(f) and not _is_junk_cut(f):
                 return f
         return None
 
     cuts = []
     for f in imgs:
-        if _is_cutout(f):
+        if _is_cutout(f) and not _is_junk_cut(f):
             ar = _bbox_ar(f)
             if ar:
-                cuts.append((f, ar))
+                cuts.append((f, ar, tier(rel_of[f])))
 
     wide = any(w in str(cat or "") for w in _WIDE_CATS)
     tgt = 1.4 if wide else 0.65
     # 正面 = 关门正面：bbox ar 最贴近品类目标的那张抠图。
-    # 立式关门带 ≤0.92（开门/特写 ≥0.98 分出去）；找不到合格关门图才走老兜底
+    # 立式关门带 ≤0.92（开门/特写 ≥0.98 分出去）；找不到合格关门图才走老兜底。
+    # 2026-10-24 起同层内比 ar，不同层先比来源（官网 > 欣盛 > 其他）
     closed = [t for t in cuts if t[1] <= (2.0 if wide else 0.92)]
     front = None
     if closed:
-        front = min(closed, key=lambda t: abs(t[1] - tgt))[0]
+        front = min(closed, key=lambda t: (t[2], abs(t[1] - tgt)))[0]
     if front is None:
-        for f in imgs:
-            if _is_cutout(f):
+        for f in sorted(imgs, key=lambda x: (tier(rel_of[x]), rel_of[x])):
+            if _is_cutout(f) and not _is_junk_cut(f):
                 front = f
                 break
         if front is None:
@@ -852,7 +912,7 @@ def pick_images(src_dir, cat=None):
     rest = [t for t in closed if t[0] != front]
     angle = None
     if rest:
-        angle = min(rest, key=lambda t: abs(t[1] - (tgt + (0.1 if not wide else 0.2))))[0]
+        angle = min(rest, key=lambda t: (t[2], abs(t[1] - (tgt + (0.1 if not wide else 0.2)))))[0]
     if angle is None:
         angle = find_cut("45", "角度", "angle", "侧面")
         if angle is None or angle == front:
@@ -867,7 +927,7 @@ def pick_images(src_dir, cat=None):
         if not wide:
             opened = [t for t in cuts if t[0] not in (front, angle) and t[1] >= 0.98]
             if opened:
-                openv = min(opened, key=lambda t: abs(t[1] - 1.2))[0]
+                openv = min(opened, key=lambda t: (t[2], abs(t[1] - 1.2)))[0]
     if openv is None or openv in (front, angle):
         openv = front
 
@@ -1232,7 +1292,7 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
     if ai_pick:
         def _vc(fn):
             fp = Path(src_dir) / fn
-            return fp if (fp.exists() and _is_cutout(fp)) else None
+            return fp if (fp.exists() and _is_cutout(fp) and not _is_junk_cut(fp)) else None
         def _vs(fn):
             fp = Path(src_dir) / fn
             return fp if (fp.exists() and _is_photo(fp)) else None
