@@ -183,17 +183,17 @@ def _render_img1(cfg, prod, out):
     def _ph(f):
         a, dsc = f.getmetrics()
         return a + dsc + 40
-    # 胶囊超宽自动拆（用户规矩：换行=拆两颗）：「规格+型号」拆成 规格一颗/型号一颗
+    # 用户令（2026-10-24）：型号必须单独一颗胶囊（只要是带型号的句子，一律拆出来），
+    # 前面文字已在 _split_name 按语义断好；没走 _split_name 的也在这里剥型号
     lines = [cfg["line1"], cfg["line2"]]
-    if _tw(od, lines[1], f2) + 68 > 1000:
-        m = cfg["model"]
-        if m and lines[1].endswith(m):
-            body = lines[1][:-len(m)]
-            if body:
-                lines = [lines[0], body, m]
-        else:
-            half = len(lines[1]) // 2
-            lines = [lines[0], lines[1][:half], lines[1][half:]]
+    _m = cfg.get("model") or ""
+    if _m and lines[1].endswith(_m) and len(lines[1]) > len(_m):
+        _body = lines[1][:-len(_m)]
+        lines = [lines[0], _body, _m] if _body else [lines[0], _m]
+    elif _tw(od, lines[1], f2) + 68 > 1000:
+        # 不含型号却超宽的老兜底：对半拆（走到这里说明型号已不在尾部）
+        half = len(lines[1]) // 2
+        lines = [lines[0], lines[1][:half], lines[1][half:]]
     y0 = 420
     total_h = sum(_ph(f1 if i == 0 else f2) for i in range(len(lines))) + 18 * (len(lines) - 1)
     if centered:
@@ -1520,21 +1520,35 @@ def _payload_row(model):
 
 
 def _split_name(name, model):
-    """货源名称 → (line1, line2)：数字规格前切开，型号永远在 line2 尾部。
-    卡萨帝冰箱530升风冷十字博卡灰BCD-530WGCTDAGGWU1 → 卡萨帝冰箱 / 530升风冷十字博卡灰BCD-530WGCTDAGGWU1
-    统帅智能投影仪LTR1 → 统帅智能 / 投影仪LTR1。"""
+    """货源名称 → (line1, line2)：按语义断点切，型号永远在 line2 尾部。
+    2026-10-24 用户令：胶囊拆分必须读得顺，禁止 len//2 腰斩（「一级直|冷三门」实锤）——
+    优先在品类词后切（海尔冰箱 | 一级直冷…），没有品类词在门体/制冷方式词前切，
+    最后才是数字规格前。渲染层再把型号拆成单独一颗（_render_img1）。"""
     name = re.sub(r"\s+", "", name or "")
     if not name or not model or not name.endswith(model) or len(name) <= len(model):
         return None
     body = name[:-len(model)]
-    m = re.search(r"\d", body)
-    if m and m.start() >= 2:
-        line1, line2 = body[:m.start()], body[m.start():]
-    elif len(body) >= 4:
-        half = (len(body) + 1) // 2
-        line1, line2 = body[:half], body[half:]
-    else:
+    cut = None
+    for kw in ("冰箱", "冷柜", "冰柜", "洗衣机", "干衣机", "空调", "热水器", "净水器",
+               "油烟机", "灶具", "洗碗机", "微波炉", "烤箱", "电视", "酒柜", "消毒柜",
+               "投影仪", "电风扇", "饮水机", "取暖器", "电暖器"):
+        i = body.find(kw)
+        if i >= 0:
+            # 品类词后面还有字 → 在品类词后切；品类词正好收尾 → 在品类词前切
+            # （统帅智能投影仪LTR1 → 统帅智能 | 投影仪LTR1，原例口径）
+            cut = i + len(kw) if i + len(kw) < len(body) else i
+            break
+    if cut is None:
+        m = re.search(r"(单门|双门|两门|三门|四门|多门|十字门|对开门|直冷|风冷|变频|定频)", body)
+        if m and m.start() > 0:
+            cut = m.start()
+    if cut is None:
+        m = re.search(r"\d", body)
+        if m and m.start() >= 2:
+            cut = m.start()
+    if cut is None or cut < 2:
         return None
+    line1, line2 = body[:cut], body[cut:]
     # 欣盛名把自家系列码直接拼在型号前（15套亚式29B+CWY15-29BKU1，实锤），
     # 尾部一段 ≤4 位纯字母数字码且前面是中文的，看着像型号一部分，剥掉
     m2 = re.search(r"([A-Za-z0-9]{1,4})$", line2)

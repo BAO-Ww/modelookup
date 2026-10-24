@@ -26,13 +26,66 @@ _ROOT = [None]
 
 
 def sroot():
+    """素材存储根（2026-10-24 用户定稿：可在界面改存储路径）。
+    默认 work_dir/peiwork；settings.json 设了 data_root → data_root/peiwork。
+    改路径时老数据由 /api/pubroot 搬运，这里只管读当前生效值。"""
     if not _ROOT[0]:
-        # 2026-10-17：目录名用 ASCII「peiwork」——沙箱/安全软件对 AppData 下中文目录名
-        # 会拦（WinError 5 实锤）；界面文案仍叫「素材文件夹」，行为不变
-        d = wp("peiwork")
+        import paths
+        base = paths.data_root()
+        d = os.path.join(base, "peiwork") if base else wp("peiwork")
         os.makedirs(d, exist_ok=True)
         _ROOT[0] = d
     return _ROOT[0]
+
+
+def reset_root():
+    """改存储路径后清缓存，下次 sroot() 读新值"""
+    _ROOT[0] = None
+
+
+def root_status():
+    """存储路径现状（2026-10-24 用户定稿：界面可改，peiwork+copy 共用一个根）"""
+    import paths
+    base = paths.data_root()
+    return {"ok": True, "base": base or paths.work_dir(),
+            "override": base or "", "default": paths.work_dir(),
+            "peiwork": sroot()}
+
+
+def root_move(new_base):
+    """更改素材存储根并把老数据搬过去（peiwork/copy 两个库整体迁移）。
+    空串 = 恢复默认（数据留在原地不往回搬——搬回去反而吓人）。"""
+    import paths
+    new_base = str(new_base or "").strip().strip('"')
+    if not new_base:
+        paths.set_data_root(None)
+        reset_root()
+        return root_status()
+    if not os.path.isabs(new_base):
+        return {"ok": False, "msg": "请填绝对路径（如 D:\\素材库）"}
+    old_base = paths.work_dir()
+    if os.path.abspath(new_base) == os.path.abspath(old_base):
+        paths.set_data_root(None)
+        reset_root()
+        return root_status()
+    try:
+        os.makedirs(new_base, exist_ok=True)
+        for name in ("peiwork", "copy"):
+            src = os.path.join(old_base, name)
+            dst = os.path.join(new_base, name)
+            if os.path.isdir(src):
+                if os.path.isdir(dst):
+                    if os.listdir(dst):
+                        return {"ok": False, "msg": "目标 %s 已有内容，换个空文件夹或先清掉" % dst}
+                    os.rmdir(dst)          # 空壳（sroot 可能预创建过）拆掉再整目录搬
+                shutil.move(src, dst)
+    except Exception as e:
+        return {"ok": False, "msg": "搬运失败：%s" % e}
+    paths.set_data_root(new_base)
+    reset_root()
+    st = root_status()
+    _logf()("素材存储路径已迁移 -> %s" % st["base"])
+    return st
 
 
 def _safe(model):
@@ -212,10 +265,61 @@ def work(model, prog=None):
     if not info:
         raise RuntimeError("页面抓取失败，稍后再试")
     info = _normalize_info(info)
+    # 逐图来源记录（2026-10-24 用户定稿：原图素材按来源分组 + 官网>欣盛>其他用图优先级）
+    if not info.get("srcmap"):
+        _srcmap = {}
+        for _x in (info.get("imgs") or []):   # 欣盛兜底：dl_images 返回 [{f, src}]
+            if isinstance(_x, dict) and _x.get("f"):
+                _srcmap[str(_x["f"])] = str(_x.get("src") or "欣盛")
+        if not _srcmap:
+            _st = str(info.get("site") or site or "")
+            _src = "欣盛" if _st == "xinsheng" else ("兴达" if _st == "xdjdy" else "官网")
+            _srcmap = {f: _src for f in _img_files(d)}
+        info["srcmap"] = _srcmap
     info["dir"] = d
+    _enrich_specs(model, info, prog)      # 先补参数图（还会往根目录落兴达参数图）
+    _organize_sources(d, info)            # 再统一按来源归文件夹（参数图落「其他」）
     _save_info(info)
-    _enrich_specs(model, info, prog)
     return info
+
+
+_SRC_SUBS = ("官网", "欣盛", "其他")
+
+
+def _src_sub_of(s):
+    """来源名 → 子文件夹名（兴达/文案库/未知来源 → 其他）"""
+    s = str(s or "")
+    return s if s in ("官网", "欣盛") else "其他"
+
+
+def _organize_sources(d, info):
+    """新抓的图按来源落子文件夹 官网/欣盛/其他（2026-10-24 用户定稿 A 方案，老型号平铺不动）。
+    把根目录原图移进子目录；srcmap 键改相对路径（官网/xx.jpg）；info.imgs 里的本地文件名同步改。"""
+    srcmap = info.get("srcmap") if isinstance(info.get("srcmap"), dict) else {}
+    flat = _img_files(d)
+    if not flat:
+        return
+    newmap = {k: v for k, v in srcmap.items() if "/" in str(k)}   # 已是相对路径的保留
+    moved = 0
+    for f in flat:
+        sub = _src_sub_of(srcmap.get(f))
+        sd = os.path.join(d, sub)
+        try:
+            os.makedirs(sd, exist_ok=True)
+            shutil.move(os.path.join(d, f), os.path.join(sd, f))
+            moved += 1
+            newmap[sub + "/" + f] = str(srcmap.get(f) or sub)
+        except Exception:
+            newmap[f] = str(srcmap.get(f) or sub)   # 没搬成的留根目录，来源照记
+    if not moved:
+        return
+    info["srcmap"] = newmap
+    # 欣盛流程 info.imgs=[{f,src}]：本地文件名同步改成相对路径（官网图抓取流程 imgs 存的是 URL，不受影响）
+    if isinstance(info.get("imgs"), list):
+        _bnames = {os.path.basename(rel): rel for rel in newmap if "/" in str(rel)}
+        for _x in info["imgs"]:
+            if isinstance(_x, dict) and _x.get("f") and str(_x["f"]) in _bnames:
+                _x["f"] = _bnames[str(_x["f"])]
 
 
 def _enrich_specs(model, info, prog=None):
@@ -316,13 +420,15 @@ def _img_files(d):
 
 def _seed_from_copy(model):
     """文案生成器（copywriter）已抓过的官网图播种进素材库：复制到 素材/<型号>/ 根目录，
-    免得用户在文案窗口点过「写文案」后还要重复抓一遍。只补根目录原图，不动成品目录。"""
+    免得用户在文案窗口点过「写文案」后还要重复抓一遍。只补根目录原图，不动成品目录。
+    返回本次实际复制进来的文件名列表（lib 会把它们记进 srcmap 的「文案库」来源）。"""
     d = mdir(model)
+    copied = []
     try:
         import copywriter
         cdir = os.path.join(copywriter.copy_root(), copywriter.norm_model(model) or model)
         if not os.path.isdir(cdir):
-            return
+            return copied
         have = set(_img_files(d))
         n = 0
         for f in sorted(os.listdir(cdir)):
@@ -334,6 +440,7 @@ def _seed_from_copy(model):
                 continue
             try:
                 shutil.copy(os.path.join(cdir, f), os.path.join(d, f))
+                copied.append(f)
                 n += 1
             except Exception:
                 pass
@@ -341,12 +448,28 @@ def _seed_from_copy(model):
             _logf()("从文案图片库播种 %d 张官网图进素材库" % n)
     except Exception:
         pass
+    return copied
+
+
+def _img_files_rec(d):
+    """原图素材相对路径清单：根目录 + 官网/欣盛/其他 子文件夹（2026-10-24 A 方案）。
+    成品目录（AI6张*/发布图）不在这扫——lib 另有分组。返回相对路径（根目录文件不带前缀）。"""
+    if not os.path.isdir(d):
+        return []
+    out = list(_img_files(d))
+    for sub in _SRC_SUBS:
+        sd = os.path.join(d, sub)
+        for f in _img_files(sd):
+            out.append(sub + "/" + f)
+    return out
 
 
 def lib(model):
-    """图片库分组（peiwen LIB_GROUPS 口径）：成品风格组在前、原图素材垫底。
-    文件一律给相对路径（可能带子目录），前端拼 /pubimg/<型号>/<rel>"""
-    _seed_from_copy(model)
+    """图片库分组（peiwen LIB_GROUPS 口径）：成品风格组在前、原图垫底。
+    2026-10-24 用户定稿：原图素材不再混一堆——按来源拆「原图 · 官网 / 欣盛 / 其他」
+    （优先级同序：官网 > 欣盛 > 其他）；文件一律给相对路径（可能带子目录），
+    前端拼 /pubimg/<型号>/<rel>"""
+    seeded = _seed_from_copy(model)
     d = mdir(model)
     groups = []
     for sub in ("AI6张", "AI6张_聚光", "AI6张_亮白", "AI6张_纯白", "AI6张_实景", "发布图"):
@@ -357,17 +480,37 @@ def lib(model):
         if fs:
             groups.append({"label": label, "sub": sub,
                            "files": ["%s/%s" % (sub, f) for f in fs]})
-    raw = _img_files(d)
+    raw = _img_files_rec(d)
     if raw:
-        groups.append({"label": "原图素材", "sub": "", "files": raw})
+        info = load_info(model) or {}
+        srcmap = info.get("srcmap") if isinstance(info.get("srcmap"), dict) else {}
+        if seeded and info.get("model"):
+            # 文案库播种的图记进 srcmap（来源「文案库」→ 落「其他」组），写回 info.json
+            for f in seeded:
+                srcmap.setdefault(f, "文案库")
+            info["srcmap"] = srcmap
+            _save_info(info)
+        _st = str(info.get("site") or "")
+        _base = {"haier": "官网", "casarte": "官网", "leader": "官网",
+                 "xinsheng": "欣盛"}.get(_st, "其他")
+        buckets = {"官网": [], "欣盛": [], "其他": []}
+        for rel in raw:
+            parts = str(rel).split("/", 1)
+            if len(parts) == 2 and parts[0] in buckets:
+                s = parts[0]                          # 新抓的：子文件夹就是来源
+            else:
+                s = str(srcmap.get(rel) or srcmap.get(os.path.basename(rel)) or _base)
+            buckets[s if s in buckets else "其他"].append(rel)
+        for key in ("官网", "欣盛", "其他"):
+            if buckets[key]:
+                groups.append({"label": "原图 · " + key, "sub": "", "files": buckets[key]})
     return {"ok": True, "dir": d, "has_info": os.path.isfile(os.path.join(d, "info.json")),
             "groups": groups, "job": job_state()}
 
 
 def sel_save(model, rels, sell_price=None, version="N"):
-    """保存精选：按勾选顺序把选中图复制进 发布图/（N_原名.ext），
-    第一张另出促销首图 0_主图_卖点拼版.jpg（peiwen save_selected 同款）"""
-    import pei_hero
+    """保存精选：按勾选顺序把选中图复制进 发布图/（N_原名.ext）。
+    2026-10-24 用户令：0_主图_卖点拼版.jpg 所有的都不用做——只存勾选原图，不再自动拼首图"""
     info = load_info(model)
     if not info:
         raise RuntimeError("先抓素材再保存精选")
@@ -382,27 +525,14 @@ def sel_save(model, rels, sell_price=None, version="N"):
     if not rels:
         raise RuntimeError("先勾选要发布的图")
     n = 0
-    first = rels[0]
     for rel in rels:
         sp = os.path.join(src, rel.replace("/", os.sep))
         if not os.path.abspath(sp).startswith(os.path.abspath(src)) or not os.path.isfile(sp):
-            continue
-        if rel == first:
             continue
         ext = os.path.splitext(rel)[1]
         dst = os.path.join(sel, "%d_%s%s" % (n + 1, os.path.splitext(os.path.basename(rel))[0], ext))
         shutil.copy(sp, dst)
         n += 1
-    # 首图统一深色促销风（peiwen 2026-09 定稿）
-    try:
-        cover = os.path.join(sel, "0_主图_卖点拼版.jpg")
-        prod_img = os.path.join(src, first.replace("/", os.sep))
-        if os.path.exists(prod_img):
-            pei_hero.make_hero_promo(prod_img, info, cover, ship=version,
-                                     sell_price=sell_price, api_key=_ai_key())
-            n += 1
-    except Exception as e:
-        _logf()("精选首图生成失败（其余已保存）：%s" % e)
     try:
         os.startfile(sel)  # noqa
     except Exception:

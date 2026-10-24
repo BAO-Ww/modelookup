@@ -54,7 +54,11 @@ SITES = {
 
 
 def copy_root():
-    d = wp("copy")
+    """文案素材根（2026-10-24 用户定稿：与发布图素材库共用「存储路径」设置）。
+    settings.json 设了 data_root → data_root/copy；没设 → work_dir/copy（原行为）。"""
+    import paths
+    base = paths.data_root()
+    d = os.path.join(base, "copy") if base else wp("copy")
     if not os.path.isdir(d):
         try:
             os.makedirs(d)
@@ -666,7 +670,7 @@ def generate(model, kind='l', force=0, log=None):
                 _seen.add(u)
                 pairs.append((u, '欣盛'))
     images = dl_images(pairs, mdir, log)
-    featured = make_featured(mdir, data.get('price'), log)
+    # 2026-10-24 用户令：0_主图_卖点拼版.jpg 所有的都不用做，自动合成已停
     # 卖点：AI 从真实参数提炼的加厚条优先（2026-10-13 用户定稿，官网 sellpoint 是
     # 「智能生活新选择」类空洞口号不要）；AI 全被剔才拿官网卖点兜底
     pts = ai['points'][:15] or [p for p in (data.get('sellpoints') or []) if p][:15]
@@ -677,7 +681,7 @@ def generate(model, kind='l', force=0, log=None):
            "desc_nat": build_desc(model, kk, data, pts, 'nat'),
            "desc_rep": build_desc(model, kk, data, pts, 'rep'),
            "xhs": ai['xhs'],
-           "images": images, "featured": featured}
+           "images": images}
     try:
         with io.open(cache, "w", encoding="utf-8") as f:
             json.dump(res, f, ensure_ascii=False)

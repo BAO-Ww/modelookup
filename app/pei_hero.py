@@ -524,12 +524,18 @@ def make_hero_cover(src_img, info, out_path, ship="N", specs_override=None,
 
 
 def pick_product_img(info, sel_dir=None):
-    """挑首图用的产品原图：精选目录第一张 -> 素材目录第一张（排除 0_ 产物）"""
+    """挑首图用的产品原图：精选目录第一张 -> 素材目录第一张（排除 0_ 产物）。
+    2026-10-24 A 方案：素材目录扫根目录 + 官网/欣盛/其他 子文件夹（子文件夹在前，按来源优先级）。"""
     dirs = []
     if sel_dir:
         dirs.append(sel_dir)
     if info.get("dir"):
-        dirs.append(info["dir"])
+        d0 = info["dir"]
+        for sub in ("官网", "欣盛", "其他"):
+            sd = os.path.join(d0, sub)
+            if os.path.isdir(sd):
+                dirs.append(sd)
+        dirs.append(d0)
     for d in dirs:
         if not d or not os.path.isdir(d):
             continue

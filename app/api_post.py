@@ -255,6 +255,24 @@ class ApiPostMixin:
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
             return
 
+        # ---------- 素材存储路径（2026-10-24 用户定稿：界面可改，peiwork+copy 共用，老数据搬） ----------
+        if u.path in ("/api/pubroot", "/api/pubrootset"):
+            import pubwork
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            except Exception:
+                d = {}
+            if u.path == "/api/pubroot":
+                r = pubwork.root_status()
+            else:
+                if pubwork.job_state()["running"]:
+                    r = {"ok": False, "msg": "有素材任务在跑，等它跑完再改"}
+                else:
+                    r = pubwork.root_move(str(d.get("path") or ""))
+            self._send(200, json.dumps(r, ensure_ascii=False))
+            return
+
         # ---------- 发布图工厂（2026-10-17，闲鱼配文 Pro 并入） ----------
         if u.path in ("/api/pubgen", "/api/pubhero", "/api/pubsel", "/api/pubqa",
                       "/api/pubauto", "/api/pubimport", "/api/pubgh", "/api/pubopen",

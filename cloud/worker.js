@@ -1032,9 +1032,15 @@ async function route(request, env, path, ctx) {
     const b = await request.json().catch(() => ({}));
     const c = safeKey(b.c, 100);                       // 审计（S4）：键名黑名单
     if (!c || !b.b64) return jerr("参数不全");
-    if (String(b.b64).length > 400000) return jerr("图太大，压一压再传");
+    // 2026-10-24 管理号隐藏标记：b64==='hide' → 存 {b:'hide',by:'hide'}，全端 syncImgs 收敛压图
+    const isHide = b.b64 === "hide";
+    if (isHide) {
+      const users = await getUsers(env);
+      const me = users[who];
+      if (!me || me.role !== "admin") return jerr("只有管理号能隐藏图", 403);
+    } else if (String(b.b64).length > 400000) return jerr("图太大，压一压再传");
     const imgs = await getMyImgs(env);
-    imgs[c] = { b: String(b.b64), by: who };           // 归属 = 上传人（服务端定，不信客户端）
+    imgs[c] = isHide ? { b: "hide", by: "hide" } : { b: String(b.b64), by: who };  // 归属 = 上传人（服务端定，不信客户端）
     const total = JSON.stringify(imgs).length;
     if (total > 24000000) return jerr("云端补图库满了（" + Math.round(total/1048576) + "MB），清理后再传");
     await myimgsPut(env, imgs);

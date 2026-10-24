@@ -266,11 +266,20 @@ main{padding:22px 0 60px}
   width:16px;height:16px;line-height:14px;padding:0;border-radius:50%;
   font:700 11px/14px inherit;text-align:center;cursor:pointer;
   color:#8a93a5;background:rgba(255,255,255,.92);border:1px solid var(--line);
-  opacity:0;                                       /* 平时完全看不见，鼠标扫到卡片才浮出来 */
+  opacity:0;pointer-events:none;                   /* 平时看不见也**不吃点击**（17:10 实锤：透明钮把下面的按钮点没了） */
   transition:opacity .15s;
 }
-.chead:hover .kimgdel{opacity:.6}
+.chead:hover .kimgdel{opacity:.6;pointer-events:auto}
 .kimgdel:hover{opacity:1;color:#fff;background:#d63838;border-color:#d63838}
+.kimgre{
+  position:absolute;top:2px;left:2px;z-index:2;    /* 换图钮贴图**左上角**（× 在图右侧），绝不盖 margin-left:auto 顶右的按钮排 */
+  font:600 10px/1 inherit;cursor:pointer;
+  color:#2e6be6;background:rgba(238,244,255,.95);
+  border:1px solid #c9d9f8;border-radius:8px;padding:2px 6px;
+  opacity:0;pointer-events:none;transition:opacity .15s;
+}
+.chead:hover .kimgre{opacity:.9;pointer-events:auto}
+.kimgre:hover{opacity:1;background:#dde9ff}
 .chead-main{flex:1;min-width:200px}
 .moline{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
 .mo{
@@ -1114,6 +1123,10 @@ function syncImgs(){
       var e = j.imgs[c] || {};
       var b = typeof e === 'string' ? e : e.b;                       // 老服务端兜底
       var by = typeof e === 'string' ? '__legacy__' : (e.by || '__legacy__');
+      if (b === 'hide'){                     /* 2026-10-24 管理号隐藏标记：全端收敛，谁本地存的旧图都压掉 */
+        if (MYIMGS[c] !== 'hide'){ MYIMGS[c] = 'hide'; MYIMGOWN[c] = 'hide'; changed = true; }
+        return;
+      }
       if (!MYIMGS[c]){ MYIMGS[c] = b; MYIMGOWN[c] = by; changed = true; }
       else if (MYIMGS[c] !== b){
         imgCloudPush(c);                       // 本地不一样（可能是后来补的），把本地的推上去
@@ -1161,7 +1174,7 @@ applyFontScale();
 
 
 function imgOf(core){
-  if (MYIMGS[core]) return MYIMGS[core];            // 自己补的图优先
+  if (MYIMGS[core]) return MYIMGS[core];            // 自己补的图优先（'hide'=管理号隐藏标记，2026-10-24，调用方各自处理）
   if (IMGS[core]) return IMGS[core];                // 内联的 dataURL（离线版）
   // exe 版：图片不内联，交给浏览器按需取，看得见才解码
   if (CFG.imgBase && IMGHAS && IMGHAS[core]) return CFG.imgBase + encodeURIComponent(core);
@@ -1173,7 +1186,8 @@ function missCount(){
     var c = ALL[i].c;
     if (seen[c]) continue;
     seen[c] = 1;
-    if (!imgOf(c) && !ALL[i].ximg) n++;
+    var _im = imgOf(c);
+    if ((!_im || _im === 'hide') && !ALL[i].ximg) n++;   // 隐藏掉的也按缺图算（2026-10-24）
   }
   return n;
 }
@@ -2540,11 +2554,15 @@ function canSendNationwide(it){
 function renderItem(it){
   var nm = nameOf(it);
   var marked = !!MARKED[it.c];
-  var img = imgOf(it.c) || it.ximg || '';   // 官网图库优先，欣盛商城图只兜缺图（2026-10-12）
-  /* × 删图钮只给「本人补的」+ 管理号（sys 整库图谁都不给，2026-10-12 权限收口） */
+  var _img0 = imgOf(it.c);
+  var _hid = _img0 === 'hide';              // 管理号隐藏标记（2026-10-24）：连欣盛兜底图一起压掉
+  var img = _hid ? '' : (_img0 || it.ximg || '');   // 官网图库优先，欣盛商城图只兜缺图（2026-10-12）
+  /* × 删图钮：本人补的（2026-10-12 权限收口）；2026-10-24 起管理号对任何有图的卡都能隐藏（sys 也行） */
   var _ow = MYIMGOWN[it.c];
   var mine = !!MYIMGS[it.c] && !!_ow &&
              (_ow === (AUTH && AUTH.u) || ((AUTH && AUTH.role === 'admin') && _ow !== 'sys'));
+  var _adm = AUTH && AUTH.role === 'admin';
+  var _del = pok('addimg') ? (_adm ? !!img : mine) : false;   /* 「补图/导出比价图」开关关掉时 × 跟着收（2026-10-24） */
 
   /* ---------- 报价（两套口径） ----------
        · 海尔 / 卡萨帝：滞销·样机清理价 + 出库奖励 + 清理数量，下面接一行全新机报价
@@ -2848,7 +2866,8 @@ function renderItem(it){
     + '<div class="chead" style="position:relative">'
     + (img ? '<img class="pimg" loading="lazy" src="' + img + '" alt="">'
            : '<div class="pimg ph">' + PH_SVG + (pok('addimg') ? '<button class="addimg" data-addimg="' + esc(it.c) + '">＋ 补图</button>' : '') + '</div>')
-    + (mine ? '<button class="kimgdel" data-delimg="' + esc(it.c) + '" title="删掉我补的这张图">×</button>' : '')
+    + (img && _adm && pok('addimg') ? '<button class="kimgre" data-addimg="' + esc(it.c) + '" title="从本机换一张图（隐藏的图重新补图即恢复）">换图</button>' : '')
+    + (_del ? '<button class="kimgdel" data-delimg="' + esc(it.c) + '" title="' + (_adm ? '隐藏这张图（所有人看不到；换图即恢复）' : '删掉我补的这张图') + '">×</button>' : '')
     + '<div class="chead-main"><div class="moline">'
     + '<span class="mo" data-mocopy="' + esc(it.mo) + '" title="点一下复制纯型号" style="cursor:pointer">' + esc(it.mo) + '</span>'
     + '<span class="pub"' + ((marked || svInfo) ? '' : ' hidden') + '>已发布'
@@ -3165,8 +3184,10 @@ function allFiltered(){
   var hit = [], i;
   for (i = 0; i < ALL.length; i++){
     var it = ALL[i];
-    /* 「全部」浏览模式（点了品牌/品类/方式的「全部」）：一张不藏、条数不设上限 */
-    if (pass(it) && (curBrowseAll || !isBlankCard(it))) hit.push({ sc: 0, it: it, ix: -1 });
+    /* 2026-10-24 用户定稿：「全部」只是不限品牌/品类/方式，「可售才显」照吃——
+       没库存的照样藏（搜索照常能搜到，不显示≠搜不到）。
+       老口径「点全部=一张不藏」实锤漏洞：品类/方式点全部后无货卡全涌出来。 */
+    if (pass(it) && !isBlankCard(it)) hit.push({ sc: 0, it: it, ix: -1 });
   }
   /* 2026-10-21 用户定稿：「已发布」视图（自看 u='0' / 管理号看子账号）按标记时间降序——
      最新标的排最上面，越早发的越靠后。时间口径 = SUBVIEW.info[c].t（该型号最新一次
@@ -4621,6 +4642,7 @@ function openCopyView(k, kind, force, tb){
       +     '<div style="font-size:11px;color:#6b7a94;padding:8px 8px 2px">工具</div>'
       +     '<button class="railbtn" id="pv_import" style="text-align:left">导入图片</button>'
       +     '<button class="railbtn" id="pv_openrail" style="text-align:left">打开素材</button>'
+      +     '<button class="railbtn" id="pv_setroot" style="text-align:left" title="改图片素材存哪里（发布图素材+文案素材一起搬过去）">存储路径</button>'
       +     '<div id="pv_bar" style="display:none;height:5px;background:#16213a;border-radius:4px;overflow:hidden;margin:6px 6px 2px"><div style="height:100%;width:0;background:#4f46e5;transition:width .4s"></div></div>'
       +     '<div id="pv_msg" style="font-size:11px;color:#8fd3a8;padding:0 8px;min-height:14px;line-height:1.4"></div>'
       +     '<div style="flex:1"></div>'
@@ -4650,6 +4672,44 @@ function openCopyView(k, kind, force, tb){
   wrap.querySelector('#pv_openrail').onclick = function(){
     fetch('/api/pubopen', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({model: k})});
   };
+  /* 存储路径（2026-10-24 用户定稿）：系统选文件夹 → 老数据整体搬过去，立即生效 */
+  (function(){
+    var sb = wrap.querySelector('#pv_setroot');
+    if (!sb) return;
+    function cur(){ return wrap.querySelector('#pv_msg'); }
+    fetch('/api/pubroot', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (j && j.ok) sb.title = '当前：' + j.base + '（点击更改；发布图素材+文案素材一起搬）';
+      }).catch(function(){});
+    sb.onclick = function(){
+      if (!window.pywebview || !pywebview.api || !pywebview.api.pick_folder){
+        var p2 = prompt('填新的素材存储根目录（绝对路径，发布图+文案素材会一起搬过去）：');
+        if (p2 === null) return;
+        _doSet(p2);
+        return;
+      }
+      pywebview.api.pick_folder().then(function(p){ if (p) _doSet(p); });
+    };
+    function _doSet(p){
+      var m = cur();
+      if (m){ m.style.display = 'block'; m.style.color = '#c8b45a'; m.textContent = '正在搬运素材（老数据全部搬过去，别关窗口）…'; }
+      fetch('/api/pubrootset', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: p})})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (j && j.ok){
+            sb.title = '当前：' + j.base + '（点击更改；发布图素材+文案素材一起搬）';
+            if (m){ m.style.color = '#8fd3a8'; m.textContent = '✓ 素材已搬到 ' + j.base; }
+            pubLoadLib();
+          } else {
+            if (m){ m.style.color = '#e08a8a'; m.textContent = (j && j.msg) || '搬运失败'; }
+          }
+          setTimeout(function(){ if (m) m.style.display = 'none'; }, 8000);
+        }).catch(function(e2){
+          if (m){ m.style.color = '#e08a8a'; m.textContent = '搬运失败：' + e2; }
+        });
+    }
+  })();
   /* 打开文件夹（图片库标题行快捷入口，2026-10-17） */
   var ofb = wrap.querySelector('#cv_openfolder');
   if (ofb) ofb.onclick = function(){
@@ -5059,7 +5119,7 @@ function openCopyView(k, kind, force, tb){
             pubPicked = [];
             var msg = wrap.querySelector('#cv_pickmsg');
             if (msg){ msg.style.display = 'block';
-              msg.textContent = '✓ 已按勾选顺序存进「发布图」文件夹 ' + j.count + ' 张（含促销首图），文件夹已打开';
+              msg.textContent = '✓ 已按勾选顺序存进「发布图」文件夹 ' + j.count + ' 张，文件夹已打开';
               setTimeout(function(){ msg.style.display = 'none'; }, 6000); }
             renderImgs();
           } else { alert((j && j.msg) || '保存失败'); }
@@ -5377,6 +5437,20 @@ listEl.addEventListener('click', function(e){
     var dk = di.dataset.delimg;
     /* 2026-10-12 用户定稿：删图要权限（补图/删图同一把 addimg），标记发布/定价不要权限 */
     if (!pok('addimg')){ alert('删图需要「补图」权限，找管理号开'); return; }
+    var _admDel = AUTH && AUTH.role === 'admin';
+    var _ownDel = !!MYIMGS[dk] && !!MYIMGOWN[dk] && (MYIMGOWN[dk] === (AUTH && AUTH.u));
+    if (_admDel && !_ownDel){
+      /* 2026-10-24 管理号删图 = 云端打隐藏标记（{b:'hide',by:'hide'}），sys 图/别人的图都能压；
+         比 DELETE 干净：老端本地缓存的图也会被 syncImgs 收敛压掉。重新补图/换图即恢复 */
+      if (MYIMGS[dk] && MYIMGS[dk] !== 'hide' && confirm('隐藏 ' + dk + ' 的这张图？（所有人都会看不到；重新补图即恢复）')){
+        MYIMGS[dk] = 'hide'; saveMyImgs();
+        MYIMGOWN[dk] = 'hide'; saveMyImgOwn();
+        if (AUTH && AUTH.token) authFetch('/myimg', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                      body: JSON.stringify({ c: dk, b64: 'hide' }) }, true);
+        run();
+      }
+      return;
+    }
     if (MYIMGS[dk] && confirm('删掉你给 ' + dk + ' 补的这张图？（所有人都会看不到）')){
       delete MYIMGS[dk]; saveMyImgs();
       delete MYIMGOWN[dk]; saveMyImgOwn();
