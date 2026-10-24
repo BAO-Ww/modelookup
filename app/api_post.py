@@ -204,6 +204,30 @@ class ApiPostMixin:
             self._send(200, json.dumps(r, ensure_ascii=False))
             return
 
+        if u.path == "/api/cdp_switch":
+            # 闲鱼页自动化（CDP 调试口）开关（2026-10-24）：本机 wp("xy_cdp_off.txt")，
+            # 存在=关。改的是下次启动的生效状态（WebView2 调试口启动时定死），重启软件生效。
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            except Exception:
+                d = {}
+            on = bool(d.get("on"))
+            p = wp("xy_cdp_off.txt")
+            try:
+                if on:
+                    try: os.remove(p)
+                    except FileNotFoundError: pass
+                else:
+                    with open(p, "w", encoding="utf-8") as f:
+                        f.write("off")
+            except Exception as e:
+                self._send(200, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+                return
+            state.LOG.append("[设置] 闲鱼页自动化（CDP）→ %s（重启软件生效）" % ("开" if on else "关"))
+            self._send(200, json.dumps({"ok": True, "on": on, "need_restart": True}, ensure_ascii=False))
+            return
+
         if u.path == "/api/xyview":
             # 软件内打开闲鱼页（2026-10-17）：拉起 --goofish 独立进程窗口，
             # 一号一个 WebView2 档案（xyprofile_<账号>），多号登录态互不干扰

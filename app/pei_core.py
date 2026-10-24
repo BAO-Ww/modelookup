@@ -2107,6 +2107,7 @@ def make_zip(sel_dir, info, out_path):
 
 
 # ---------------- AI 选图 + 去黑底 ----------------
+_BGFB = [0]        # PIL 去背兜底计数（2026-10-24 显性化：首张触发时往 state.LOG 留一条）
 def _has_qr(path):
     """pyzbar 检测二维码（可选依赖，没装就当没二维码）"""
     try:
@@ -2183,7 +2184,9 @@ def select_topk(imgdir, k=6):
 
 def normalize_bg_to_bytes(in_path, force=False):
     """去背景 + 贴白底。返回 JPEG bytes；force=True 总是处理，否则已经很白就跳过。
-    实现：rembg（u2net）成功用 rembg，否则回退到 PIL 提亮。"""
+    实现：rembg（u2net）成功用 rembg，否则回退到 PIL 提亮。
+    2026-10-24 显性化：frozen exe 没带 rembg 时永远走 PIL 兜底——首张留痕 state.LOG，
+    别让「去背效果变差」无声发生（效果略降但功能在，不拦流程）。"""
     from io import BytesIO
     try:
         im = load_rgb(in_path)
@@ -2204,6 +2207,13 @@ def normalize_bg_to_bytes(in_path, force=False):
             bg.save(buf, format="JPEG", quality=92)
             return buf.getvalue()
         except Exception:
+            _BGFB[0] += 1
+            if _BGFB[0] == 1:
+                try:
+                    import state as _st
+                    _st.LOG.append("[发布图] rembg 没装（安装版不带），AI 去背用 PIL 提亮兜底——能出图但效果略降")
+                except Exception:
+                    pass
             # 回退：把图按一定阈值提亮（暗→更白）但保留高对比
             def lift(v):
                 if v < 50: return 255

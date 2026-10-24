@@ -21,6 +21,7 @@ datas = [
     (os.path.join(A, "images_cache.json"), "assets"),
     (os.path.join(A, "midea_prices.json"), "assets"),
     (os.path.join(A, "ronshen_prices.json"), "assets"),
+    (os.path.join(A, "stock_rules.json"), "assets"),     # 库存口径单源（2026-10-24）
     (os.path.join(A, "icon.ico"), "assets"),
     # 发布图工厂（2026-10-17 闲鱼配文 Pro 并入）：官网索引 + URL 种子（pei_core.res_path 读 assets/pei/）
     (os.path.join(A, "pei", "haier_index.json"), "assets/pei"),

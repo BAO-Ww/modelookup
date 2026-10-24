@@ -155,6 +155,72 @@ async function d1List(env) {
   return (r.results || []).map((x) => ({ name: x.k, v: x.v }));
 }
 
+// ---------------- myimgs 补图行级存储（2026-10-24 D1 化）----------------
+// 之前 myimgs = KV 一坨整包（1399 张 / 8.9MB），每次传/删一张 = 读 8.9MB 改一张写 8.9MB——
+// 并发覆盖 + 写放大 + 逼近 KV 单值 25MB 上限。现在一图一行 myimg_<卡片key>（值 {b,by}）：
+//   · 传图/删图 = 单行 UPSERT/DELETE，原子且并发安全
+//   · 读全量分页（D1 单查询响应有上限，1399 行约 8.9MB 一口吞不下）
+//   · KV 键 "myimgs" 保留作惰性迁移源（D1 首次读到空时整包搬入），迁移后可手动清掉
+//   · env.DB 未绑 → 退 KV 整包（老部署兼容）
+const MI_PFX = "myimg_";
+async function myimgsD1All(env) {
+  const out = {};
+  const PAGE = 120;
+  for (let off = 0; ; off += PAGE) {
+    const r = await env.DB.prepare(
+      "SELECT k, v FROM store WHERE substr(k,1,6) = ? ORDER BY k LIMIT ? OFFSET ?"
+    ).bind(MI_PFX, PAGE, off).all();
+    const rows = r.results || [];
+    for (const x of rows) {
+      try { out[x.k.slice(MI_PFX.length)] = JSON.parse(x.v); } catch (e) {}
+    }
+    if (rows.length < PAGE) break;
+  }
+  return out;
+}
+async function myimgsGet(env) {
+  if (!(await d1Init(env))) return getJSON(env, "myimgs", {});
+  const n = await env.DB.prepare("SELECT count(*) AS n FROM store WHERE substr(k,1,6) = ?").bind(MI_PFX).first();
+  if (!n || !n.n) {
+    const raw = await env.KV.get("myimgs");          // 惰性迁移（只发生一次；之后 KV 键不再被读）
+    if (raw) {
+      try {
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === "object") {
+          const ks = Object.keys(obj);
+          for (let i = 0; i < ks.length; i += 40) {
+            const st = [];
+            for (const k of ks.slice(i, i + 40))
+              st.push(env.DB.prepare(
+                "INSERT INTO store (k,v,updated_at) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at"
+              ).bind(MI_PFX + k, JSON.stringify(obj[k]), Date.now()));
+            await env.DB.batch(st);
+          }
+          return obj;
+        }
+      } catch (e) {}
+    }
+    return {};
+  }
+  return myimgsD1All(env);
+}
+async function myimgsPut(env, imgs) {               // 整包形态 = 与 D1 现状 diff（行级 upsert/delete）
+  if (!(await d1Init(env))) { await env.KV.put("myimgs", JSON.stringify(imgs)); return; }
+  const cur = await myimgsD1All(env);
+  const st = [];
+  for (const [k, v] of Object.entries(imgs)) {
+    const s = JSON.stringify(v);
+    if (cur[k] === undefined || JSON.stringify(cur[k]) !== s)
+      st.push(env.DB.prepare(
+        "INSERT INTO store (k,v,updated_at) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at"
+      ).bind(MI_PFX + k, s, Date.now()));
+  }
+  for (const k of Object.keys(cur))
+    if (imgs[k] === undefined)
+      st.push(env.DB.prepare("DELETE FROM store WHERE k = ?").bind(MI_PFX + k));
+  for (let i = 0; i < st.length; i += 40) await env.DB.batch(st.slice(i, i + 40));
+}
+
 // ---------------- 标记发布行级存储（2026-10-15 大改）----------------
 // 之前 pub_<u> = 整个账号一坨 JSON，每次标记 = 读整坨改一条写整坨——并发覆盖/写放大/单点损坏
 // 三宗罪的根源。现在拆三张表，一条标记一行，写入原子化：
@@ -384,10 +450,10 @@ export default {
   }
 };
 
-// 每日快照（2026-10-13 起做 users；2026-10-14 体检 P1-D4 扩到业务核心）：
-// 当天第一个请求把 users + 全部 pub_/pubp_/xy_（发布记录/价格镜像/闲鱼号配置）整包
+// 每日快照（2026-10-13 起做 users；2026-10-14 体检 P1-D4 扩到业务核心；2026-10-24 扩 myimgs）：
+// 当天第一个请求把 users + 全部 pub_/pubp_/xy_ + myimgs 图池整包
 // 写进 snap_YYYYMMDD，只留最近 7 份（按键名日期清旧的）。写量 2 次/天，额度无压力。
-// myimgs 不进快照（~18MB 逼近 KV 单值 25MB 上限，且客户端 syncImgs 自愈）。
+// myimgs 已 D1 行级化（myimg_* 行），快照时组装回整包 ~9MB < KV 25MB 单值上限。
 // 兼容：旧快照是 users 裸串、新快照是 {users:..., pub_B:...} 对象，恢复口两样都认。
 // 就算忘了手动 /admin/backup，也永远有一周的滚动恢复点。
 let _snapDay = null;
@@ -415,6 +481,11 @@ async function dailySnap(env) {
         try { snap["pubp_" + u] = JSON.stringify(await pubGetP(env, u)); } catch (e) {}
       }
     } catch (e) { console.error("快照取行级数据失败（降级只备 KV）：" + e.message); }
+    // myimgs 图池进快照（2026-10-24）：D1 行级读全量组装，整包 ~9MB < KV 25MB 单值上限
+    try {
+      const mi = await myimgsGet(env);
+      if (Object.keys(mi).length) snap["myimgs"] = JSON.stringify(mi);
+    } catch (e) { console.error("快照收 myimgs 失败（跳过）：" + e.message); }
     await env.KV.put("snap_" + today, JSON.stringify(snap));
     await env.KV.put("snap_last", today);
     const cutoff = new Date(Date.now() - 8 * 86400000).toISOString().slice(0, 10).replaceAll("-", "");
@@ -536,6 +607,14 @@ async function route(request, env, path, ctx) {
     if (extra) {
       for (const [k, v] of Object.entries(extra)) {
         if (k === "users") continue;
+        if (k === "myimgs") {
+          // 2026-10-24：myimgs 图池恢复（写 R2 主存；R2 未绑退 KV）
+          try {
+            const o = typeof v === "string" ? JSON.parse(v) : v;
+            if (o && typeof o === "object" && !Array.isArray(o)) { await myimgsPut(env, o); nBiz++; }
+          } catch (e) {}
+          continue;
+        }
         if (!/^(pub_|pubp_|xy_)/.test(k) || typeof v !== "string") continue;
         try {
           // 2026-10-15 行级化：恢复口把 blob 拆成行导入（marks/markmeta/prices），不再整包覆盖
@@ -998,22 +1077,9 @@ async function route(request, env, path, ctx) {
   }
 
   // ---------- 补图上云（所有人共享：谁补的大家都能看到） ----------
-  // 2026-10-15 R2 化：myimgs 整包改存 R2（env.IMG 单对象 "myimgs"），摆脱 KV 单值 25MB 天花板。
+  // 2026-10-24 D1 行级化：myimgsGet/myimgsPut 搬到顶层（一图一行 myimg_*，见文件头部 D1 区）。
   // 格式与原 KV 键完全一致（{卡片key: {b, by}}），客户端协议零改动。
-  // env.IMG 未绑 → 退 KV（部署漏绑不炸）；已绑 → 只走 R2，失败抛错不退（防读旧数据）。
-  async function myimgsGet(env) {
-    if (env.IMG) {
-      const o = await env.IMG.get("myimgs");
-      if (!o) return {};
-      return JSON.parse(await o.text());
-    }
-    return getJSON(env, "myimgs", {});
-  }
-  async function myimgsPut(env, imgs) {
-    const s = JSON.stringify(imgs);
-    if (env.IMG) { await env.IMG.put("myimgs", s); return; }
-    await env.KV.put("myimgs", s);
-  }
+  // KV 键 "myimgs" 只作惰性迁移源，迁移完成后可手动清掉。
   // KV 时代注释：myimgs = { 卡片key: {b: dataURL, by: 补图人|'sys'(整库灌入)|'__legacy__'(旧数据)} }
   // 2026-10-12 加归属：公共池合并拉下来后人人本地都有，原来 × 谁都能点、谁都能删别人的图。
   async function getMyImgs(env) {
@@ -1169,7 +1235,19 @@ async function route(request, env, path, ctx) {
     if (!obj) return J({ ok: true, ts: "", rows: 0 });
     if (ctx && ctx.waitUntil && await autoKick("yy", Date.now() - (+obj.up || 0)))
       ctx.waitUntil(ghDispatch("yonyou-cloud-stock.yml"));
-    return J({ ok: true, ts: obj.ts || "", rows: obj.rows || 0, by: obj.by || "" });
+    return J({ ok: true, ts: obj.ts || "", rows: obj.rows || 0, by: obj.by || "", up: +obj.up || 0 });   // up=最近成功跑批（本机哨兵用，2026-10-24）
+  }
+
+  // 跑批报到（2026-10-24）：kdocs CI 内容没变时跳过文件上传 → up 不动，本机哨兵会误报停摆。
+  // 每轮跑完都打一下这个口子只刷 up（KV 写 ~15 次/天，额度无压力）。X-Cloud-Key 同 /mpayload 通道。
+  if (path === "/xlsxping" && request.method === "POST") {
+    const ck = env.CLOUD_KEY || env.SECRET;
+    if (!ck || (request.headers.get("X-Cloud-Key") || "") !== ck) return jerr("没有权限", 403);
+    const obj = await getJSON(env, "xlsxlive", null);
+    if (!obj) return J({ ok: true });          // 云端还没有过上传，无需报到
+    obj.up = Date.now();
+    await env.KV.put("xlsxlive", JSON.stringify(obj));
+    return J({ ok: true });
   }
 
   // ---------- 金山表格云端中转（2026-10-09 跟库存同款）----------
@@ -1198,7 +1276,7 @@ async function route(request, env, path, ctx) {
     if (!obj) return J({ ok: true, ts: "" });
     if (ctx && ctx.waitUntil && await autoKick("kd", Date.now() - (+obj.up || 0)))
       ctx.waitUntil(ghDispatch("kdocs-cloud-data.yml"));
-    return J({ ok: true, ts: obj.ts || "", by: obj.by || "" });
+    return J({ ok: true, ts: obj.ts || "", by: obj.by || "", up: +obj.up || 0 });   // up=最近成功跑批时间戳（本机哨兵用，2026-10-24）
   }
 
   // ---------- 金山登录态中转（2026-10-09）----------

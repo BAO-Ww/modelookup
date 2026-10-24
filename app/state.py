@@ -42,7 +42,8 @@ def _tick(label):
 # ------------------------------------------------------------------ 更新状态
 
 STATE = {"status": "idle", "msg": "", "built": "", "rev": 0,
-         "price_at": "", "stock_at": "", "alert_ts": 0, "alert_msg": ""}
+         "price_at": "", "stock_at": "", "alert_ts": 0, "alert_msg": "",
+         "data_alert": ""}   # 数据链路哨兵（2026-10-24）：探测失败/云端跑批停摆的提示文案，空=正常
 SLOCK = threading.Lock()
 LOG = []
 
@@ -51,7 +52,8 @@ _update_lock = threading.Lock()
 
 
 def set_state(status=None, msg=None, rev=None, built=None,
-              price_at=None, stock_at=None, alert_ts=None, alert_msg=None):
+              price_at=None, stock_at=None, alert_ts=None, alert_msg=None,
+              data_alert=None):
     with SLOCK:
         if status is not None:
             STATE["status"] = status
@@ -74,6 +76,8 @@ def set_state(status=None, msg=None, rev=None, built=None,
             STATE["alert_ts"] = alert_ts
         if alert_msg is not None:
             STATE["alert_msg"] = alert_msg
+        if data_alert is not None:
+            STATE["data_alert"] = data_alert
 
 
 def read_state():

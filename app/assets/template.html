@@ -537,6 +537,7 @@ footer a:hover{text-decoration:underline}
       <div id="stickspacer"></div>
       <div class="pubwarn" id="pubwarn" hidden></div>
       <div class="yyalert" id="yyalert" hidden></div>
+      <div class="yyalert" id="dataalert" hidden></div>
       <div class="yyalert lossalert" id="lossalert" hidden></div>
       <!-- 吸顶条（2026-10-13 三改）：闲鱼号 + 价格类型 + 四个开关（从侧栏挪回来） -->
       <div class="stickhead" id="stickhead">
@@ -612,7 +613,7 @@ var WEB = null;                  /* 型号 → 官网产品详情页直链（cat
 var FEE  = 0.016;                // 闲鱼平台费率 1.6%
 /* exe 版后台更新状态：price_at/stock_at = 最近一次金山/用友更新时间（侧栏显示）；
    rev = 后端数据版本号，变了就静默重拉数据，界面无感跟上 */
-var UPSTATE = { price_at: "", stock_at: "", rev: null, fetching: false, alert_ts: null };
+var UPSTATE = { price_at: "", stock_at: "", rev: null, fetching: false, alert_ts: null, cdp_on: true, data_alert: "" };
 /* 用友告警横幅：/api/state 里 alert_ts 变了就亮牌（管理号才显示） */
 function showYyAlert(msg){
   var el = document.getElementById('yyalert');
@@ -651,16 +652,19 @@ function stockOf(mo, name, code){
   }
   return hit;
 }
-/* 库存豁免名单（2026-10-10 用户定稿）：这些货不走用友库存——
+/* 库存豁免名单（2026-10-10 用户定稿；2026-10-24 单源化）：这些货不走用友库存——
    · 货源 HM夏（外供货源，用友里本来就没有）
    · 美的 / 容声（LYDF 表那套报价）、科沃斯（外品牌）
-   用友里有没有都当「有货」：清理数量不报「已无库存」、库存行不空、
-   不被三无隐藏、已发布不进「没库存」提醒/筛选 */
+   名单从 payload.meta.stock_rules 读（assets/stock_rules.json 单源，重建数据即全端生效），
+   数据没带 rules 时用内置兜底。用友里有没有都当「有货」：清理数量不报「已无库存」、
+   库存行不空、不被三无隐藏、已发布不进「没库存」提醒/筛选 */
+var EXT_FREE_DEF = { ext_free_brands: ['美的', '容声', '科沃斯'], ext_free_source: 'HM夏' };
 function extStockFree(it){
   if (!it) return false;
+  var r = META.stock_rules || EXT_FREE_DEF;
   if (it._md) return true;                               // 美的 / 容声（LYDF 那套）
-  if (it.b === '美的' || it.b === '容声' || it.b === '科沃斯') return true;
-  return String(it.sfrom || '').trim() === 'HM夏';        // 货源 HM夏
+  if ((r.ext_free_brands || []).indexOf(it.b) >= 0) return true;
+  return String(it.sfrom || '').trim() === (r.ext_free_source || 'HM夏');   // 货源 HM夏
 }
 /* 已发布型号按发布类型的剩余可售（2026-10-09 从 pubStockWarn 抽出来，筛选「没库存」也要用）：
    正品发布看非样机/非次品仓的可用量，样机发布看样机仓；库存里查不到返回 -1（也当没库存提醒） */
@@ -1937,9 +1941,27 @@ function openSelfDisplay(){
     + '<button class="achip" id="sdclose" style="float:right">关闭</button></h3>'
     + '<div style="font-size:12.5px;color:#8a93a3;margin-bottom:10px">管我自己看什么：点亮=显示、点灰=隐藏，点了立即生效；跟账号走存在云端，换电脑登录不用重弄（子用户不受影响）</div>'
     + '<div class="permgroups" id="sdchips"></div>'
-    + '<div style="margin-top:12px"><button class="achip" id="sdall">全部显示</button></div></div>';
+    + '<div style="margin-top:12px"><button class="achip" id="sdall">全部显示</button></div>'
+    + '<div style="margin-top:14px;padding-top:12px;border-top:1px solid #eef1f6">'
+    + '<div style="font-size:12.5px;color:#8a93a3;margin-bottom:8px"><b style="color:#5a6478">软件设置（本机 · 跟这台电脑走 · 重启生效）</b></div>'
+    + '<label style="display:inline-flex;align-items:center;gap:7px;font-size:13px;cursor:pointer">'
+    + '<input type="checkbox" id="cdpsw"> 闲鱼页自动点选号（CDP 调试口）'
+    + '<span style="font-size:11.5px;color:#b0b8c4">开启时本机其他程序理论上能连上调试口；不用闲鱼页自动化可关掉</span></label></div></div>';
   document.body.appendChild(m);
   var _sd = renderSelfChips(m.querySelector('#sdchips'));
+  /* CDP 开关回填 + 切换（2026-10-24） */
+  var cdpsw = m.querySelector('#cdpsw');
+  cdpsw.checked = UPSTATE.cdp_on !== false;
+  cdpsw.addEventListener('change', function(){
+    fetch('/api/cdp_switch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on: cdpsw.checked }) })
+      .then(function(r){ return r.json(); })
+      .then(function(r){
+        if (r.ok){ UPSTATE.cdp_on = cdpsw.checked; alert(cdpsw.checked ? '已开启，重启软件后生效' : '已关闭，重启软件后生效（闲鱼页选号要手点）'); }
+        else { alert('设置失败：' + (r.msg || '')); cdpsw.checked = !cdpsw.checked; }
+      })
+      .catch(function(e){ alert('请求失败：' + e); cdpsw.checked = !cdpsw.checked; });
+  });
   m.querySelector('#sdall').addEventListener('click', function(){
     ADMIN_HIDE = {}; adminHideSave(); _sd(); applyPermBar(); run();
   });
@@ -5840,7 +5862,23 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   function applyState(s){
     UPSTATE.price_at = s.price_at || '';
     UPSTATE.stock_at = s.stock_at || '';
+    if (s.cdp_on != null) UPSTATE.cdp_on = !!s.cdp_on;   // CDP 开关状态（设置面板显示用）
     if (metaEl) metaEl.innerHTML = metaHTML();
+    /* 数据链路哨兵（2026-10-24）：helper 探测连续失败 / 云端跑批停摆 → 亮红条（人人可见） */
+    var da = document.getElementById('dataalert');
+    if (da){
+      var m = s.data_alert || '';
+      if (m && da.dataset.m !== m){
+        da.dataset.m = m;
+        da.innerHTML = '<b>⚠ 数据链路异常</b><span>' + esc(m) + '</span>'
+          + '<button class="close" title="先收起（修好自动消失）">×</button>';
+        da.hidden = false;
+        da.querySelector('.close').addEventListener('click', function(){ da.hidden = true; });
+      } else if (!m && da.dataset.m){
+        da.dataset.m = '';        // 修好了：自动消失（哪怕被手动收起过）
+        da.hidden = true;
+      }
+    }
   }
   function reloadAll(){
     if (UPSTATE.fetching) return;

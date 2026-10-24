@@ -1,0 +1,5 @@
+{
+  "_comment": "库存口径单源（2026-10-24）：配置型魔法值从三处硬编码收进来。payload.py 重建时把这份注入 meta.stock_rules → 前端 extStockFree 优先读它；主程序与 CI 手机端共用 build_payload，天然同源。改口径改这一个文件，重建数据即全端生效。",
+  "ext_free_brands": ["美的", "容声", "科沃斯"],
+  "ext_free_source": "HM夏"
+}
