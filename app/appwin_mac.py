@@ -99,6 +99,37 @@ def autostart_enabled():
         return False
 
 
+def _make_file_log():
+    """Mac 落盘日志（2026-10-25）：.app 双击启动 stdout 全丢，排查只能靠截图猜。
+    state.LOG 是「字符串直接 append 进列表」的机制（没人回调观察者），所以用泵：
+    3 秒一轮把 LOG 里新出现的字符串镜像到 ~/Library/Application Support/ModelLookup/app.log
+    （超 2MB 自动重开）。返回线程 target。"""
+    import io
+    from paths import wp
+
+    def _pump():
+        seen = 0
+        while True:
+            try:
+                items = list(state.LOG)
+                if len(items) > seen:
+                    p = wp("app.log")
+                    try:
+                        if os.path.getsize(p) > 2 * 1024 * 1024:
+                            os.remove(p)
+                    except OSError:
+                        pass
+                    with io.open(p, "a", encoding="utf-8") as f:
+                        for it in items[seen:]:
+                            if isinstance(it, str):
+                                f.write(time.strftime("[%m-%d %H:%M:%S] ") + it + "\n")
+                    seen = len(items)
+            except Exception:
+                pass
+            time.sleep(3)
+    return _pump
+
+
 def autostart_enable(log=None):
     """开机自启：写 LaunchAgent plist（open -a 拉起，Dock/菜单栏表现与手动打开一致）。"""
     try:
@@ -239,7 +270,7 @@ def run_app(httpd, port, startup_xlsx=None):
     def after_start():
         _tick("webview.start() 的 GUI 循环已起来（cocoa）")
         state.LOG.append(lambda m: print("[%s] %s" % (APP_NAME, m)))
-        state.LOG.append(lambda m: None)
+        threading.Thread(target=_make_file_log(), daemon=True).start()   # 日志泵 → app.log
         # 2026-10-25 实锤修复：Mac 端漏起跟随线程（10-11 建 Mac 端时没搬）——
         # 空载荷永远等不到云端同步（库里 0 个型号）、软件自更新也是死的。
         # 对齐 Windows appwin.after_start 的四条线程。

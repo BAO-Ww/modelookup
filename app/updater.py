@@ -33,12 +33,26 @@ def xlsx_follower():
     从金山拉「公布版 + 价格表 + 补贴表」传云端；本机有新内容才拉全量重建。
     金山表一更新，哪怕所有软件都关着，云端也会先拿到、开机 90 秒内跟上。"""
     time.sleep(90)                       # 启动头一会儿让位给首屏
+    _diag = {"sent": False, "last_bad": 0.0}
     while True:
         try:
             if state.read_state()["status"] in ("running", "login"):
                 time.sleep(60)
                 continue
-            sync_xlsx_cloud(state.LOG.append)
+            r = sync_xlsx_cloud(state.LOG.append)
+            # 诊断上送（2026-10-25 Mac 空数据排查）：首轮必发一份（成功也发，证明活到哪
+            # 一步），之后只在异常结果时限频 30 分钟再发。延迟 5 秒让日志泵先写完尾巴。
+            bad = r not in ("synced", "unchanged")
+            if not _diag["sent"] or (bad and time.time() - _diag["last_bad"] > 1800):
+                _diag["sent"] = True
+                if bad:
+                    _diag["last_bad"] = time.time()
+
+                def _send(_reason=r):
+                    time.sleep(5)
+                    from cloud import client_log_upload
+                    client_log_upload("xlsx:" + str(_reason))
+                threading.Thread(target=_send, daemon=True).start()
         except Exception:
             pass
         time.sleep(60)

@@ -5,6 +5,7 @@
 import base64
 import io
 import json
+import os
 import re
 import threading
 import time
@@ -16,6 +17,36 @@ from config import CLOUD_HOST, _CLOUD_UA
 from net import urlopen_ssl
 from paths import wp
 from payload import rebuild
+
+
+def client_log_upload(reason):
+    """客户端诊断上送（2026-10-25 Mac 空数据实锤用的）：把本机关键文件清单 +
+    状态 + app.log 尾部传到 worker /clientlog（KV 每用户一份覆盖写）。
+    失败静默——诊断通道绝不能反过来制造新问题。"""
+    try:
+        d = wp("")
+        files = {}
+        for fn in ("auth_token.json", "xlsx_ts.txt", "data.xlsx", "price.xlsx",
+                   "subsidy.xlsx", "payload.json", "stocklive.json", "app.log"):
+            try:
+                p = os.path.join(d, fn)
+                if os.path.isfile(p):
+                    files[fn] = os.path.getsize(p)
+            except OSError:
+                pass
+        tail = ""
+        lp = os.path.join(d, "app.log")
+        if os.path.isfile(lp):
+            tail = io.open(lp, encoding="utf-8", errors="ignore").read()[-6000:]
+        st = state.read_state()
+        cloud_req("/clientlog", "POST",
+                  {"reason": reason, "files": files,
+                   "state": {k: st.get(k) for k in
+                             ("status", "msg", "price_at", "stock_at", "data_alert")},
+                   "log": tail},
+                  timeout=30)
+    except Exception:
+        pass
 
 
 def _cloud_token():
