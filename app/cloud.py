@@ -13,6 +13,7 @@ import urllib.request
 
 import state
 from config import CLOUD_HOST, _CLOUD_UA
+from net import urlopen_ssl
 from paths import wp
 from payload import rebuild
 
@@ -50,7 +51,7 @@ def cloud_req(path, method="GET", obj=None, timeout=90):
     req.add_header("Origin", CLOUD_HOST)
     req.add_header("Referer", CLOUD_HOST + "/")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urlopen_ssl(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8")), None
     except urllib.error.HTTPError as e:
         try:

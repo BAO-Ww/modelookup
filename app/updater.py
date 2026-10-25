@@ -18,7 +18,7 @@ from config import (APP_VERSION, CLEAN_XLSX, CLOUD_HOST, _CLOUD_UA, FILE_ID,
                     ONLINE_SHARE, PRICE_SHARE, SUBSIDY_FID_CACHE, SUBSIDY_SHARE,
                     YY_CAS_ENTRY, PRICE_XLSX)
 from kdocs import obtain_download_url, probe_file_id
-from net import fetch_xlsx_by_url
+from net import fetch_xlsx_by_url, urlopen_ssl
 from parsers_yr import load_records_from_path
 from payload import rebuild
 from paths import wp
@@ -112,7 +112,7 @@ def _app_install_bg(log):
         dest = os.path.join(os.environ.get("TEMP") or wp(""),
                             "ModelLookup-Setup-%s.exe" % (ver or APP_VERSION))
         got, total = 0, 0
-        with urllib.request.urlopen(req, timeout=900) as r:
+        with urlopen_ssl(req, timeout=900) as r:
             total = int(r.headers.get("Content-Length") or 0)
             with io.open(dest, "wb") as f:
                 while True:

@@ -1239,10 +1239,13 @@ async function route(request, env, path, ctx) {
   }
 
   // 跑批报到（2026-10-24）：kdocs CI 内容没变时跳过文件上传 → up 不动，本机哨兵会误报停摆。
-  // 每轮跑完都打一下这个口子只刷 up（KV 写 ~15 次/天，额度无压力）。X-Cloud-Key 同 /mpayload 通道。
+  // 每轮跑完都打一下这个口子只刷 up（KV 写 ~15 次/天，额度无压力）。
+  // 2026-10-25 实锤：仓库 secrets 没配 KX_SECRET，CI 只带 CLOUD_TOKEN → 只认 X-Cloud-Key 必 403，
+  // up 永远不刷。改为 X-Cloud-Key **或**有效登录态（能走到这里的 who 已过全局 token 门）均可。
   if (path === "/xlsxping" && request.method === "POST") {
     const ck = env.CLOUD_KEY || env.SECRET;
-    if (!ck || (request.headers.get("X-Cloud-Key") || "") !== ck) return jerr("没有权限", 403);
+    const byKey = ck && (request.headers.get("X-Cloud-Key") || "") === ck;
+    if (!byKey && !who) return jerr("没有权限", 403);
     const obj = await getJSON(env, "xlsxlive", null);
     if (!obj) return J({ ok: true });          // 云端还没有过上传，无需报到
     obj.up = Date.now();
