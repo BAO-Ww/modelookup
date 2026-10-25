@@ -613,7 +613,7 @@ var WEB = null;                  /* 型号 → 官网产品详情页直链（cat
 var FEE  = 0.016;                // 闲鱼平台费率 1.6%
 /* exe 版后台更新状态：price_at/stock_at = 最近一次金山/用友更新时间（侧栏显示）；
    rev = 后端数据版本号，变了就静默重拉数据，界面无感跟上 */
-var UPSTATE = { price_at: "", stock_at: "", rev: null, fetching: false, alert_ts: null, cdp_on: true, data_alert: "" };
+var UPSTATE = { price_at: "", stock_at: "", rev: null, fetching: false, alert_ts: null, cdp_on: true, autostart_on: true, data_alert: "" };
 /* 用友告警横幅：/api/state 里 alert_ts 变了就亮牌（管理号才显示） */
 function showYyAlert(msg){
   var el = document.getElementById('yyalert');
@@ -1946,7 +1946,10 @@ function openSelfDisplay(){
     + '<div style="font-size:12.5px;color:#8a93a3;margin-bottom:8px"><b style="color:#5a6478">软件设置（本机 · 跟这台电脑走 · 重启生效）</b></div>'
     + '<label style="display:inline-flex;align-items:center;gap:7px;font-size:13px;cursor:pointer">'
     + '<input type="checkbox" id="cdpsw"> 闲鱼页自动点选号（CDP 调试口）'
-    + '<span style="font-size:11.5px;color:#b0b8c4">开启时本机其他程序理论上能连上调试口；不用闲鱼页自动化可关掉</span></label></div></div>';
+    + '<span style="font-size:11.5px;color:#b0b8c4">开启时本机其他程序理论上能连上调试口；不用闲鱼页自动化可关掉</span></label>'
+    + '<div style="margin-top:10px"><label style="display:inline-flex;align-items:center;gap:7px;font-size:13px;cursor:pointer">'
+    + '<input type="checkbox" id="autostartsw"> 开机自动启动本软件'
+    + '<span style="font-size:11.5px;color:#b0b8c4">关掉后下次开机不再自己启动（立即生效）</span></label></div></div></div>';
   document.body.appendChild(m);
   var _sd = renderSelfChips(m.querySelector('#sdchips'));
   /* CDP 开关回填 + 切换（2026-10-24） */
@@ -1961,6 +1964,19 @@ function openSelfDisplay(){
         else { alert('设置失败：' + (r.msg || '')); cdpsw.checked = !cdpsw.checked; }
       })
       .catch(function(e){ alert('请求失败：' + e); cdpsw.checked = !cdpsw.checked; });
+  });
+  /* 开机自启开关回填 + 切换（2026-10-25）：Mac 没有原生菜单，页面是双平台统一入口，立即生效 */
+  var atsw = m.querySelector('#autostartsw');
+  atsw.checked = UPSTATE.autostart_on !== false;
+  atsw.addEventListener('change', function(){
+    fetch('/api/autostart', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on: atsw.checked }) })
+      .then(function(r){ return r.json(); })
+      .then(function(r){
+        if (r.ok){ UPSTATE.autostart_on = atsw.checked; alert(atsw.checked ? '已开启开机自启' : '已关闭开机自启，下次开机不再自己启动'); }
+        else { alert('设置失败：' + (r.msg || '')); atsw.checked = !atsw.checked; }
+      })
+      .catch(function(e){ alert('请求失败：' + e); atsw.checked = !atsw.checked; });
   });
   m.querySelector('#sdall').addEventListener('click', function(){
     ADMIN_HIDE = {}; adminHideSave(); _sd(); applyPermBar(); run();
@@ -5863,6 +5879,7 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
     UPSTATE.price_at = s.price_at || '';
     UPSTATE.stock_at = s.stock_at || '';
     if (s.cdp_on != null) UPSTATE.cdp_on = !!s.cdp_on;   // CDP 开关状态（设置面板显示用）
+    if (s.autostart_on != null) UPSTATE.autostart_on = !!s.autostart_on;   // 开机自启状态（2026-10-25）
     if (metaEl) metaEl.innerHTML = metaHTML();
     /* 数据链路哨兵（2026-10-24）：helper 探测连续失败 / 云端跑批停摆 → 亮红条（人人可见） */
     var da = document.getElementById('dataalert');

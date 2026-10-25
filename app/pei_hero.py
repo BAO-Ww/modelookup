@@ -7,6 +7,7 @@
 import os, re, json, ssl, time, base64, colorsys, urllib.request, urllib.parse
 from PIL import Image, ImageDraw, ImageFilter, ImageChops, ImageStat, ImageEnhance
 import pei_core as core
+from net import urlopen_ssl
 
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
@@ -135,13 +136,13 @@ def ai_background(tone, api_key, cache_dir, log=None):
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json",
                      "Authorization": "Bearer " + api_key.strip()})
-        with urllib.request.urlopen(req, timeout=120, context=ctx) as r:
+        with urlopen_ssl(req, timeout=120) as r:
             d = json.loads(r.read())
         url = (d.get("data") or [{}])[0].get("url")
         if not url:
             return None
-        raw = urllib.request.urlopen(urllib.request.Request(
-            url, headers={"User-Agent": UA}), timeout=90, context=ctx).read()
+        raw = urlopen_ssl(urllib.request.Request(
+            url, headers={"User-Agent": UA}), timeout=90).read()
         bio = __import__("io").BytesIO(raw)
         im = Image.open(bio).convert("RGB")
         # 裁掉底部（免费模型右下角有「AI生成」水印）
@@ -663,7 +664,7 @@ def vision_specs(img_paths, api_key, log=None, max_try=4):
                 data=json.dumps(body).encode("utf-8"),
                 headers={"Content-Type": "application/json",
                          "Authorization": "Bearer " + api_key.strip()})
-            with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
+            with urlopen_ssl(req, timeout=60) as r:
                 d = json.loads(r.read())
             txt = (d.get("choices") or [{}])[0].get("message", {}).get("content", "")
             if not txt or txt.strip().upper().startswith("NO"):
@@ -700,14 +701,14 @@ def suning_specs(model, log=None):
         u = "https://search.suning.com/" + urllib.parse.quote(kw) + "/"
         req = urllib.request.Request(u, headers={"User-Agent": UA,
                                                 "Accept-Language": "zh-CN"})
-        d = urllib.request.urlopen(req, timeout=20, context=ctx).read().decode("utf-8", "ignore")
+        d = urlopen_ssl(req, timeout=20).read().decode("utf-8", "ignore")
         key = kw.replace(" ", "").upper()
         pids = re.findall(r'href="(//product\.suning\.com/[\d]+/[\d]+\.html)"', d)
         for pid in dict.fromkeys(pids):
             pu = "https:" + pid.split("#")[0]
-            pd = urllib.request.urlopen(urllib.request.Request(
+            pd = urlopen_ssl(urllib.request.Request(
                 pu, headers={"User-Agent": UA, "Referer": "https://search.suning.com/"}),
-                timeout=20, context=ctx).read().decode("utf-8", "ignore")
+                timeout=20).read().decode("utf-8", "ignore")
             t = re.search(r"<title>(.*?)</title>", pd, re.S)
             ti = t.group(1) if t else ""
             if key not in ti.replace(" ", "").upper():
@@ -909,13 +910,13 @@ def promo_scene_bg(cat, api_key, cache_dir, log=None, dark=False, tone=None):
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json",
                      "Authorization": "Bearer " + str(api_key).strip()})
-        with urllib.request.urlopen(req, timeout=120, context=ctx) as r:
+        with urlopen_ssl(req, timeout=120) as r:
             d = json.loads(r.read())
         url = (d.get("data") or [{}])[0].get("url")
         if not url:
             return None
-        raw = urllib.request.urlopen(urllib.request.Request(
-            url, headers={"User-Agent": UA}), timeout=90, context=ctx).read()
+        raw = urlopen_ssl(urllib.request.Request(
+            url, headers={"User-Agent": UA}), timeout=90).read()
         im = Image.open(__import__("io").BytesIO(raw)).convert("RGB")
         im = im.crop((0, 0, im.width,
                       max(1, im.height - int(im.height * 0.115))))  # 裁水印
@@ -998,13 +999,13 @@ def promo_studio_bg(model, api_key, cache_dir, log=None, tone=None, seed=None, f
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json",
                      "Authorization": "Bearer " + str(api_key).strip()})
-        with urllib.request.urlopen(req, timeout=120, context=ctx) as r:
+        with urlopen_ssl(req, timeout=120) as r:
             d = json.loads(r.read())
         url = (d.get("data") or [{}])[0].get("url")
         if not url:
             return None
-        raw = urllib.request.urlopen(urllib.request.Request(
-            url, headers={"User-Agent": UA}), timeout=90, context=ctx).read()
+        raw = urlopen_ssl(urllib.request.Request(
+            url, headers={"User-Agent": UA}), timeout=90).read()
         im = Image.open(__import__("io").BytesIO(raw)).convert("RGB")
         im = im.crop((0, 0, im.width,
                       max(1, im.height - int(im.height * 0.115))))  # 裁水印

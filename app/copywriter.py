@@ -19,6 +19,7 @@ import zlib
 
 from normalize import norm_model
 from paths import wp
+from net import urlopen_ssl
 
 API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 # 2026-10-14 用户拍板：key 打进 exe（子账号机器零配置，放 key 文件不现实）。
@@ -83,7 +84,7 @@ def fetch(url, extra_headers=None, binary=False, retries=1, timeout=15):
     for i in range(retries + 1):
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urlopen_ssl(req, timeout=timeout) as r:
                 raw = r.read()
                 enc = r.headers.get("Content-Encoding", "")
                 if enc and "gzip" in enc:
@@ -377,7 +378,7 @@ def _chat(prompt):
                        "temperature": 0.7}).encode("utf-8")
     req = urllib.request.Request(API_URL, data=body, headers={
         "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with urlopen_ssl(req, timeout=60) as r:
         return json.loads(r.read().decode("utf-8"))["choices"][0]["message"]["content"]
 
 

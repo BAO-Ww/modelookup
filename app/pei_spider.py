@@ -32,6 +32,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from urllib.parse import urlparse
+from net import urlopen_ssl
 
 # ==========================================================================
 # 站点常量（原 config.py 的那部分，已内联）
@@ -129,7 +130,7 @@ def _http(url, referer=None, ajax=False, timeout=None):
         h["Accept"] = "application/json, text/javascript, */*; q=0.01"
         h["X-Requested-With"] = "XMLHttpRequest"
     req = urllib.request.Request(url, headers=h)
-    with urllib.request.urlopen(req, timeout=timeout or FETCH_TIMEOUT, context=_CTX) as r:
+    with urlopen_ssl(req, timeout=timeout or FETCH_TIMEOUT, context=_CTX) as r:
         raw = r.read()
         # 手动解 gzip：urllib 不认站点返回的「Content-Encoding: gzip」时不会自己解
         if r.headers.get("Content-Encoding") == "gzip":
@@ -467,7 +468,7 @@ def web_locate(keyword, source_key, limit=6):
                 "Accept-Language": "zh-CN,zh;q=0.9",
                 "Accept-Encoding": "gzip, deflate",
             })
-            with urllib.request.urlopen(req, timeout=20, context=_CTX) as r:
+            with urlopen_ssl(req, timeout=20, context=_CTX) as r:
                 raw = r.read()
                 if r.headers.get("Content-Encoding") == "gzip":
                     try:

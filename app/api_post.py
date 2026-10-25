@@ -228,6 +228,25 @@ class ApiPostMixin:
             self._send(200, json.dumps({"ok": True, "on": on, "need_restart": True}, ensure_ascii=False))
             return
 
+        if u.path == "/api/autostart":
+            # 开机自启开关（2026-10-25）：页面「软件设置（本机）」用——Mac 没有原生菜单，
+            # 页面是双平台统一入口。立即生效（写/删配置 + autostart_off.txt 标记）。
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            except Exception:
+                d = {}
+            on = bool(d.get("on"))
+            try:
+                from appwin import autostart_turn
+                ok = bool(autostart_turn(on, state.LOG.append))
+            except Exception as e:
+                self._send(200, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+                return
+            state.LOG.append("[设置] 开机自启 → %s" % ("开" if on else "关"))
+            self._send(200, json.dumps({"ok": ok, "on": on}, ensure_ascii=False))
+            return
+
         if u.path == "/api/xyview":
             # 软件内打开闲鱼页（2026-10-17）：拉起 --goofish 独立进程窗口，
             # 一号一个 WebView2 档案（xyprofile_<账号>），多号登录态互不干扰
