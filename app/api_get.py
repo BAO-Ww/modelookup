@@ -290,6 +290,12 @@ class ApiGetMixin:
                 s["cdp_on"] = not os.path.isfile(wp("xy_cdp_off.txt"))
             except Exception:
                 s["cdp_on"] = True
+            # 开机自启状态（2026-10-25）：设置面板显示用（Mac 没有原生菜单，页面是唯一入口）
+            try:
+                from appwin import autostart_state
+                s["autostart_on"] = bool(autostart_state())
+            except Exception:
+                s["autostart_on"] = True
             # 告警只给管理号看（子账号 machines 不轮询，字段清空省事）
             if state.PERM_STATE.get("role") != "admin":
                 s["alert_ts"] = 0

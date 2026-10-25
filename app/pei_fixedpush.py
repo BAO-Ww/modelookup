@@ -4,6 +4,7 @@
 适用场景：沙箱环境下 git 不在 PATH，git push 被代理拦截。
 """
 import os, sys, json, base64, urllib.request, urllib.error, time, re, shutil
+from net import urlopen_ssl
 
 REPO = "BAO-Ww/xianyu-peiwen"  # 目标仓库
 REMOTE_BRANCH = "main"
@@ -47,7 +48,7 @@ def get_current_commit(pat):
             "Authorization": f"Bearer {pat}",
             "User-Agent": "workbuddy"
         })
-        resp = urllib.request.urlopen(req)
+        resp = urlopen_ssl(req)
         data = json.load(resp)
         return data["object"]["sha"]
     except urllib.error.HTTPError as e:
@@ -64,7 +65,7 @@ def create_blob(pat, content):
         "User-Agent": "workbuddy",
         "Content-Type": "application/json"
     })
-    resp = urllib.request.urlopen(req)
+    resp = urlopen_ssl(req)
     data = json.load(resp)
     return data["sha"]
 
@@ -76,7 +77,7 @@ def create_tree(pat, base_tree_sha, entries):
         "User-Agent": "workbuddy",
         "Content-Type": "application/json"
     })
-    resp = urllib.request.urlopen(req)
+    resp = urlopen_ssl(req)
     data = json.load(resp)
     return data["sha"]
 
@@ -89,7 +90,7 @@ def create_commit(pat, tree_sha, parent_sha, message):
         "User-Agent": "workbuddy",
         "Content-Type": "application/json"
     })
-    resp = urllib.request.urlopen(req)
+    resp = urlopen_ssl(req)
     data = json.load(resp)
     return data["sha"]
 
@@ -102,7 +103,7 @@ def update_ref(pat, commit_sha):
         "Content-Type": "application/json"
     })
     try:
-        resp = urllib.request.urlopen(req)
+        resp = urlopen_ssl(req)
         return json.load(resp)
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -114,7 +115,7 @@ def update_ref(pat, commit_sha):
                 "User-Agent": "workbuddy",
                 "Content-Type": "application/json"
             })
-            resp = urllib.request.urlopen(req)
+            resp = urlopen_ssl(req)
             return json.load(resp)
         raise
 

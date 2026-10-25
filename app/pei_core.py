@@ -5,6 +5,7 @@ from pathlib import Path
 import urllib.request, urllib.error, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image, ImageDraw, ImageFont
+from net import urlopen_ssl
 
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
@@ -140,7 +141,7 @@ def http(url, n=None, tries=3):
             req = urllib.request.Request(url, headers={
                 "User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9",
                 "Referer": _referer_for(url)})
-            with urllib.request.urlopen(req, timeout=40, context=ctx) as r:
+            with urlopen_ssl(req, timeout=40) as r:
                 d = r.read(n) if n else r.read()
             if d[:2] == b"\x1f\x8b":
                 try:
@@ -1253,7 +1254,7 @@ def zhipu_test(api_key):
         # 必须带 context=ctx：打包后的 app 里没有 CA 证书包，
         # 走默认证书验证会在 macOS 上直接失败（表现就是「AI 连不上」）
         # timeout 收窄到 8s：这是启动时的探测不是业务请求，太长会拖住退出
-        resp = urllib.request.urlopen(req, timeout=8, context=ctx)
+        resp = urlopen_ssl(req, timeout=8)
         # 登记底层连接，供关窗时 abort（见 abort_live_conns 注释）
         try:
             with _LIVE_CONN_LOCK:
@@ -1318,7 +1319,7 @@ def _zhipu_sellpoints(api_key, info, n=3, long=False):
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + str(api_key).strip(),
             })
-        with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
+        with urlopen_ssl(req, timeout=30) as r:
             d = json.loads(r.read())
         text = d["choices"][0]["message"]["content"]
     except Exception:
@@ -1425,7 +1426,7 @@ def _zhipu_vision(api_key, data_url, prompt):
         }, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json",
                  "Authorization": "Bearer " + str(api_key).strip()})
-    with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
+    with urlopen_ssl(req, timeout=60) as r:
         d = json.loads(r.read())
     return d["choices"][0]["message"]["content"]
 
@@ -1465,7 +1466,7 @@ def _sn_vision(api_key, data_url, prompt):
         }, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json",
                  "Authorization": "Bearer " + str(api_key).strip()})
-    with urllib.request.urlopen(req, timeout=90, context=ctx) as r:
+    with urlopen_ssl(req, timeout=90) as r:
         d = json.loads(r.read())
     return d["choices"][0]["message"]["content"]
 
@@ -1794,7 +1795,7 @@ def zhipu_ai9_copy(api_key, info, version="N"):
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + str(api_key).strip(),
             })
-        with urllib.request.urlopen(req, timeout=40, context=ctx) as r:
+        with urlopen_ssl(req, timeout=40) as r:
             d = json.loads(r.read())
         text = d["choices"][0]["message"]["content"]
     except Exception:
@@ -1950,7 +1951,7 @@ def zhipu_make_sellpoints(api_key, info):
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + api_key.strip(),
             })
-        with urllib.request.urlopen(req, timeout=20, context=ctx) as r:
+        with urlopen_ssl(req, timeout=20) as r:
             d = json.loads(r.read())
         text = d["choices"][0]["message"]["content"]
         lines = []

@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 
 import state
+from net import urlopen_ssl
 import winref
 from config import (YY_API_HOST, YY_COOKIE_FILE, YY_GROUP_SCHEMA, YY_LIST_PATH,
                     YY_PAGE_MAX, YY_PAGE_SIZE, YY_TPLID)
@@ -157,7 +158,7 @@ def yy_call_direct(page_index, page_size=YY_PAGE_SIZE, timeout=40):
         hdrs["X-XSRF-TOKEN"] = urllib.parse.unquote(xv)
     req = urllib.request.Request(YY_API_HOST + YY_LIST_PATH, data=body, headers=hdrs)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urlopen_ssl(req, timeout=timeout) as r:
             txt = r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         if e.code in (401, 403) or "login" in (e.url or ""):

@@ -22,6 +22,7 @@ import ssl
 import time
 import urllib.request
 import urllib.error
+from net import urlopen_ssl
 
 OWNER = "BAO-Ww"
 REPO = os.environ.get("PUBLISH_REPO", "xianyu-peiwen-publish")
@@ -65,7 +66,7 @@ def api(method, path, data=None, tok=None):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, body, timeout=180, context=ctx) as r:
+        with urlopen_ssl(req, body, timeout=180) as r:
             raw = r.read().decode("utf-8", "ignore")
             try:
                 return r.status, json.loads(raw or "{}")

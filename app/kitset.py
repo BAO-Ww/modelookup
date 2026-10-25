@@ -22,6 +22,7 @@ from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch
 from normalize import norm_model
 from paths import wp
 import pei_core
+from net import urlopen_ssl
 
 F_LIGHT = r"C:\Windows\Fonts\msyhl.ttc"
 F_REG = r"C:\Windows\Fonts\msyh.ttc"
@@ -469,7 +470,7 @@ def _http_text(url, referer=None):
     if referer:
         headers["Referer"] = referer
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=25) as r:
+    with urlopen_ssl(req, timeout=25) as r:
         data = r.read()
         if r.headers.get("Content-Encoding") == "gzip":
             data = _gz.GzipFile(fileobj=io.BytesIO(data)).read()

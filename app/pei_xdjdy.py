@@ -5,6 +5,7 @@
 import os, re, json, ssl, time
 import urllib.request, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
+from net import urlopen_ssl
 
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
@@ -91,7 +92,7 @@ def find_xdjdy(model, log=None):
         req = urllib.request.Request(
             HOST + "/index.php?w=search&t=search&keyword=" + q,
             headers={"User-Agent": UA})
-        h = urllib.request.urlopen(req, timeout=25, context=ctx).read().decode("utf-8", "ignore")
+        h = urlopen_ssl(req, timeout=25).read().decode("utf-8", "ignore")
         best = None
         for gid, t in re.findall(r'href="[^"]*goods-(\d+)\.html"[^>]*title="([^"]*)"', h):
             if not t.strip():
@@ -113,9 +114,9 @@ def http(url, retry=2):
         try:
             # haier.net 图需要 haier referer；站内图不挑 referer
             ref = "https://www.haier.com/" if "haier.net" in url else HOST + "/"
-            return urllib.request.urlopen(
+            return urlopen_ssl(
                 urllib.request.Request(url, headers={"User-Agent": UA, "Referer": ref}),
-                timeout=30, context=ctx).read()
+                timeout=30).read()
         except Exception as e:
             if i == retry - 1:
                 raise

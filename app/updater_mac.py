@@ -21,6 +21,7 @@ import urllib.parse
 import urllib.request
 
 import state
+from net import urlopen_ssl
 import winref
 from cloud import _cloud_token, cloud_req
 from config import APP_ID, CLOUD_HOST, _CLOUD_UA
@@ -64,7 +65,7 @@ def _app_install_bg(log):
         os.makedirs(work, exist_ok=True)
         zipf = os.path.join(work, "ModelLookup-mac.zip")
         got, total = 0, 0
-        with urllib.request.urlopen(req, timeout=900) as r:
+        with urlopen_ssl(req, timeout=900) as r:
             total = int(r.headers.get("Content-Length") or 0)
             with io.open(zipf, "wb") as f:
                 while True:
