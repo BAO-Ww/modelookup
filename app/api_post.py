@@ -170,7 +170,8 @@ class ApiPostMixin:
                     shutil.copyfile(sp, os.path.join(dst, "%02d%s" % (i + 1, ext)))
                     cnt += 1
                 try:
-                    os.startfile(dst)  # noqa 仅 Windows
+                    from paths import reveal
+                    reveal(dst)
                 except Exception:
                     pass
                 self._send(200, json.dumps({"ok": True, "count": cnt, "dir": "精选"},
@@ -363,9 +364,24 @@ class ApiPostMixin:
                             if str(x) and ".." not in str(x)]
                     r = pubwork.sel_save(model, rels, sell_price=price, version=ver)
                 elif u.path == "/api/pubqa":
-                    r = pubwork.qa_run(model)
+                    if d.get("bg"):
+                        # Mac WKWebView fetch ~60s 超时（"Load failed"）→ AI 自检走后台，前端轮询 /api/jobget
+                        import jobman
+                        if not jobman.submit("pubqa:" + model, pubwork.qa_run, model):
+                            r = {"ok": False, "msg": "已有自检在跑，等一下"}
+                        else:
+                            r = {"ok": True, "started": True}
+                    else:
+                        r = pubwork.qa_run(model)
                 elif u.path == "/api/pubauto":
-                    r = pubwork.qa_auto(model)
+                    if d.get("bg"):
+                        import jobman
+                        if not jobman.submit("pubauto:" + model, pubwork.qa_auto, model):
+                            r = {"ok": False, "msg": "已有自动优化在跑，等一下"}
+                        else:
+                            r = {"ok": True, "started": True}
+                    else:
+                        r = pubwork.qa_auto(model)
                 elif u.path == "/api/pubimport":
                     r = pubwork.import_imgs(model, d.get("files") or [])
                 elif u.path == "/api/pubgh":

@@ -602,7 +602,8 @@ def make_featured(mdir, price, log):
             except ValueError:
                 pass
             font = None
-            for fn in ('C:/Windows/Fonts/msyhbd.ttc', 'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/simhei.ttf'):
+            for fn in ('C:/Windows/Fonts/msyhbd.ttc', 'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/simhei.ttf',
+                           '/System/Library/Fonts/STHeiti Medium.ttc', '/System/Library/Fonts/PingFang.ttc'):
                 try:
                     font = ImageFont.truetype(fn, 46)
                     break
@@ -850,3 +851,62 @@ def qa_copy(model, kind, text, log=None):
     except Exception as e:
         log("AI 自检失败（本地扫描结果仍有效）：%s" % e)
     return {"ok": True, "issues": issues}
+
+
+def enrich(model, kind, force, style="", log=None):
+    """生成+peiwen后处理（2026-10-25 从 api_get /api/copy try 块原样搬入，零逻辑变化）。
+    Mac WKWebView fetch ~60s 超时对策：生成走 jobman 后台线程，本函数可被线程调用。"""
+    log = log or (lambda s: None)
+    res = generate(model, kind, force, log=log)
+    _info = None
+    try:
+        import pubwork as _pw
+        import pei_core as _pc
+        _info = _pw.load_info(model)
+        if not _info or not (_info.get("props") or []):
+            try:
+                _info = _pw.work(model, prog=lambda p, m: log(m))
+            except Exception as _we:
+                log("peiwen 抓取链未命中（%s），用内置算法" % _we)
+                _info = None
+        if _info and (_info.get("props") or []):
+            _pts = [str(x).strip() for x in (res.get("points") or [])
+                    if str(x).strip()][:6]
+            res["points"] = [str(x).strip() for x in (res.get("points") or [])
+                             if str(x).strip()][:6]
+            res["titles"] = _pc.titles(_info)
+            res["desc_nat"] = _pc.desc_text(_info, "N", _pts or None)
+            res["desc_rep"] = _pc.desc_text(_info, "B", _pts or None)
+            res["desc_src"] = "peiwen"
+            res["brand"] = str(_info.get("brand") or "").strip()
+    except Exception:
+        pass
+    if style == "v2":
+        try:
+            _kk2 = 's' if kind == 's' else 'l'
+            if _info and (_info.get("props") or []):
+                res["titles"] = _pc.titles_v2(_info, _kk2)
+                _v2p = [str(x).strip() for x in (res.get("points") or [])
+                        if str(x).strip()][:6]
+                _dv2 = _pc.desc_v2(_info, _kk2, _v2p or None)
+            else:
+                from normalize import norm_model as _nm2
+                _pn = str(res.get("pname") or "")
+                _brand = ""
+                for _b in ("卡萨帝", "统帅", "Leader", "海尔"):
+                    if _b in _pn:
+                        _brand = _b
+                        break
+                _fi = {"brand": _brand or "海尔",
+                       "model": _nm2(res.get("model") or "") or str(res.get("model") or ""),
+                       "title": _pn, "props": [], "cat": ""}
+                res["titles"] = _pc.titles_v2(_fi, _kk2)
+                _v2p = [str(x).strip() for x in (res.get("points") or [])
+                        if str(x).strip()][:6]
+                _dv2 = _pc.desc_v2(_fi, _kk2, _v2p or None)
+            res["desc_nat"] = _dv2
+            res["desc_rep"] = _dv2
+            res["copy_style"] = "v2"
+        except Exception:
+            pass
+    return res

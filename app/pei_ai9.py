@@ -65,7 +65,18 @@ def font(sz, bold=True):
     try:
         from PIL import ImageFont
         name = "msyhbd.ttc" if bold else "msyh.ttc"
-        return ImageFont.truetype(name, sz)
+        try:
+            return ImageFont.truetype(name, sz)
+        except Exception:
+            # macOS（2026-10-25）：Windows 字体名不存在，走系统中文字体
+            for _p in ("/System/Library/Fonts/STHeiti Medium.ttc",
+                       "/System/Library/Fonts/STHeiti Light.ttc",
+                       "/System/Library/Fonts/PingFang.ttc"):
+                try:
+                    return ImageFont.truetype(_p, sz)
+                except Exception:
+                    continue
+            raise
     except Exception:
         return ImageFont.load_default()
 

@@ -4468,6 +4468,25 @@ function openUnmarkPick(c){
    卡片上的「写文案」「配文」按钮就是这两套的入口，想用时手动点。
    （新首图文案套图工具另做独立入口，与这两套零关系，方案待用户拍板） */
 
+/* 通用后台任务轮询（2026-10-25）：Mac WKWebView fetch ~60s 超时，长任务一律
+   「bg=1 起任务 → 轮询 /api/jobget → done 取 res」。Windows 同步路径保留不受影响。 */
+function pollJob(key, onDone, onErr, tick){
+  var t0 = Date.now();
+  var timer = setInterval(function(){
+    fetch('/api/jobget?key=' + encodeURIComponent(key))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (tick) tick(Math.round((Date.now() - t0) / 1000));
+        if (!j) return;
+        if (j.phase === 'done'){ clearInterval(timer); onDone(j.res || {}); }
+        else if (j.phase === 'failed'){ clearInterval(timer); onErr(new Error((j.res && j.res.msg) || j.err || '任务失败')); }
+        else if (j.phase === 'idle'){ clearInterval(timer); onErr(new Error('任务不存在（服务端可能重启过）')); }
+      })
+      .catch(function(){ /* 网络抖动，继续轮询 */ });
+  }, 1500);
+  return timer;
+}
+
 /* ================= 蓝底套图（2026-10-21，独立第三工具） ================= */
 function openKitView(k){
   var old = document.getElementById('kitview'); if (old) old.remove();
@@ -4563,13 +4582,20 @@ function openKitView(k){
   function load(force){
     wrap.querySelector('#kv_msg').textContent = '正在抓参数/机图并渲染…（首次约 1-2 分钟）';
     wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#8a929e;font-size:14px;line-height:2">正在生成套图：爬虫 → 官网 → 欣盛 抓参数与机图，再渲染四张 1080×1080…<br>第一次跑这个型号要 1-2 分钟，生成过一次秒开。</div>';
-    fetch('/api/kitset?model=' + encodeURIComponent(k) + (force ? '&force=1' : ''))
+    fetch('/api/kitset?model=' + encodeURIComponent(k) + (force ? '&force=1' : '') + '&bg=1')
       .then(function(r){ return r.json(); })
       .then(function(j){
-        if (!j || !j.ok){ throw new Error((j && j.msg) || '生成失败'); }
-        D = j; cur = 1;
-        wrap.querySelector('#kv_msg').textContent = j.cached ? '缓存秒出' : '生成完成';
-        render();
+        if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
+        pollJob('kitset:' + k, function(res){
+          D = res; cur = 1;
+          wrap.querySelector('#kv_msg').textContent = res.cached ? '缓存秒出' : '生成完成';
+          render();
+        }, function(err){
+          wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#b42318;font-size:14px">生成失败：' + esc(String(err.message || err)) + '</div>';
+          wrap.querySelector('#kv_msg').textContent = '';
+        }, function(sec){
+          wrap.querySelector('#kv_msg').textContent = '生成中…已 ' + sec + ' 秒（首次 1-2 分钟）';
+        });
       })
       .catch(function(err){
         wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#b42318;font-size:14px">生成失败：' + esc(String(err.message || err)) + '</div>';
@@ -5185,11 +5211,13 @@ function openCopyView(k, kind, force, tb){
     if (pq) pq.onclick = function(){
       var rail = wrap.querySelector('#cv_rail');
       pq.disabled = true; pq.textContent = '自检中…';
-      fetch('/api/pubqa', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({model: k})})
+      fetch('/api/pubqa', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({model: k, bg: 1})})
         .then(function(r){ return r.json(); })
         .then(function(j){
+          if (!j || !j.ok || !j.started){ throw new Error((j && j.msg) || '启动失败'); }
+          pollJob('pubqa:' + k, function(res){
           pq.disabled = false; pq.textContent = 'AI 成片自检';
-          var iss = (j && j.issues) || [];
+          var iss = (res && res.issues) || [];
           var qh = '<div style="position:fixed;inset:0;background:rgba(10,16,28,.5);z-index:82;display:flex;align-items:center;justify-content:center" data-qaclose="1">'
             + '<div style="background:#fff;border-radius:12px;max-width:640px;width:92%;max-height:78%;overflow:auto;padding:18px 20px;font-size:13px">';
           if (!iss.length){
@@ -5208,6 +5236,7 @@ function openCopyView(k, kind, force, tb){
           var old = document.getElementById('pubqamask'); if (old) old.remove();
           var qd = document.createElement('div'); qd.id = 'pubqamask'; qd.innerHTML = qh;
           document.body.appendChild(qd);
+          });
         })
         .catch(function(e){ pq.disabled = false; pq.textContent = 'AI 成片自检'; alert('自检失败：' + e); });
     };
@@ -5317,20 +5346,30 @@ function openCopyView(k, kind, force, tb){
     if (aiChip){ aiChip.textContent = j && j.ai ? '● AI 已连接' : '● 未配 AI key';
       aiChip.style.background = j && j.ai ? 'rgba(22,163,74,.35)' : 'rgba(180,83,9,.35)'; }
   }).catch(function(){});
-  fetch('/api/copy?model=' + encodeURIComponent(k) + '&kind=' + kind + (force ? '&force=1' : ''))
+  fetch('/api/copy?model=' + encodeURIComponent(k) + '&kind=' + kind + (force ? '&force=1' : '') + '&bg=1')
     .then(function(r){ return r.json(); })
     .then(function(j){
-      if (!j || !j.ok){ throw new Error((j && j.msg) || '生成失败'); }
-      D = j;
+      if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
+      main.innerHTML = '<div style="color:#475569;padding:26px 0">正在生成文案（爬虫 → 官网 → 欣盛 → AI）…已 <b id="cv_secs">0</b> 秒（首次 1-2 分钟，缓存秒出）</div>';
+      pollJob('copy:' + k + ':' + kind, function(res){
+      if (!res || !res.ok){ throw new Error((res && res.msg) || '生成失败'); }
+      D = res;
       /* 婷宝版：话术版本跟品牌走（对齐婷宝原版「自动设置版本：卡萨帝->报备版(B)，
          其他->全国版(N)」）；写文案版保持默认报备版不动 */
-      if (tb){ shipMode = /卡萨帝/i.test(j.brand || '') ? 'rep' : 'nat'; }
+      if (tb){ shipMode = /卡萨帝/i.test(res.brand || '') ? 'rep' : 'nat'; }
       wrap.querySelector('#cv_src').innerHTML = '来源：'
-        + (j.source_url ? '<a href="' + esc(j.source_url) + '" target="_blank" style="color:#cfe0ff">' + esc(j.source) + ' ↗</a>'
-                        : esc(j.source))
-        + (j.cached ? ' · 缓存秒出' : '');
+        + (res.source_url ? '<a href="' + esc(res.source_url) + '" target="_blank" style="color:#cfe0ff">' + esc(res.source) + ' ↗</a>'
+                        : esc(res.source))
+        + (res.cached ? ' · 缓存秒出' : '');
     pubLoadLib();                      // 文案抓完图后重新播种+渲染素材库（官网图落 copy/，播种进 peiwork/）
       renderTab('copy');
+      }, function(err){
+      main.innerHTML = '<div style="color:#b42318;padding:26px 0"><b>生成失败：</b>' + esc(String(err.message || err))
+        + '<br><br><button onclick="openCopyView(' + "'_M_','_K_'" + ',true,_T_)" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:8px 18px">重试</button></div>'
+        .replace(/_M_/g, esc(k)).replace(/_K_/, kind).replace(/_T_/, tb ? 'true' : 'false');
+      }, function(sec){
+        var el = document.getElementById('cv_secs'); if (el) el.textContent = sec;
+      });
     })
     .catch(function(e){
       main.innerHTML = '<div style="color:#b42318;padding:26px 0"><b>生成失败：</b>' + esc(String(e.message || e))

@@ -53,83 +53,33 @@ class ApiGetMixin:
                 return
             import copywriter
             if openfolder:
-                # 打开图片文件夹（资源管理器）；目录不存在说明还没生成过
+                # 打开图片文件夹（跨平台 reveal：Win 资源管理器 / Mac Finder）
                 d = os.path.join(copywriter.copy_root(),
                                  copywriter.norm_model(model) or model)
                 try:
-                    os.makedirs(d, exist_ok=True)
-                    os.startfile(d)  # noqa 仅 Windows 桌面端
+                    from paths import reveal
+                    reveal(d)
                     self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
                 except Exception as e:
                     self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
                 return
+            bg = (q.get("bg") or ["0"])[0] in ("1", "true")
+            if bg:
+                # Mac WKWebView fetch ~60s 超时（"Load failed" 实锤）→ 文案生成走后台，前端轮询 /api/jobget
+                import jobman
+
+                def _do():
+                    return copywriter.enrich(model, kind, force, style,
+                                             log=lambda s: state.LOG.append("[文案] " + s))
+                if not jobman.submit("copy:%s:%s" % (model, kind), _do):
+                    self._send(200, json.dumps({"ok": False, "msg": "该型号文案已在生成中，等一下"},
+                                               ensure_ascii=False))
+                    return
+                self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
+                return
             try:
-                res = copywriter.generate(model, kind, force,
-                                          log=lambda s: state.LOG.append("[文案] " + s))
-                # 2026-10-17 用户要求：文案跟闲鱼配文 Pro 一模一样——用 peiwen 原版算法
-                # （pei_core.titles/desc_text，配文 core.py 原样搬来的）重写标题和描述。
-                # 素材没有就现场走 peiwen 抓取链补一份（pubwork.work，跟「生成素材」同源），
-                # 抓取失败才落回 copywriter 自己的 AI 版
-                _info = None
-                try:
-                    import pubwork as _pw
-                    import pei_core as _pc
-                    _info = _pw.load_info(model)
-                    if not _info or not (_info.get("props") or []):
-                        try:
-                            _info = _pw.work(model, prog=lambda p, m: state.LOG.append("[文案] " + m))
-                        except Exception as _we:
-                            state.LOG.append("[文案] peiwen 抓取链未命中（%s），用内置算法" % _we)
-                            _info = None
-                    if _info and (_info.get("props") or []):
-                        # 2026-10-17 定稿：XianyuPeiwen Pro 原版方案基础上扩到 6 条——
-                        # AI 卖点优先按序取 6 进 desc（desc_text 内部 [:6]），
-                        # 不足由本地卖点池软兜底凑满 6；「卖点」页展示也截 6 条
-                        _pts = [str(x).strip() for x in (res.get("points") or [])
-                                if str(x).strip()][:6]
-                        res["points"] = [str(x).strip() for x in (res.get("points") or [])
-                                         if str(x).strip()][:6]
-                        res["titles"] = _pc.titles(_info)
-                        res["desc_nat"] = _pc.desc_text(_info, "N", _pts or None)
-                        res["desc_rep"] = _pc.desc_text(_info, "B", _pts or None)
-                        res["desc_src"] = "peiwen"
-                        # 婷宝版窗口按品牌自动选话术版本（对齐 BAO-Ww/tingbao app.py
-                        # 「卡萨帝 -> 报备版(B)，其他 -> 全国版(N)」的自动设置逻辑）
-                        res["brand"] = str(_info.get("brand") or "").strip()
-                except Exception:
-                    pass
-                # 文案新口径 v2（2026-10-21 显示开关「文案新口径」控制）：标题三档
-                # 闲鱼话术（品牌+卖点+型号）+ 正文一行一句带承诺句。
-                # peiwen 素材命中 → 用 props 组装；未命中 → 用 copywriter 抓到的
-                # 真实数据兜底（品牌从商品名识别、卖点用 AI 已过防编造校验的那批）
-                if style == "v2":
-                    try:
-                        _kk2 = 's' if kind == 's' else 'l'
-                        if _info and (_info.get("props") or []):
-                            res["titles"] = _pc.titles_v2(_info, _kk2)
-                            _v2p = [str(x).strip() for x in (res.get("points") or [])
-                                    if str(x).strip()][:6]
-                            _dv2 = _pc.desc_v2(_info, _kk2, _v2p or None)
-                        else:
-                            from normalize import norm_model as _nm2
-                            _pn = str(res.get("pname") or "")
-                            _brand = ""
-                            for _b in ("卡萨帝", "统帅", "Leader", "海尔"):
-                                if _b in _pn:
-                                    _brand = _b
-                                    break
-                            _fi = {"brand": _brand or "海尔",
-                                   "model": _nm2(res.get("model") or "") or str(res.get("model") or ""),
-                                   "title": _pn, "props": [], "cat": ""}
-                            res["titles"] = _pc.titles_v2(_fi, _kk2)
-                            _v2p = [str(x).strip() for x in (res.get("points") or [])
-                                    if str(x).strip()][:6]
-                            _dv2 = _pc.desc_v2(_fi, _kk2, _v2p or None)
-                        res["desc_nat"] = _dv2
-                        res["desc_rep"] = _dv2
-                        res["copy_style"] = "v2"
-                    except Exception:
-                        pass
+                res = copywriter.enrich(model, kind, force, style,
+                                        log=lambda s: state.LOG.append("[文案] " + s))
                 self._send(200, json.dumps(res, ensure_ascii=False))
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": "文案生成失败：%s" % e,
@@ -148,14 +98,29 @@ class ApiGetMixin:
                 return
             import kitset
             if openfolder:
-                # 打开蓝底套图的图片文件夹（资源管理器），跟写文案的 open=1 同款
+                # 打开蓝底套图的图片文件夹（跨平台 reveal：Win 资源管理器 / Mac Finder）
                 d = kitset.model_dir(model)
                 try:
-                    os.makedirs(d, exist_ok=True)
-                    os.startfile(d)  # noqa 仅 Windows 桌面端
+                    from paths import reveal
+                    reveal(d)
                     self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
                 except Exception as e:
                     self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+                return
+            if (q.get("bg") or ["0"])[0] in ("1", "true"):
+                # Mac WKWebView fetch ~60s 超时（"Load failed" 实锤）→ 生成走后台，前端轮询 /api/jobget
+                import jobman
+
+                def _do():
+                    res = kitset.generate(model, force,
+                                          log=lambda s: state.LOG.append("[蓝底] " + s))
+                    res["dir"] = kitset.model_dir(model)
+                    return res
+                if not jobman.submit("kitset:" + model, _do):
+                    self._send(200, json.dumps({"ok": False, "msg": "该型号已在生成中，等一下"},
+                                               ensure_ascii=False))
+                    return
+                self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
                 return
             try:
                 import kitset
@@ -462,6 +427,28 @@ class ApiGetMixin:
         if path == "/api/pubjob":
             import pubwork
             self._send(200, json.dumps(pubwork.job_state(), ensure_ascii=False))
+            return
+
+        if path == "/api/jobget":
+            # 通用后台任务状态（2026-10-25，配合 jobman）：?key=kitset:<型号> / copy:<型号>:<kind> / pubqa:<型号>
+            q = urllib.parse.parse_qs(u.query)
+            jk = (q.get("key") or [""])[0].strip()
+            if not jk:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 key"}, ensure_ascii=False))
+                return
+            import jobman
+            j = jobman.state(jk)
+            if j.get("running"):
+                j.update(ok=True, phase="running")
+            elif j.get("done"):
+                if j.get("ok"):
+                    j["phase"] = "done"
+                else:
+                    j["phase"] = "failed"
+                    j["res"] = {"ok": False, "msg": j.get("err") or "任务失败"}
+            else:
+                j.update(ok=True, phase="idle")
+            self._send(200, json.dumps(j, ensure_ascii=False))
             return
 
         if path == "/api/xymenu":
