@@ -104,6 +104,8 @@ def autostart_enable(log=None):
     try:
         if not is_frozen():
             return False
+        if os.path.isfile(wp("autostart_off.txt")):
+            return True          # 2026-10-25：用户关过自启，别再自动开回来
         bundle = _bundle_path()
         if not bundle or not os.path.isdir(bundle):
             if log:
@@ -238,7 +240,15 @@ def run_app(httpd, port, startup_xlsx=None):
         _tick("webview.start() 的 GUI 循环已起来（cocoa）")
         state.LOG.append(lambda m: print("[%s] %s" % (APP_NAME, m)))
         state.LOG.append(lambda m: None)
-        # 开机自启默认开启（LaunchAgent）；没有托盘菜单，要关就用系统设置→登录项
+        # 2026-10-25 实锤修复：Mac 端漏起跟随线程（10-11 建 Mac 端时没搬）——
+        # 空载荷永远等不到云端同步（库里 0 个型号）、软件自更新也是死的。
+        # 对齐 Windows appwin.after_start 的四条线程。
+        threading.Thread(target=auto_updater, daemon=True).start()
+        threading.Thread(target=xlsx_follower, daemon=True).start()
+        threading.Thread(target=xinsheng_follower, daemon=True).start()
+        threading.Thread(target=yy_alert_loop, daemon=True).start()   # 管理号轮询用友告警
+        # 开机自启（LaunchAgent）；autostart_enable 内部尊重 autostart_off.txt 标记。
+        # 要关：菜单「帮助 → 开机自启」点一下（或系统设置→登录项删除）。
         threading.Thread(target=autostart_enable, args=(state.LOG.append,),
                          daemon=True).start()
         if startup_xlsx:

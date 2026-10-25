@@ -273,6 +273,18 @@ def build_menu(sub=False):
             return
         js_click("impimg")
 
+    def autostart_toggle():
+        # 开机自启开关（2026-10-25）：Mac 没有托盘，入口放原生菜单；Windows 菜单/托盘都有。
+        # 关 = 删配置 + 写 autostart_off.txt 标记，下次启动不再自动开回来。
+        autostart_turn(not autostart_state(), state.LOG.append)
+        try:
+            webview.windows[0].evaluate_js(
+                "alert('开机自启现在：%s。')" % ("已开启" if autostart_state() else "已关闭"))
+        except Exception:
+            pass
+
+    autostart_lab = "开机自启（当前：%s）" % ("已开启" if autostart_state() else "已关闭")
+
     # 子账号（2026-10-08 十次改版）：菜单 = 账号管理 / 显示 / 重新加载页面 / 软件更新 / 退出登录
     # 2026-10-10 加「显示(S)」：字体大小每个用户每台电脑自己调（跟账号无关、不上云）
     if sub:
@@ -313,6 +325,7 @@ def build_menu(sub=False):
         Menu("帮助(&H)", [
             MenuAction("软件更新", upd_app),
             MenuSeparator(),
+            MenuAction(autostart_lab, autostart_toggle),
             MenuAction("关于", about),
         ]),
     ]
@@ -348,6 +361,8 @@ def autostart_enable(log=None):
     已存在同名项就不重复写。失败只记日志，不影响启动。"""
     try:
         import winreg
+        if os.path.isfile(wp("autostart_off.txt")):
+            return True          # 2026-10-25：用户关过自启，别再自动开回来
         if is_frozen():
             exe = os.path.abspath(sys.argv[0])          # 打包后 = ModelLookup.exe 本体
         else:
@@ -367,6 +382,53 @@ def autostart_enable(log=None):
     except Exception as e:
         if log:
             log("开机自启设置失败（不影响使用）：%s" % e)
+        return False
+
+
+def autostart_state():
+    """当前是否已设置开机自启（跨平台：Mac 走 LaunchAgent，Windows 走 HKCU Run 键）。"""
+    if sys.platform == "darwin":
+        import appwin_mac
+        return appwin_mac.autostart_enabled()
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_QUERY_VALUE) as k:
+            winreg.QueryValueEx(k, APP_NAME)
+        return True
+    except Exception:
+        return False
+
+
+def autostart_turn(on, log=None):
+    """跨平台开/关开机自启（2026-10-25，修「托盘关了下次启动又自动开回来」）。
+    关 = 删自启配置 + 写 autostart_off.txt 标记（启动线程看到标记就不再强开）；
+    开 = 删标记 + 重新写配置。"""
+    off = wp("autostart_off.txt")
+    if on:
+        try:
+            os.remove(off)
+        except OSError:
+            pass
+        return autostart_enable(log)
+    try:
+        open(off, "w").close()
+    except Exception:
+        pass
+    if sys.platform == "darwin":
+        import appwin_mac
+        return appwin_mac.autostart_remove(log)
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+            winreg.DeleteValue(k, APP_NAME)
+        if log:
+            log("已关闭开机自启")
+        return True
+    except FileNotFoundError:
+        return True
+    except Exception as e:
+        if log:
+            log("关闭开机自启失败：%s" % e)
         return False
 
 
@@ -555,7 +617,8 @@ def run_app(httpd, port, startup_xlsx=None):
                 os._exit(0)          # 后台线程（自动更新等）一并干净走人
 
             def _autostart_toggle(sender=None, e=None):
-                """托盘菜单「开机自启」勾选开关。"""
+                """托盘菜单「开机自启」勾选开关。
+                2026-10-25：关 = 删 Run 键 + 写 autostart_off.txt 标记（下次启动不再自动开回来）。"""
                 try:
                     import winreg
                     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_QUERY_VALUE) as k:
@@ -569,7 +632,15 @@ def run_app(httpd, port, startup_xlsx=None):
                     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
                         if has:
                             winreg.DeleteValue(k, APP_NAME)
+                            try:
+                                open(wp("autostart_off.txt"), "w").close()
+                            except Exception:
+                                pass
                         else:
+                            try:
+                                os.remove(wp("autostart_off.txt"))
+                            except OSError:
+                                pass
                             exe = os.path.abspath(sys.argv[0]) if is_frozen() else sys.executable
                             winreg.SetValueEx(k, APP_NAME, 0, winreg.REG_SZ, '"%s"' % exe)
                     mi3.Checked = not has
@@ -585,7 +656,7 @@ def run_app(httpd, port, startup_xlsx=None):
                 import winreg as _wr
                 with _wr.OpenKey(_wr.HKEY_CURRENT_USER, RUN_KEY, 0, _wr.KEY_QUERY_VALUE) as k:
                     _wr.QueryValueEx(k, APP_NAME)
-                mi3.Checked = True
+                mi3.Checked = not os.path.isfile(wp("autostart_off.txt"))
             except Exception:
                 mi3.Checked = False
             mi3.Click += _autostart_toggle
