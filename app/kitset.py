@@ -13,6 +13,7 @@ import io
 import json
 import os
 import re
+import threading
 import urllib.parse
 from collections import Counter
 
@@ -24,9 +25,16 @@ from paths import wp
 import pei_core
 from net import urlopen_ssl
 
-F_LIGHT = r"C:\Windows\Fonts\msyhl.ttc"
-F_REG = r"C:\Windows\Fonts\msyh.ttc"
-F_BOLD = r"C:\Windows\Fonts\msyhbd.ttc"
+if os.name == "nt":
+    F_LIGHT = r"C:\Windows\Fonts\msyhl.ttc"
+    F_REG = r"C:\Windows\Fonts\msyh.ttc"
+    F_BOLD = r"C:\Windows\Fonts\msyhbd.ttc"
+else:
+    # macOS（2026-10-25 实锤：硬编码 C:\Windows\Fonts 在 Mac 上第一行就炸）
+    # 苹方 PingFang.ttc 的 weight index 各版本系统不一致，用 STHeiti 双文件最稳：
+    F_LIGHT = "/System/Library/Fonts/STHeiti Light.ttc"
+    F_REG = "/System/Library/Fonts/STHeiti Medium.ttc"
+    F_BOLD = "/System/Library/Fonts/STHeiti Medium.ttc"
 BLUE = (46, 107, 230)
 INK = (28, 30, 34)
 GRAY = (138, 142, 150)

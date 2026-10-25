@@ -76,3 +76,15 @@ def set_data_root(p):
     with open(wp("settings.json"), "w", encoding="utf-8") as f:
         _json.dump(s, f, ensure_ascii=False, indent=1)
     return p
+
+
+def reveal(p):
+    """在文件管理器里打开目录（2026-10-25 跨平台）：Win=资源管理器 / macOS=Finder。
+    替代 os.startfile（Windows 专属，Mac 上 AttributeError）。"""
+    p = os.path.abspath(p)
+    os.makedirs(p, exist_ok=True)
+    if sys.platform == "darwin":
+        import subprocess
+        subprocess.Popen(["open", p])
+    else:
+        os.startfile(p)  # noqa 仅 Windows 分支

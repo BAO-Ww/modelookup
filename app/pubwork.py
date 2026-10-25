@@ -18,7 +18,7 @@ import re
 import shutil
 import threading
 
-from paths import wp
+from paths import reveal, wp
 
 # ---------------------------------------------------------------- 素材根与型号目录
 
@@ -534,7 +534,7 @@ def sel_save(model, rels, sell_price=None, version="N"):
         shutil.copy(sp, dst)
         n += 1
     try:
-        os.startfile(sel)  # noqa
+        reveal(sel)
     except Exception:
         pass
     return {"ok": True, "count": n, "dir": sel}
@@ -678,6 +678,5 @@ def pub_xy(model, version="N"):
 
 def open_dir(model, sub=""):
     d = os.path.join(mdir(model), sub.replace("/", os.sep)) if sub else mdir(model)
-    os.makedirs(d, exist_ok=True)
-    os.startfile(d)  # noqa
+    reveal(d)
     return {"ok": True}
