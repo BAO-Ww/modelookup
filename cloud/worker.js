@@ -1238,6 +1238,40 @@ async function route(request, env, path, ctx) {
     return J({ ok: true, ts: obj.ts || "", rows: obj.rows || 0, by: obj.by || "", up: +obj.up || 0 });   // up=最近成功跑批（本机哨兵用，2026-10-24）
   }
 
+  // 客户端诊断上送（2026-10-25）：Mac 空数据排查——客户端把本机文件清单/状态/日志尾部传上来，
+  // 管理号 GET 读回。KV key clog_<u>，每用户一份，覆盖写（省额度）。
+  if (path === "/clientlog" && request.method === "POST") {
+    if (!who) return jerr("没有权限", 403);
+    const b = await request.json().catch(() => ({}));
+    const rep = {
+      ts: Date.now(),
+      ua: request.headers.get("User-Agent") || "",
+      reason: String(b.reason || "").slice(0, 120),
+      files: b.files || {},
+      state: b.state || {},
+      log: String(b.log || "").slice(-7000),
+    };
+    await env.KV.put("clog_" + who, JSON.stringify(rep));
+    return J({ ok: true });
+  }
+  if (path === "/clientlog" && request.method === "GET") {
+    const ck = env.CLOUD_KEY || env.SECRET;
+    const byKey = ck && (request.headers.get("X-Cloud-Key") || "") === ck;
+    const users = await getUsers(env);
+    const isAdmin = who && users[who] && users[who].role === "admin";
+    if (!byKey && !who) return jerr("没有权限", 403);
+    const out = [];
+    const list = await env.KV.list({ prefix: "clog_" });
+    for (const k of (list.keys || [])) {
+      const u = k.name.slice(5);
+      if (!isAdmin && u !== who) continue;      // 非管理号只能读自己的上报
+      const o = await getJSON(env, k.name, null);
+      if (o) out.push({ u: u, rep: o });
+    }
+    out.sort((a, b) => (b.rep.ts || 0) - (a.rep.ts || 0));
+    return J({ ok: true, reports: out.slice(0, 20) });
+  }
+
   // 跑批报到（2026-10-24）：kdocs CI 内容没变时跳过文件上传 → up 不动，本机哨兵会误报停摆。
   // 每轮跑完都打一下这个口子只刷 up（KV 写 ~15 次/天，额度无压力）。
   // 2026-10-25 实锤：仓库 secrets 没配 KX_SECRET，CI 只带 CLOUD_TOKEN → 只认 X-Cloud-Key 必 403，
