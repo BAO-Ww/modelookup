@@ -107,6 +107,23 @@ class ApiGetMixin:
                 except Exception as e:
                     self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
                 return
+            if (q.get("extra") or ["0"])[0] in ("1", "true"):
+                # 追加图（2026-10-26 用户令二改）：点击直接生成（规格参数+机器展示，
+                # 尺寸标注整个砍掉），产物存 kitset/<型号>/追加图/ 子文件夹；
+                # 走后台 jobman（同 Mac 60s 超时规避），键 kitextra:<型号>
+                import jobman
+
+                def _do():
+                    res = kitset.generate_extra(model,
+                                                log=lambda s: state.LOG.append("[蓝底+] " + s))
+                    res["dir"] = kitset.model_dir(model)
+                    return res
+                if not jobman.submit("kitextra:" + model, _do):
+                    self._send(200, json.dumps({"ok": False, "msg": "该型号追加图正在生成中，等一下"},
+                                               ensure_ascii=False))
+                    return
+                self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
+                return
             if (q.get("bg") or ["0"])[0] in ("1", "true"):
                 # Mac WKWebView fetch ~60s 超时（"Load failed" 实锤）→ 生成走后台，前端轮询 /api/jobget
                 import jobman
@@ -115,6 +132,12 @@ class ApiGetMixin:
                     res = kitset.generate(model, force,
                                           log=lambda s: state.LOG.append("[蓝底] " + s))
                     res["dir"] = kitset.model_dir(model)
+                    # 追加图一起生成（2026-10-26 用户令：每次生成都全套出）
+                    try:
+                        kitset.generate_extra(model,
+                                              log=lambda s: state.LOG.append("[蓝底+] " + s))
+                    except Exception as e:
+                        state.LOG.append("[蓝底+] 追加图失败：%s" % e)
                     return res
                 if not jobman.submit("kitset:" + model, _do):
                     self._send(200, json.dumps({"ok": False, "msg": "该型号已在生成中，等一下"},
@@ -127,6 +150,12 @@ class ApiGetMixin:
                 res = kitset.generate(model, force,
                                       log=lambda s: state.LOG.append("[蓝底] " + s))
                 res["dir"] = kitset.model_dir(model)
+                # 追加图一起生成（2026-10-26 用户令：每次生成都全套出）
+                try:
+                    kitset.generate_extra(model,
+                                          log=lambda s: state.LOG.append("[蓝底+] " + s))
+                except Exception as e:
+                    state.LOG.append("[蓝底+] 追加图失败：%s" % e)
                 self._send(200, json.dumps(res, ensure_ascii=False))
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": "蓝底套图生成失败：%s" % e},

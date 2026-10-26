@@ -1854,7 +1854,672 @@ def generate(model, force=0, log=None):
     res = {"ok": True, "cached": False, "model": cfg["model"], "name": cfg["series"] + " " + cfg["model"],
            "titles": titles, "points": points, "aftersale": aftersale,
            "params": dict(cfg["params_rows"]), "src": cfg["url"],
-           "imgs": ["1", "2", "3", "4"]}
+           "imgs": ["1", "2", "3", "4"],
+           # 追加图（2026-10-26）要用的原料：完整 props/品类/标题，存进 set.json 缓存，
+           # 老缓存没有这个键时 generate_extra 会现抓一次并回写
+           "info": {"brand": cfg["brand"], "cat": cfg["cat"], "title": (info.get("title") or ""),
+                    "props": [list(p) for p in (info.get("props") or [])],
+                    "panel": (info.get("panel") or info.get("color") or "")}}
     with io.open(cache, "w", encoding="utf-8") as f:
         json.dump(res, f, ensure_ascii=False)
     return res
+
+
+# ================= 追加图（2026-10-26 用户令）：蓝底套图页勾选生成的深灰影棚加图 =================
+# 复用 pei_ai9 渲染链（同背景/同字体/同版式），输出 img_5+.jpg 到同一型号目录，
+# extra.json 记录清单给前端拼切换按钮。蓝底原四张与 set.json 完全不受影响。
+# 规矩：参数只写官网真值（取不到显示「—」绝不编）；横竖机型自适应版式。
+
+_EXTRA_LOCK = threading.Lock()   # pei_ai9 渲染走模块全局态，同一时刻只允许一个渲染
+
+_EX_COLORS = [(70, 190, 255), (60, 205, 140), (255, 200, 70),
+              (90, 205, 255), (170, 135, 255), (120, 215, 255)]
+
+
+def _dedup_unit(v):
+    """参数值已带单位时不再重复追加（2026-10-26 EC8001 实锤：
+    缓存参数自带「80L/3300W/75℃」，卡片代码又拼一次 → 「80LL/3300WW/75℃℃」）。"""
+    v = str(v).strip()
+    return re.sub(r"^(.*?\d)(L|W|kg|mm|℃|°C|个|h|Mpa|级)\2$", r"\1\2", v)
+
+
+def _extra_info(model, log):
+    """追加图原料：set.json 里缓存的信息优先（generate 埋进去的），老缓存没有就现抓一次并回写。"""
+    mdir = model_dir(model)
+    cache = os.path.join(mdir, "set.json")
+    info = {}
+    if os.path.isfile(cache):
+        try:
+            with io.open(cache, encoding="utf-8") as f:
+                info = (json.load(f).get("info") or {})
+        except Exception:
+            info = {}
+    if not (info.get("props") or []):
+        log("追加图首次要现抓参数（之后缓存秒出）…")
+        try:
+            fresh, _imgs = _gather_info(model, log)
+            if fresh and (fresh.get("props") or []):
+                info = fresh
+        except Exception as e:
+            log("现抓参数失败（%s）" % e)
+        if info and os.path.isfile(cache):
+            try:
+                with io.open(cache, encoding="utf-8") as f:
+                    res = json.load(f)
+                # 基础套图抓到的参数（params 键值）并进 props 兜底——
+                # 2026-10-26 EC8001 实锤：官网现抓只回 2 组，基础套图缓存里有 8 组
+                have = {str(k) for k, _v in (info.get("props") or [])}
+                for k, v in (res.get("params") or {}).items():
+                    if str(k) not in have and str(v).strip() not in ("", "—", "-"):
+                        info.setdefault("props", []).append([str(k), str(v)])
+                res["info"] = {"brand": info.get("brand"), "cat": info.get("cat"),
+                               "title": info.get("title"),
+                               "props": [list(p) for p in (info.get("props") or [])],
+                               "panel": (info.get("panel") or info.get("color") or "")}
+                with io.open(cache, "w", encoding="utf-8") as f:
+                    json.dump(res, f, ensure_ascii=False)
+            except Exception:
+                pass
+    if not (info.get("props") or []):
+        raise RuntimeError("追加图缺参数原料（set.json 无 info 且现抓失败）——先重新生成一次蓝底套图")
+    info.setdefault("model", norm_model(model) or model)
+    return info
+
+
+def _extra_ctx(info):
+    """pei_ai9 模块态对齐预览脚本定稿（studio 深灰风、无 AI 调用、中性微调）。"""
+    import pei_ai9 as A
+    A.GEN_STYLE = "studio"
+    A.GEN_POP = False
+    A.BAND_MAXW = None
+    A.GEN_CAT = ""
+    A.TUNE = {"machine_scale": 1.0, "top_pad": 0, "font_scale": 1.0}
+    A.SHOW_SHADOW = False
+    A.TX1, A.TX2, A.TX3 = "#ffffff", "#cfd8e4", "#aeb4bd"
+    A.API_KEY = None
+    A._TONE = None
+    A.P = A.build_text(info, "N", None)
+    return A
+
+
+def _extra_bg(model, info, log):
+    """深灰影棚背景：缓存优先 → AI 现生成（有 key 时）→ 程序渐变兜底。缓存进型号目录 AI背景/。"""
+    import pei_ai9 as A
+    bgdir = os.path.join(model_dir(model), "AI背景")
+    try:
+        os.makedirs(bgdir, exist_ok=True)
+    except Exception:
+        pass
+    A.BG_DIR = bgdir
+    A.BG_SEED = A._seed_phrase(info)
+    cands = sorted(glob.glob(os.path.join(bgdir, "studio_a_studio_*.jpg"))) or \
+            [p for p in sorted(glob.glob(os.path.join(bgdir, "studio_a_*.jpg")))
+             if "spot" not in os.path.basename(p)]
+    if cands:
+        return A._finalize_bg(A.Image.open(cands[0]).convert("RGB"))
+    key = None
+    try:
+        import copywriter as _cw
+        key = _cw.API_KEY
+    except Exception:
+        key = None
+    if key and A.core_hero is not None:
+        try:
+            import hashlib
+            h = hashlib.md5(("%s|%s|%s" % (A.BG_SEED, None, "studio")).encode()).hexdigest()[:8]
+            cache = os.path.join(bgdir, "studio_a_studio_%s.jpg" % h)
+            im = A.core_hero.promo_studio_bg(info.get("model") or model, key, bgdir,
+                                             tone=None, seed=A.BG_SEED,
+                                             flavor=None, bright=False)
+            if im is not None:
+                im.convert("RGB").save(cache, quality=92)
+                log("AI 影棚背景已生成并缓存")
+                return A._finalize_bg(A.Image.open(cache).convert("RGB"))
+        except Exception as e:
+            log("AI 背景没出成（%s），用程序渐变兜底" % e)
+    fb = os.path.join(bgdir, "_fallback_extra.jpg")
+    if not os.path.isfile(fb):
+        A._fallback_bg("a").convert("RGB").save(fb, quality=92)
+    log("使用程序渐变兜底背景")
+    return A._finalize_bg(A.Image.open(fb).convert("RGB"))
+
+
+def _ex_render_left(A, bg, front, cards, title, sub, pl1, pl2, model, out,
+                    m_maxw=420, x0c=490, cwc=272, anchor_bottom=False):
+    """竖型左栏版式（冰箱同款）：左机器 + 右 2x3 彩条卡 + 底部两行。"""
+    cv = bg.copy().convert("RGBA")
+    dr = A.ImageDraw.Draw(cv)
+    A.vgrad_overlay(cv, top_alpha=120, bot_alpha=140, band=200)
+    dr = A.ImageDraw.Draw(cv)
+    A.T(dr, (60, 92), title, 42, A.TX1, "lm")
+    A.T(dr, (60, 146), sub, 22, A.TX3, "lm")
+    A.T(dr, (A.W - 60, 118), model, 20, A.TX3, "rm")
+    pf, px, py = A.place_band(cv, front, 205, 952, maxw=m_maxw)
+    px = 30 + (m_maxw - pf.width) // 2
+    if anchor_bottom:
+        py = min(py, 940 - pf.height)
+    A.halo(cv, px, py, pf.width, pf.height, strength=30, blur=58, m=185, col=(205, 220, 245))
+    A.soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=30, drop=16, w=0.9)
+    cv.alpha_composite(pf, (px, py))
+    cw, ch, gx, gy = cwc, 190, 18, 24
+    x0 = x0c
+    rows = (len(cards) + 1) // 2
+    total_h = rows * ch + (rows - 1) * gy
+    y0 = 244 + (634 - total_h) // 2
+    for i, (v, k, ic) in enumerate(cards):
+        r, c = divmod(i, 2)
+        x = x0 + c * (cw + gx)
+        y = y0 + r * (ch + gy)
+        A.dim(cv, (x, y, x + cw, y + ch), (10, 14, 22), 208, radius=16)
+        dr = A.ImageDraw.Draw(cv)
+        dr.rounded_rectangle([x, y, x + cw, y + ch], 16, outline=(180, 195, 215, 120), width=2)
+        dr.rounded_rectangle([x + 20, y + 26, x + 34, y + ch - 26], 7, fill=ic)
+        _s = 34 if dr.textlength(v, font=A.font(34, True)) <= cw - 100 else 22
+        if _s == 22 and dr.textlength(v, font=A.font(22, True)) > cw - 44:
+            _s = 18
+        A.T(dr, (x + 54, y + ch // 2 - 20), v, _s, "#ffffff", "lm")
+        A.T(dr, (x + 54, y + ch // 2 + 24), k, 19, "#a9b3c1", "lm")
+    _s1 = 21 if dr.textlength(pl1, font=A.font(21, True)) <= A.W - 120 else 18
+    _s2 = 19 if dr.textlength(pl2, font=A.font(19, True)) <= A.W - 120 else 16
+    A.T(dr, (A.W // 2, 1006), pl1, _s1, A.TX2, "mm")
+    A.T(dr, (A.W // 2, 1048), pl2, _s2, A.TX3, "mm")
+    A.save(cv, out)
+
+
+def _ex_render_tv(A, bg, front, cards, title, sub, pl1, pl2, model, out):
+    """横宽型版式（电视/热水器同款）：机器横贯上方 + 卡片下方两排三列（不足 6 张自动收列居中）。"""
+    cv = bg.copy().convert("RGBA")
+    dr = A.ImageDraw.Draw(cv)
+    A.vgrad_overlay(cv, top_alpha=120, bot_alpha=140, band=200)
+    dr = A.ImageDraw.Draw(cv)
+    A.T(dr, (60, 92), title, 42, A.TX1, "lm")
+    A.T(dr, (60, 146), sub, 22, A.TX3, "lm")
+    A.T(dr, (A.W - 60, 118), model, 20, A.TX3, "rm")
+    sc = min(780 / front.width, 460 / front.height)
+    pw, ph = int(front.width * sc), int(front.height * sc)
+    pf = front.resize((pw, ph), A.Image.LANCZOS)
+    px, py = (A.W - pw) // 2, 196 + (460 - ph) // 2   # 机器区垂直居中（原吊顶）
+    A.halo(cv, px, py, pw, ph, strength=30, blur=58, m=185, col=(205, 220, 245))
+    A.soft_shadow(cv, px, py, pw, ph, alpha=120, blur=30, drop=16, w=0.9)
+    cv.alpha_composite(pf, (px, py))
+    cw, ch, gx, gy = 302, 136, 13, 18
+    cols = 3 if len(cards) >= 6 else min(len(cards), 2)
+    x0 = (A.W - cols * cw - (cols - 1) * gx) // 2
+    y0 = 700
+    for i, (v, k, ic) in enumerate(cards):
+        r, c = divmod(i, cols)
+        x = x0 + c * (cw + gx)
+        y = y0 + r * (ch + gy)
+        A.dim(cv, (x, y, x + cw, y + ch), (10, 14, 22), 208, radius=16)
+        dr = A.ImageDraw.Draw(cv)
+        dr.rounded_rectangle([x, y, x + cw, y + ch], 16, outline=(180, 195, 215, 120), width=2)
+        dr.rounded_rectangle([x + 16, y + 22, x + 28, y + ch - 22], 6, fill=ic)
+        _s = 26 if dr.textlength(v, font=A.font(26, True)) <= cw - 64 else 20
+        if _s == 20 and dr.textlength(v, font=A.font(20, True)) > cw - 44:
+            _s = 17
+        A.T(dr, (x + 44, y + ch // 2 - 18), v, _s, "#ffffff", "lm")
+        A.T(dr, (x + 44, y + ch // 2 + 20), k, 16, "#a9b3c1", "lm")
+    _s1 = 21 if dr.textlength(pl1, font=A.font(21, True)) <= A.W - 120 else 18
+    _s2 = 19 if dr.textlength(pl2, font=A.font(19, True)) <= A.W - 120 else 16
+    A.T(dr, (A.W // 2, 1016), pl1, _s1, A.TX2, "mm")
+    A.T(dr, (A.W // 2, 1052), pl2, _s2, A.TX3, "mm")
+    A.save(cv, out)
+
+
+def _ex_render_show(A, bg, front, cat, t1_text, out):
+    """机器展示（v8 定稿版式）：品牌左上角 + 金字标题/渐变型号/金条压机器居中。"""
+    P = A.P
+    wide_dark = cat in ("电视", "热水器", "消毒柜", "消毒")
+    cv = bg.copy().convert("RGBA")
+    dr = A.ImageDraw.Draw(cv)
+    dr.rounded_rectangle([44, 70, 56, 126], 6, fill=(70, 190, 255, 255))
+    A.T(dr, (74, 98), P["ben"], 40, A.TX1, "lm")
+    bx = 74 + int(dr.textlength(P["ben"], font=A.font(40, True))) + 14
+    A.T(dr, (bx, 98), P["brand"], 40, A.TX1, "lm")
+    dr.text((A.W // 2, A.H // 2), P["ben"], font=A.font(230, True),
+            fill=(255, 255, 255, 24), anchor="mm")
+    if wide_dark:
+        mw = 900 if cat in ("电视", "热水器") else 780
+        pf, px, py = A.place_band(cv, front, 170, 910, maxw=mw)
+        px = (A.W - pf.width) // 2
+        A.halo(cv, px, py, pf.width, pf.height, strength=30, blur=58, m=185, col=(205, 220, 245))
+        A.soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=30, drop=16, w=0.9)
+        cv.alpha_composite(pf, (px, py))
+        dr = A.ImageDraw.Draw(cv)
+        mx = px + pf.width // 2
+        cy_t = py + pf.height * 0.26
+        cy_m = py + pf.height * 0.44
+        ts1, ts2 = 54, 130
+    else:
+        pf, px, py = A.place_band(cv, front, 120, 1015, maxw=1010)
+        A.halo(cv, px, py, pf.width, pf.height, strength=32, blur=60, m=190, col=(210, 222, 240))
+        A.soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=34, drop=26, w=0.98)
+        cv.alpha_composite(pf, (px, py))
+        dr = A.ImageDraw.Draw(cv)
+        mx = px + pf.width // 2
+        ts1 = 46 if "洗衣" in cat else 38
+        ts2 = 84 if "洗衣" in cat else 60
+        cy_t = py + pf.height * 0.34
+        cy_m = py + pf.height * 0.45
+    if not t1_text:
+        t1_text = "%s%s" % (P.get("brand", ""), cat)
+
+    def shadowed(txt, sz, cy, stroke, fill="#ffffff"):
+        dr.text((mx, cy + 6), txt, font=A.font(sz, True), fill=(10, 13, 18, 180),
+                anchor="mm", stroke_width=stroke, stroke_fill=(10, 13, 18, 180))
+        dr.text((mx, cy), txt, font=A.font(sz, True), fill=fill, anchor="mm",
+                stroke_width=stroke, stroke_fill=(20, 24, 30))
+
+    def gradient_text(txt, sz, cy, stroke=5):
+        dr.text((mx, cy + 6), txt, font=A.font(sz, True), fill=(10, 13, 18, 180),
+                anchor="mm", stroke_width=stroke, stroke_fill=(10, 13, 18, 180))
+        dr.text((mx, cy), txt, font=A.font(sz, True), fill="#ffffff", anchor="mm",
+                stroke_width=stroke, stroke_fill=(18, 22, 30))
+        mask = A.Image.new("L", (A.W, A.H), 0)
+        A.ImageDraw.Draw(mask).text((mx, cy), txt, font=A.font(sz, True), fill=255, anchor="mm")
+        grad = A.Image.new("RGBA", (A.W, A.H), (0, 0, 0, 0))
+        gd = A.ImageDraw.Draw(grad)
+        top, bot = (255, 255, 255), (140, 210, 255)
+        y0, y1 = int(cy - sz), int(cy + sz)
+        for y in range(max(0, y0), min(A.H, y1)):
+            t = (y - y0) / max(1, y1 - y0)
+            c = tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3))
+            gd.line([(0, y), (A.W, y)], fill=c + (255,))
+        cv.paste(grad, (0, 0), mask)
+
+    while ts1 > 20 and dr.textlength(t1_text, font=A.font(ts1, True)) > A.W - 100:
+        ts1 -= 2
+    shadowed(t1_text, ts1, cy_t, 3, fill=A.TX_GOLD)
+    t2 = P["model"]
+    while ts2 > 30 and dr.textlength(t2, font=A.font(ts2, True)) > A.W - 80:
+        ts2 -= 2
+    gradient_text(t2, ts2, cy_m)
+    tw = int(dr.textlength(t2, font=A.font(ts2, True)))
+    uy = cy_m + int(ts2 * 0.66)
+    dr.rounded_rectangle([mx - tw // 2 - 26, uy, mx + tw // 2 + 26, uy + 10], 5,
+                         fill=(255, 225, 77, 255))
+    A.save(cv, out)
+
+
+def _ex_render_size(A, bg, front, dims, model, out):
+    """尺寸标注：官方透明主图 + 程序画标注线，数字全部来自官网参数。"""
+    cv = bg.copy().convert("RGBA")
+    dr = A.ImageDraw.Draw(cv)
+    A.vgrad_overlay(cv, top_alpha=120, bot_alpha=140, band=200)
+    dr = A.ImageDraw.Draw(cv)
+    A.T(dr, (60, 92), "尺寸图", 42, A.TX1, "lm")
+    A.T(dr, (60, 146), "官方数据 · 安装量位更放心", 22, A.TX3, "lm")
+    A.T(dr, (A.W - 60, 118), model, 20, A.TX3, "rm")
+    GOLD = (255, 225, 77, 255)
+    pf, px, py = A.place_band(cv, front, 210, 830, maxw=560)
+    px = (A.W - pf.width) // 2
+    A.halo(cv, px, py, pf.width, pf.height, strength=30, blur=58, m=185, col=(205, 220, 245))
+    A.soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=30, drop=16, w=0.9)
+    cv.alpha_composite(pf, (px, py))
+    dr = A.ImageDraw.Draw(cv)
+
+    def arrow(x1, y1, x2, y2, label, vertical=False):
+        dd = A.ImageDraw.Draw(cv)
+        dd.line([x1, y1, x2, y2], fill=GOLD, width=4)
+        if vertical:
+            for (ax, ay) in ((x1, y1), (x2, y2)):
+                s = 6 if ay < y2 else -6
+                dd.polygon([(ax - 9, ay - s), (ax + 9, ay - s), (ax, ay + s)], fill=GOLD)
+        else:
+            for (ax, ay) in ((x1, y1), (x2, y2)):
+                s = 6 if ax < x2 else -6
+                dd.polygon([(ax - s, ay - 9), (ax - s, ay + 9), (ax + s, ay)], fill=GOLD)
+        fs = 30
+        fnt = A.font(fs, True)
+        tw_ = int(dd.textlength(label, font=fnt))
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        A.dim(cv, (cx - tw_ // 2 - 10, cy - 13, cx + tw_ // 2 + 10, cy + 17),
+              (10, 14, 22), 235, radius=10)
+        dr = A.ImageDraw.Draw(cv)
+        dr.text((cx, cy + 2), label, font=fnt, fill="#ffe14d", anchor="mm")
+
+    wv, hv, dv = str(dims[0]), str(dims[1]), str(dims[2])
+    x_r = px + pf.width + 40
+    y_b = py + pf.height + 46
+    arrow(x_r, py, x_r, py + pf.height, hv + "mm", vertical=True)
+    arrow(px, y_b + 26, px + pf.width, y_b + 26, wv + "mm")
+    t_d = "厚度(深) %smm" % dv
+    fnt = A.font(26, True)
+    tw_ = int(dr.textlength(t_d, font=fnt))
+    bx, by = 60, 920
+    A.dim(cv, (bx, by, bx + tw_ + 44, by + 56), (10, 14, 22), 235, radius=14)
+    dr = A.ImageDraw.Draw(cv)
+    dr.rounded_rectangle([bx + 14, by + 12, bx + 26, by + 44], 6, fill=(255, 225, 77, 255))
+    dr.text((bx + 40, by + 28), t_d, font=fnt, fill="#ffffff", anchor="lm")
+    A.save(cv, out)
+
+
+def _extra_jobs(cat, PR, info, wide):
+    """按品类拼参数卡内容（预览定稿口径移植）；卡值全部官网真值，缺「—」。"""
+    # 剥括号单位的模糊匹配表（容积(L)→容积，外形尺寸(宽*高*深)mm→外形尺寸）
+    _pl = {re.sub(r"[（(].*?[)）]", "", str(kk)).replace("mm", ""): str(vv).strip()
+           for kk, vv in PR.items()
+           if str(vv).strip() and str(vv).strip() not in ("—", "-")}
+
+    def g(k):
+        """取值：精确键 → 剥括号单位模糊匹配 → 都没有「—」（绝不编）。"""
+        v = str(PR.get(k, "") or "").strip()
+        if v and v != "—":
+            return v
+        base = re.sub(r"[（(].*?[)）]", "", str(k)).replace("mm", "")
+        if base in _pl:
+            return _pl[base]
+        for kk, vv in _pl.items():
+            if len(base) >= 2 and len(kk) >= 2 and (base in kk or kk in base):
+                return vv
+        return "—"
+
+    def c6(pairs):
+        return [(v, k) for v, k in pairs if True]
+
+    def job(label, title, sub, pl1, pl2, cards, layout, left=None):
+        return {"label": label, "title": title, "sub": sub, "pl1": pl1, "pl2": pl2,
+                "cards": cards, "layout": layout, "left": left or {}}
+
+    L_WIDE = {"m_maxw": 545, "x0c": 560, "cwc": 228, "anchor_bottom": True}
+    L_MID = {"m_maxw": 440, "x0c": 560, "cwc": 228, "anchor_bottom": True}
+    jobs = []
+    if "冰箱" in cat:
+        jobs.append(job("规格尺寸", "规格尺寸", "尺寸明了 · 摆放无忧",
+                        "产品尺寸 " + g("产品尺寸"), "量好位置 · 放心搬回家",
+                        c6([(g("总容积"), "总容积"), (g("产品尺寸"), "产品尺寸"),
+                            (g("箱门结构"), "箱门结构"), (g("面板颜色"), "面板颜色"),
+                            (g("面板材质"), "面板材质"), (g("额定电压"), "额定电压")]),
+                        "left"))
+        midk = "软冷冻室容积" if "软冷冻室容积" in PR else "变温室容积"
+        jobs.append(job("大容量分储", "大容量分储", "冷藏冷冻变温 · 各存各鲜",
+                        "冷藏%s + 冷冻%s + %s" % (g("冷藏室容积"), g("冷冻室容积"), g(midk)),
+                        "生熟分开 · 新鲜不串味",
+                        c6([(g("冷藏室容积"), "冷藏室容积"), (g("冷冻室容积"), "冷冻室容积"),
+                            (g(midk), midk), (g("变温抽屉"), "变温抽屉"),
+                            (g("瓶座"), "瓶座"), (g("速冷速冻"), "速冷速冻")]),
+                        "left"))
+        jobs.append(job("安静节能", "安静节能", "%s能效 · 静音省电" % g("能效等级"),
+                        "运行噪声仅 %s" % g("噪声"), "%s能效 · 安静又省电" % g("能效等级"),
+                        c6([(g("能效等级"), "能效等级"), (g("噪声"), "噪声"),
+                            (g("压缩机"), "压缩机"), (g("制冷方式"), "制冷方式"),
+                            (g("控温方式"), "控温方式"), (g("冷冻能力"), "冷冻能力")]),
+                        "left"))
+    elif "洗衣" in cat:
+        jobs.append(job("规格尺寸", "规格尺寸", "尺寸明了 · 摆放无忧",
+                        "产品尺寸 " + g("尺寸(宽*高*深)mm") + "mm", "量好位置 · 放心搬回家",
+                        c6([(g("洗涤容量(kg)") + ("kg" if g("洗涤容量(kg)") != "—" else ""), "洗涤容量"),
+                            (g("尺寸(宽*高*深)mm") + ("mm" if g("尺寸(宽*高*深)mm") != "—" else ""), "产品尺寸"),
+                            (g("产品类型"), "产品类型"), (g("机身颜色"), "机身颜色"),
+                            (g("电机类型"), "电机类型"),
+                            (g("洗涤功率(W)") + ("W" if g("洗涤功率(W)") != "—" else ""), "洗涤功率")]),
+                        "left", L_WIDE))
+        jobs.append(job("动力配置", "动力配置", "定频电机 · 洗得干净" if g("电机类型") == "定频" else "电机扎实 · 洗得干净",
+                        "洗涤功率 %sW · 电机%s" % (g("洗涤功率(W)"), g("电机类型")),
+                        "动力扎实 · 皮实耐用",
+                        c6([(g("脱水容量(kg)") + ("kg" if g("脱水容量(kg)") != "—" else ""), "脱水容量"),
+                            (g("能效等级"), "能效等级"), (g("内筒材质"), "内筒材质"),
+                            (g("显示方式"), "显示方式"), (g("水电分离"), "水电分离"),
+                            (g("宽电压"), "宽电压")]),
+                        "left", L_WIDE))
+        jobs.append(job("贴心功能", "贴心功能", "程序齐全 · 用着省心",
+                        "洗涤程序按官方配置", "功能齐全 · 操作简单",
+                        c6([(g("桶自洁"), "桶自洁"), (g("桶干燥"), "桶干燥"), (g("预约"), "预约"),
+                            (g("童锁"), "童锁"), (g("模糊控制"), "模糊控制"),
+                            (g("喷淋漂洗"), "喷淋漂洗")]),
+                        "left", L_WIDE))
+    elif "电视" in cat:
+        szp, szb = g("单屏尺寸(宽*高*厚)mm"), g("含底座尺寸(宽*高*厚)mm")
+        jobs.append(job("规格画质", "规格画质", "%s巨幕 · 4K超高清" % g("屏幕尺寸"),
+                        "分辨率 " + g("分辨率") + " · " + g("屏幕比例"), "客厅C位 · 大屏看得爽",
+                        c6([(g("屏幕尺寸"), "屏幕尺寸"), (g("分辨率"), "分辨率"),
+                            (g("屏幕比例"), "屏幕比例"), (g("颜色"), "机身颜色"),
+                            (g("产品类型"), "产品类型"), (g("能效等级"), "能效等级")]),
+                        "tv"))
+        jobs.append(job("影音接口", "影音接口", "音响接口齐 · 外接全够用",
+                        "HDMI x%s · USB x%s · AV x%s · 网口 x%s" % (
+                            g("HDMI接口"), g("USB接口"), g("AV接口"), g("网络接口")),
+                        "机顶盒 · 游戏机 · 音响随便接",
+                        c6([(g("扬声器数量") + ("个" if g("扬声器数量") != "—" else ""), "扬声器数量"),
+                            (g("HDMI接口") + ("个" if g("HDMI接口") != "—" else ""), "HDMI接口"),
+                            (g("USB接口") + ("个" if g("USB接口") != "—" else ""), "USB接口"),
+                            (g("AV接口") + ("个" if g("AV接口") != "—" else ""), "AV接口"),
+                            (g("网络接口") + ("个" if g("网络接口") != "—" else ""), "网络接口"),
+                            (g("操作系统"), "操作系统")]),
+                        "tv"))
+        jobs.append(job("尺寸安装", "尺寸安装", "量好墙面 · 挂放都行",
+                        "单屏 " + szp + "mm · 含底座 " + szb + "mm",
+                        "可壁挂 · 底座标配 · 安装省心",
+                        c6([(szp + ("mm" if szp != "—" else ""), "单屏尺寸(宽*高*厚)"),
+                            (szb + ("mm" if szb != "—" else ""), "含底座尺寸(宽*高*厚)"),
+                            (g("净重(不含底座)kg") + ("kg" if g("净重(不含底座)kg") != "—" else ""), "净重(不含底座)"),
+                            (g("净重(含底座)kg") + ("kg" if g("净重(含底座)kg") != "—" else ""), "净重(含底座)"),
+                            (g("电源功率(W)") + ("W" if g("电源功率(W)") != "—" else ""), "电源功率"),
+                            (g("是否可壁挂"), "是否可壁挂")]),
+                        "tv"))
+    elif "热水" in cat:
+        cap, pw = g("容积(L)"), g("加热功率(W)")
+        # 竖型热水器（ES150F-LC 落地式实锤：竖机塞横版式=小机图吊中间两边大空黑）
+        # 按机图横竖自适应：宽机走 tv 横版式，竖机走 left 左栏版式（同洗衣机 L_WIDE）
+        lay = "tv" if wide else "left"
+        lk = {} if wide else L_WIDE
+        sz = g("外形尺寸(宽*高*深)mm")
+        # 标语动态拼（缺值的段不拼；值自带单位先剥掉再拼，防「80L升」）
+        _capn = re.sub(r"L\s*$", "", cap) if cap != "—" else cap
+        _pwn = re.sub(r"W\s*$", "", pw) if pw != "—" else pw
+        _tc = re.sub(r"℃\s*$", "", g("最高温度(℃)"))
+        _t1 = [x for x in ("%s升" % _capn if _capn != "—" else "",
+                           "%sW" % _pwn if _pwn != "—" else "",
+                           "最高 %s℃" % _tc if _tc != "—" else "") if x]
+        _ee = g("能效等级")
+        _ee = _ee if ("级" in _ee or _ee == "—") else _ee + "级"
+        jobs.append(job("规格加热", "规格加热", "大水量 · 速热省电",
+                        " · ".join(_t1) if _t1 else "官方参数 · 如实标注",
+                        ("%s能效 · 全家接力洗" % _ee) if _ee != "—" else "官方参数 · 如实标注",
+                        c6([(cap + ("L" if cap != "—" else ""), "容积"),
+                            (pw + ("W" if pw != "—" else ""), "加热功率"),
+                            (g("加热方式"), "加热方式"),
+                            (g("最高温度(℃)") + ("℃" if g("最高温度(℃)") != "—" else ""), "最高温度"),
+                            (g("能效等级"), "能效等级"), (g("款式"), "安装方式")]),
+                        lay, lk))
+        _sec = [k for k in ("防干烧保护", "超温保护", "绝缘保护", "安全预警技术") if g(k) != "—"]
+        jobs.append(job("智能安全", "智能安全", "多重防护 · 用着安心",
+                        " · ".join(_sec) if _sec else "官方安全配置 · 如实标注",
+                        "官方安全参数 · 如实标注",
+                        c6([(g("控制方式"), "控制方式"), (g("防干烧保护"), "防干烧保护"),
+                            (g("超温保护"), "超温保护"), (g("绝缘保护"), "绝缘保护"),
+                            (g("安全预警技术"), "安全预警技术"), (g("断电记忆"), "断电记忆")]),
+                        lay, lk))
+        jobs.append(job("尺寸内胆", "尺寸内胆", "量好墙面 · 装得放心",
+                        "外形尺寸 " + sz + "mm · " + g("款式"), "金刚无缝胆 · 经久耐用",
+                        c6([(sz + ("mm" if sz != "—" else ""), "外形尺寸(宽*高*深)"),
+                            (g("金刚无缝胆"), "金刚无缝胆"),
+                            (cap + ("L" if cap != "—" else ""), "容积"),
+                            (g("能效等级"), "能效等级")]),
+                        lay, lk))
+    elif "消毒" in cat:
+        cap, pw = g("容积(L)"), g("额定功率(w)")
+        sz = g("外形尺寸(宽*高*深)mm")
+        jobs.append(job("规格安装", "规格安装", "嵌入式安装 · 尺寸先看",
+                        "外形尺寸 " + sz + "mm", "嵌入量位 · 装得放心",
+                        c6([(cap + ("L" if cap != "—" else ""), "消毒柜容积"),
+                            (sz + ("mm" if sz != "—" else ""), "外形尺寸"),
+                            (g("款式"), "安装方式"), (g("消毒方式"), "消毒方式"),
+                            (g("消毒星级"), "消毒星级"),
+                            (pw + ("W" if pw != "—" else ""), "额定功率")]),
+                        "left", L_MID))
+        jobs.append(job("杀菌核心", "杀菌核心", "%s · %s消毒" % (g("消毒方式"), g("消毒星级")),
+                        "光波+紫外线双杀菌 · 母婴餐具放心放", "二星级消毒 · 杀菌更彻底",
+                        c6([(g("消毒方式"), "消毒方式"), (g("消毒星级"), "消毒星级"),
+                            (g("光波杀菌灯平均寿命(h)") + ("h" if g("光波杀菌灯平均寿命(h)") != "—" else ""), "光波杀菌灯寿命"),
+                            (g("紫外线杀菌灯平均寿命(h)") + ("h" if g("紫外线杀菌灯平均寿命(h)") != "—" else ""), "紫外线杀菌灯寿命"),
+                            (g("层架载物重量(kg)") + ("kg" if g("层架载物重量(kg)") != "—" else ""), "层架载重"),
+                            (g("外壳材质"), "外壳材质")]),
+                        "left", L_MID))
+    elif "净水" in cat or "过滤" in str(info.get("title") or ""):
+        sz = g("外形尺寸(宽*高*厚)mm")
+        jobs.append(job("规格安装", "规格安装", "全屋用水第一道关 · 安装无忧",
+                        "外形尺寸 " + sz + "mm", "量好位置 · 放心安装",
+                        c6([(g("产品类型"), "产品类型"),
+                            (sz + ("mm" if sz != "—" else ""), "外形尺寸"),
+                            (g("进水压力(Mpa)") + ("Mpa" if g("进水压力(Mpa)") != "—" else ""), "进水压力"),
+                            (g("适用水温(°C)") + ("°C" if g("适用水温(°C)") != "—" else ""), "适用水温"),
+                            (g("工作原理"), "工作原理"), (g("机身颜色"), "机身颜色")]),
+                        "left", L_WIDE))
+    else:
+        # 未知品类：官网参数直接分组（跳过套图排除键），横竖自适应
+        rows = [(str(k), str(v)) for k, v in (info.get("props") or [])
+                if str(v).strip() and str(v).strip() not in ("-", "—") and str(k) not in _SKIP_KEYS]
+        chunks = [rows[i:i + 6] for i in range(0, len(rows), 6)][:2]
+        for ci, chunk in enumerate(chunks):
+            jobs.append(job("核心参数" if ci == 0 else "更多参数",
+                            "核心参数" if ci == 0 else "更多参数",
+                            "官方真实参数 · 绝不编造",
+                            "参数如实 · 放心参考", "官网数据 · 一图看全",
+                            [(v, k) for k, v in chunk],
+                            "tv" if wide else "left"))
+    return jobs
+
+
+def _extra_show_title(A, cat, PR, info):
+    """机器展示金字标题：品类定稿口径 → 官网标题剥系列名 → 品牌+品类兜底。"""
+    brand = str(A.P.get("brand") or info.get("brand") or "海尔")
+    t = ""
+
+    def g(k):
+        return str(PR.get(k, "") or "").strip()
+
+    if "冰箱" in cat and g("总容积") and g("总容积") != "—":
+        t = "海尔冰箱%s%s%s%s" % (g("总容积").replace("L", ""), g("箱门结构"),
+                                  g("制冷方式"), g("面板颜色"))
+    elif "洗衣" in cat and g("洗涤容量(kg)") and g("洗涤容量(kg)") != "—":
+        t = "海尔洗衣机%s公斤全自动波轮%s" % (g("洗涤容量(kg)"), g("机身颜色"))
+    elif "电视" in cat and g("屏幕尺寸"):
+        t = "海尔%s英寸4K超高清平板电视" % g("屏幕尺寸").replace("英寸", "")
+    elif "消毒" in cat and g("容积(L)"):
+        t = "海尔%s嵌入式消毒柜" % g("容积(L)").replace("L", "")
+    if not t:
+        # 官网标题剥品牌词与系列名前缀（"小红花 60升…"→"海尔60升…"）
+        tt = str(info.get("title") or "").strip()
+        tt = re.sub(r"^%s\s*" % re.escape(brand), "", tt)
+        parts = tt.split(" ", 1)
+        if len(parts) == 2 and 1 <= len(parts[0]) <= 4:
+            tt = parts[1]
+        if tt:
+            t = brand + tt
+    if not t:
+        import pei_core as _pc
+        t = "%s%s%s" % (brand, cat, _pc.capacity_str(info) or "")
+    return t
+
+
+def _extra_dims(PR):
+    """追加图尺寸解析（比 _parse_dims 更稳）：
+    ① 键名带「宽*高*深/厚」标签 → 按标签对号入座；
+    ② 无标签的「产品尺寸/外形尺寸」按海尔官方惯例 宽*高*深 顺序
+      （2026-10-26 实锤：BCD-226 535*1787*573，_parse_dims 按大小猜把宽/深标反）；
+    ③ 最后才走 _parse_dims 兜底。"""
+    for k, v in PR.items():
+        ks, vs = str(k), str(v)
+        if "尺寸" not in ks and "外形" not in ks:
+            continue
+        nums = re.findall(r"\d{2,4}(?:\.\d+)?", vs)
+        if len(nums) < 3:
+            continue
+        nums = [int(float(x)) for x in nums[-3:]]
+        if all(c in ks for c in "宽高") and ("深" in ks or "厚" in ks):
+            mp = {"宽": 0, "高": 1, "深": 2, "厚": 2}
+            order = sorted(("宽", "高", "深" if "深" in ks else "厚"), key=lambda ch: ks.find(ch))
+            vals = [None, None, None]
+            for i, ch in enumerate(order):
+                vals[mp[ch]] = nums[i]
+            if all(vals):
+                return tuple(vals)
+    for k, v in PR.items():
+        ks, vs = str(k), str(v)
+        if ("尺寸" in ks or "外形" in ks) and "宽" not in ks and "高" not in ks:
+            nums = re.findall(r"\d{2,4}(?:\.\d+)?", vs)
+            if len(nums) >= 3:
+                nums = [int(float(x)) for x in nums[-3:]]
+                return nums[0], nums[1], nums[2]   # 宽*高*深（海尔官方惯例顺序）
+    return _parse_dims(PR)
+
+
+def generate_extra(model, kinds=None, log=None):
+    """蓝底套图页「追加图」（2026-10-26 用户令二改）：点击直接生成 规格参数+机器展示，
+    尺寸标注整个砍掉；产物存独立子文件夹 kitset/<型号>/追加图/（img_1+.jpg + extra.json），
+    不再跟蓝底四张混在一个目录。"""
+    log = log or (lambda s: None)
+    kinds = ("params", "showcase")   # 尺寸标注已砍（2026-10-26 用户令），固定两样
+    with _EXTRA_LOCK:
+        mdir = model_dir(model)
+        os.makedirs(mdir, exist_ok=True)
+        # 迁移清理：老版本把追加图混在蓝底目录（img_5+.jpg / extra.json），全部清掉
+        for f in os.listdir(mdir):
+            mm = re.match(r"^img_(\d+)\.jpg$", f)
+            if f == "extra.json" or (mm and int(mm.group(1)) >= 5):
+                try:
+                    os.remove(os.path.join(mdir, f))
+                except Exception:
+                    pass
+        xdir = os.path.join(mdir, "追加图")
+        os.makedirs(xdir, exist_ok=True)
+        # 重出前清掉子文件夹旧图（防这次少出几张留脏文件）
+        for f in os.listdir(xdir):
+            if re.match(r"^img_(\d+)\.jpg$", f):
+                try:
+                    os.remove(os.path.join(xdir, f))
+                except Exception:
+                    pass
+        cache = os.path.join(mdir, "set.json")
+        if not os.path.isfile(cache) or not os.path.isfile(os.path.join(mdir, "product.png")):
+            log("蓝底套图还没生成过，先跑一遍基础四张…")
+            generate(model, 0, log)
+        info = _extra_info(model, log)
+        A = _extra_ctx(info)
+        bg = _extra_bg(model, info, log)
+        prod = os.path.join(mdir, "product.png")
+        if not os.path.isfile(prod):
+            raise RuntimeError("型号目录缺 product.png——先重新生成一次蓝底套图")
+        front = A.load_cut(prod)
+        cat = pei_core.cat_name(info) or ""
+        PR = {str(k): str(v) for k, v in (info.get("props") or [])}
+        model_name = str(A.P.get("model") or model)
+        extras = []
+        n = 1
+        if "params" in kinds:
+            wide = A.is_wide(front) if hasattr(A, "is_wide") else (front.width > front.height)
+            for jb in _extra_jobs(cat, PR, info, wide):
+                # 值为「—」的卡直接不画（宁可少卡，不画空卡；绝不编）；
+                # 单位去重（缓存参数自带 80L 时不再拼成 80LL）
+                cards = [(_dedup_unit(v), k, _EX_COLORS[i % 6])
+                         for i, (v, k) in enumerate(jb["cards"])
+                         if str(v).strip() and str(v).strip() != "—"]
+                if not cards:
+                    log("「%s」没有可用参数，跳过" % jb["label"])
+                    continue
+                jb = dict(jb, pl1=" · ".join(_dedup_unit(p) for p in str(jb["pl1"]).split(" · ")),
+                          pl2=" · ".join(_dedup_unit(p) for p in str(jb["pl2"]).split(" · ")))
+                out = os.path.join(xdir, "img_%d.jpg" % n)
+                if jb["layout"] == "tv":
+                    _ex_render_tv(A, bg, front, cards, jb["title"], jb["sub"],
+                                  jb["pl1"], jb["pl2"], model_name, out)
+                else:
+                    _ex_render_left(A, bg, front, cards, jb["title"], jb["sub"],
+                                    jb["pl1"], jb["pl2"], model_name, out, **jb["left"])
+                extras.append({"n": n, "label": jb["label"]})
+                n += 1
+                log("参数卡「%s」完成" % jb["label"])
+        if "showcase" in kinds:
+            out = os.path.join(xdir, "img_%d.jpg" % n)
+            _ex_render_show(A, bg, front, cat, _extra_show_title(A, cat, PR, info), out)
+            extras.append({"n": n, "label": "机器展示"})
+            n += 1
+            log("机器展示完成")
+        if not extras:
+            raise RuntimeError("一张都没出成（品类没匹配到版式且参数为空）")
+        with io.open(os.path.join(xdir, "extra.json"), "w", encoding="utf-8") as f:
+            json.dump({"ok": True, "model": norm_model(model) or model,
+                       "extras": extras}, f, ensure_ascii=False)
+        return {"ok": True, "model": norm_model(model) or model, "extras": extras,
+                "dir": xdir, "msg": "追加图 %d 张完成" % len(extras)}
