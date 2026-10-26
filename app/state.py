@@ -143,6 +143,22 @@ def stock_save():
 
 _ALLRUN = [False, "", "", "", 0, 0.0]   # [在跑, 错误, 摘要, 阶段文案, 估算进度%, 开始时间] —— 进度条用（2026-10-09）
 
+_ALLRUN_LOCK = threading.Lock()
+
+
+def allrun_try_start(other_running):
+    """「全部更新」原子抢跑（2026-10-26 修：原先 检查→置位 两步分离，
+    并发请求可双双通过检查各起一条更新线程 → 重复触发 CI/写竞态）。
+    抢到返回 True（并清错误/摘要），没抢到返回 False。
+    other_running：可调用，锁内检查全局 status 等额外条件。"""
+    with _ALLRUN_LOCK:
+        if _ALLRUN[0] or other_running():
+            return False
+        _ALLRUN[0] = True
+        _ALLRUN[1] = ""
+        _ALLRUN[2] = ""
+        return True
+
 
 def _all_stage(stage, pct):
     """更新全部更新的阶段文案与估算进度（前端进度条轮询用）。"""

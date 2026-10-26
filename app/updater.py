@@ -6,6 +6,7 @@ import hashlib
 import io
 import os
 import subprocess
+import threading   # 2026-10-26 补：诊断上送 _send 用（此前 NameError 被 except 吞，上送从未执行）
 import time
 import traceback
 import urllib.parse
@@ -16,6 +17,7 @@ import winref
 from cloud import _cloud_token, cloud_req, stock_pull_cloud, sync_xlsx_cloud
 from config import (APP_VERSION, CLEAN_XLSX, CLOUD_HOST, _CLOUD_UA, FILE_ID,
                     ONLINE_SHARE, PRICE_SHARE, SUBSIDY_FID_CACHE, SUBSIDY_SHARE,
+                    SUBSIDY_XLSX,
                     YY_CAS_ENTRY, PRICE_XLSX)
 from kdocs import obtain_download_url, probe_file_id
 from net import fetch_xlsx_by_url, urlopen_ssl
