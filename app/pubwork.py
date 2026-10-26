@@ -3,7 +3,7 @@
 
 把闲鱼配文 Pro 的全部生成能力接到型号查询的 HTTP 服务上：
   素材抓取（官网三站+兴达+参数图识别）→ 5 风格 AI 套图（pei_ai9）→ 促销首图（pei_hero）
-  → 图片库分组 → 保存精选（按勾选发布顺序）→ AI 成片自检/自动优化 → 推 GitHub 私有仓库
+  → 图片库分组 → 保存精选（按勾选发布顺序）→ AI 成片自检/自动优化（2026-10-26 用户令：推 GitHub 归档功能整体删除）
 
 铁律（沿用 peiwen 定稿）：
   · 机器像素不动：官方透明图直接裁 bbox 用（pei_ai9.load_cut），不重抠
@@ -602,24 +602,6 @@ def import_imgs(model, files):
         except Exception:
             continue
     return {"ok": True, "count": n}
-
-
-# ---------------------------------------------------------------- 推 GitHub 私有仓库
-
-def push_gh(model, only_sel=False):
-    """把 素材/<型号>/（或仅 发布图/精选）推到 GitHub 私有仓库（pub_gh：建仓+追加提交）"""
-    d = mdir(model)
-    if not os.path.isdir(d):
-        raise RuntimeError("素材目录不存在：%s" % d)
-    sel_dir = os.path.join(d, "发布图") if only_sel else d
-    info = load_info(model) or {}
-    task = {"sel_dir": sel_dir, "model": _safe(model), "version": info.get("_ver", "N")}
-    tp = os.path.join(d, "_publish_task.json")
-    with open(tp, "w", encoding="utf-8") as f:
-        json.dump(task, f, ensure_ascii=False)
-    import pub_gh
-    url = pub_gh.run(tp)
-    return {"ok": True, "url": url}
 
 
 # ---------------------------------------------------------------- 一键发布到闲鱼（半自动）

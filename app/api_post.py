@@ -321,7 +321,7 @@ class ApiPostMixin:
 
         # ---------- 发布图工厂（2026-10-17，闲鱼配文 Pro 并入） ----------
         if u.path in ("/api/pubgen", "/api/pubhero", "/api/pubsel", "/api/pubqa",
-                      "/api/pubauto", "/api/pubimport", "/api/pubgh", "/api/pubopen",
+                      "/api/pubauto", "/api/pubimport", "/api/pubopen",
                       "/api/pubxy"):
             import pubwork
             try:
@@ -386,8 +386,6 @@ class ApiPostMixin:
                         r = pubwork.qa_auto(model)
                 elif u.path == "/api/pubimport":
                     r = pubwork.import_imgs(model, d.get("files") or [])
-                elif u.path == "/api/pubgh":
-                    r = pubwork.push_gh(model, only_sel=bool(d.get("sel")))
                 elif u.path == "/api/pubxy":
                     # 一键发布闲鱼：playwright 半自动，阻塞在后台线程（用户在浏览器点发布）
                     if pubwork.job_state()["running"]:
