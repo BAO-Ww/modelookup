@@ -689,6 +689,74 @@ def _interior_ink(im):
     return ink / float(tot)
 
 
+def _ai_read_size_nums(path, log=None):
+    """AI 视觉读官方尺寸图上印的数字 → (宽, 高, 深) 或 None。
+    2026-10-26：参数表的「外形尺寸」常有横竖颠倒/包装尺寸混入（ES60H-Q3 参数
+    755*440*415 vs 官方图实际印 750/433/405 实锤），官方图自己印的数字最权威。"""
+    try:
+        import base64
+        import pei_core
+        im = Image.open(path)
+        im2 = _flat_white(im).convert("RGB")
+        w, h = im2.size
+        sc = 720.0 / max(w, h)
+        if sc < 1:
+            im2 = im2.resize((int(w * sc), int(h * sc)), Image.LANCZOS)
+        buf = io.BytesIO()
+        im2.save(buf, "JPEG", quality=85)
+        data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        txt = pei_core._vision_call(None, data_url,
+            "这是家电产品的尺寸线框图。读出图上标注的毫米数字：主视图的宽和高，"
+            "以及俯视图/侧视图表示深度的那个数字。只回答一行 JSON："
+            '{"w":数字,"h":数字,"d":数字}，某个读不出来就填 null，不要解释', log=log)
+        if not txt:
+            return None
+        m = re.search(r'\{[^}]*\}', txt.replace("，", ","))
+        if not m:
+            return None
+        j = json.loads(m.group(0))
+        wv, hv, dv = (j.get("w"), j.get("h"), j.get("d"))
+        vals = []
+        for x in (wv, hv, dv):
+            x = int(x) if x is not None and str(x).strip() != "null" else 0
+            if not (80 <= x <= 3000):
+                return None
+            vals.append(x)
+        return tuple(vals)
+    except Exception:
+        return None
+
+
+def _ai_is_sizeimg(im, log=None):
+    """AI 视觉认官方尺寸图（2026-10-26 用户令：「加了AI识别图的嘛，让他去找我要的图」）。
+    线框启发式 _looks_like_sizeimg 漏判时（官网手绘风/异形版式）商汤→GLM 兜底认图。
+    返回 True/False；AI 完全不可用返回 None（调用方据此放弃，别一张张空烧）。"""
+    try:
+        import base64
+        import pei_core
+        im2 = _flat_white(im).convert("RGB")
+        w, h = im2.size
+        sc = 640.0 / max(w, h)
+        if sc < 1:
+            im2 = im2.resize((int(w * sc), int(h * sc)), Image.LANCZOS)
+        buf = io.BytesIO()
+        im2.save(buf, "JPEG", quality=80)
+        data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        txt = pei_core._vision_call(None, data_url,
+            "这张图是不是家电产品的官方尺寸示意图（线框图/三视图，带宽高深毫米数字标注）？"
+            "产品照片、场景图、促销图都算不是。只回答：是 或 否", log=log)
+        if not txt:
+            return None
+        t = txt.strip()[:8].lower()
+        if "是" in txt[:8] or "yes" in t:
+            return True
+        if "否" in txt[:8] or "not" in t or "no" in t:
+            return False
+        return None
+    except Exception:
+        return None
+
+
 def _looks_like_sizeimg(im):
     """尺寸线框图特征：底色黑白主导、线框像素占比小（<22%）、彩色占比极小（<6%）。
     官网尺寸图（细线+数字标注）都能命中；产品照片/促销横幅不会。"""
@@ -836,11 +904,12 @@ def _hunt_sizeimg_page(page_url, sizeimg, log, skip_urls=(), prod_path=None):
             generic.append(u)
     # 线稿尺寸图几乎都是 PNG、产品照都是 JPG → PNG 优先少下无用图
     generic.sort(key=lambda u: 0 if u.lower().endswith(".png") else 1)
+    ai_budget = [4]   # 详情页 AI 兜底认图预算（商汤免费额度，省着烧）
     tried = 0
     for u in dict.fromkeys(hints):
         if u in skip_urls:
             continue
-        if _try_save_sizeimg(u, sizeimg, log, prod_path=prod_path):
+        if _try_save_sizeimg(u, sizeimg, log, prod_path=prod_path, ai_budget=ai_budget):
             return True
     for u in dict.fromkeys(generic):
         if tried >= 12:
@@ -848,12 +917,12 @@ def _hunt_sizeimg_page(page_url, sizeimg, log, skip_urls=(), prod_path=None):
         if u in skip_urls:
             continue
         tried += 1
-        if _try_save_sizeimg(u, sizeimg, log, prod_path=prod_path):
+        if _try_save_sizeimg(u, sizeimg, log, prod_path=prod_path, ai_budget=ai_budget):
             return True
     return False
 
 
-def _try_save_sizeimg(u, sizeimg, log, prod_path=None):
+def _try_save_sizeimg(u, sizeimg, log, prod_path=None, ai_budget=None):
     try:
         raw = fetch(u, extra_headers={
             "Referer": u.split("/")[0] + "//" + u.split("/")[2] + "/"}, binary=True, timeout=20)
@@ -862,7 +931,11 @@ def _try_save_sizeimg(u, sizeimg, log, prod_path=None):
         im = Image.open(io.BytesIO(raw))
         if min(im.size) < 250:
             return False
-        if _looks_like_sizeimg(im):
+        if _looks_like_sizeimg(im) or (
+                ai_budget is not None and ai_budget[0] > 0 and _ai_is_sizeimg(im, log)):
+            # AI 兜底认图有预算（默认 4 张）：线框启发式漏判的手绘风尺寸图靠它捞回
+            if ai_budget is not None and not _looks_like_sizeimg(im):
+                ai_budget[0] -= 1
             if prod_path and os.path.isfile(prod_path) and _same_img(im, Image.open(prod_path)):
                 return False   # 与产品主图同图 → 是产品照不是尺寸图
             _flat_white(im).save(sizeimg, quality=92)
@@ -875,20 +948,22 @@ def _try_save_sizeimg(u, sizeimg, log, prod_path=None):
 
 
 def _rescue_prod(im, log):
-    """本地超分救图（demo 人工 AI 流程的离线版）：短边不足 700px 的机图
-    LANCZOS 拉到 900 + UnsharpMask 锐化，边缘和质感明显回血。带 alpha 照常处理。"""
+    """本地超分救图（demo 人工 AI 流程的离线版）：短边不足 1080px 的机图
+    LANCZOS 拉到 1080 + 温和锐化（2026-10-26 调参：原 radius=2/percent=80 在
+    白底浅色机图上出光晕伪影——ES60H-Q3 桶身灰圈实锤——改 1.2/45 轻手笔）。
+    1080 正好贴合蓝底卡画布，贴图不再二次放大。带 alpha 照常处理。"""
     w, h = im.size
     short = min(w, h)
-    if short >= 700:
+    if short >= 1080:
         return im
-    sc = 900.0 / short
+    sc = 1080.0 / short
     im2 = im.resize((max(1, int(w * sc)), max(1, int(h * sc))), Image.LANCZOS)
     try:
-        im2 = im2.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=2))
+        im2 = im2.filter(ImageFilter.UnsharpMask(radius=1.2, percent=45, threshold=3))
     except Exception:
         pass
     if log:
-        log("机图只有 %dpx，已本地超分到 %dpx + 锐化" % (short, 900))
+        log("机图只有 %dpx，已本地超分到 %dpx + 轻锐化" % (short, 1080))
     return im2
 
 
@@ -936,11 +1011,18 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None):
         cdir = os.path.join(copy_root(), nm2)
         srcs += [("file", p) for p in sorted(glob.glob(os.path.join(cdir, "img_*.jpg")))[:8]]
         # peiwork 爬虫缓存（官网页面下架后图仍在这，CXW-258 官网尺寸线稿实锤）
+        # 2026-10-26 修「蓝底图又糊了」：素材根 10-24 改造后官网原图落在 peiwork/<型号>/官网/
+        # 子目录（ES60H-Q3 1200px 大图在那躺着），旧 glob 只扫型号根目录→候选里全是小图，
+        # 抓取链 600px 小图当选+超分发糊。补 官网/ 子目录并按字节降序，大图先占 24 席。
         try:
-            from paths import wp as _wp
-            pdir = os.path.join(_wp("peiwork"), nm2)
-            srcs += [("file", p) for p in sorted(glob.glob(os.path.join(pdir, "*.png")) +
-                                                glob.glob(os.path.join(pdir, "*.jpg")))[:24]]
+            import pubwork as _pw
+            pdir = os.path.join(_pw.sroot(), nm2)
+            _pc = (glob.glob(os.path.join(pdir, "*.png")) +
+                   glob.glob(os.path.join(pdir, "*.jpg")) +
+                   glob.glob(os.path.join(pdir, "官网", "*.png")) +
+                   glob.glob(os.path.join(pdir, "官网", "*.jpg")))
+            _pc.sort(key=lambda p: -os.path.getsize(p))
+            srcs += [("file", p) for p in _pc[:24]]
         except Exception:
             pass
         if srcs and log:
@@ -950,10 +1032,13 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None):
     srcs += [("url", u) for u in img_urls]
     best = None   # (score, PIL image)
     _trans_fallback = [None]   # 透明底小图暂存路径（等更大的变体）
+    _ai_cand = []   # 尺寸图 AI 复核候选（本地路径，启发式漏判时商汤/GLM 兜底认）
     seen = set()
     n = 0
     for kind, u in srcs:
-        if u in seen or n >= 24 or (have_prod and have_size):
+        # 2026-10-26 上限 24→40：官网/ 子目录按字节降序入队后，小字节的官方尺寸线稿
+        # （22.jpg 13KB 实锤）被挤出局 → 尺寸图候选根本没进评比，img4 退化手绘
+        if u in seen or n >= 40 or (have_prod and have_size):
             break
         seen.add(u); n += 1
         try:
@@ -987,6 +1072,9 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None):
                 if log:
                     log("候选%d 识别为官网尺寸图，img4 直接用它" % n)
                 continue
+            # 启发式没认出：先记进 AI 复核候选（本地路径，循环结束后商汤/GLM 看图定夺）
+            if not have_size and len(_ai_cand) < 12:
+                _ai_cand.append(fp if kind == "url" else u)
             # 官方透明底图（alpha 真透明）= 最佳机图。≥800px 直接锁；小图先记着，
             # 后面可能有同款 _1200 大变体（XQS100 600px 先到顶掉大图导致成图糊，实锤）
             rgba = im.convert("RGBA")
@@ -1045,6 +1133,32 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None):
         _rescue_prod(best[1], log).save(picked)
         if best[2]:
             picked_url = best[2]
+    if not have_size and _ai_cand:
+        # 启发式全军覆没 → AI 视觉复核（2026-10-26 用户令：加了AI识别图就让它找图）。
+        # 先按彩色占比升序：官方线稿近零彩色排前，产品照排后省预算
+        def _color_ratio(p):
+            try:
+                im3 = _flat_white(Image.open(p)).convert("RGB").resize((80, 80))
+                c = sum(1 for r, g, b in im3.getdata() if max(r, g, b) - min(r, g, b) > 60)
+                return c / 6400.0
+            except Exception:
+                return 1.0
+        for pth in sorted(_ai_cand[:20], key=_color_ratio)[:10]:
+            try:
+                im2 = Image.open(pth)
+            except Exception:
+                continue
+            r = _ai_is_sizeimg(im2, log)
+            if r:
+                _flat_white(im2).save(sizeimg, quality=92)
+                have_size = True
+                if log:
+                    log("AI 视觉认出官方尺寸图：%s" % os.path.basename(pth))
+                break
+            if r is None:
+                if log:
+                    log("视觉 AI 不可用，尺寸图复核跳过")
+                break
     if not have_size and page_url:
         # 候选图里没认出尺寸图：去官网详情页定向翻一遍（有官方尺寸图就不用手绘）
         _hunt_sizeimg_page(page_url, sizeimg, log,
@@ -1566,7 +1680,7 @@ def _split_name(name, model):
     return line1, line2 + model
 
 
-def _build_cfg(info, prod_size_ok=True):
+def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None):
     model = (info.get("model") or "").strip()
     # 用户令（2026-10-21）：首图胶囊必须取自软件「货源名称」字段，不许自由发挥
     row = _payload_row(model)
@@ -1599,6 +1713,14 @@ def _build_cfg(info, prod_size_ok=True):
     # 尺寸：参数没有时查多方核实过的已知库（360WDCL=宽630×高1905×深680，ZOL/太平洋/天马三源一致）；
     # 都没有就不标数字——瞎标 (500,800,500) 是造假（2026-10-22 自查砍掉）
     dims = _parse_dims(pd) or _KNOWN_DIMS.get(model) or _KNOWN_DIMS.get(norm_model(model) or "")
+    # 官方尺寸图在场时的口径（2026-10-26）：AI 从图上读出的数字最权威；
+    # AI 没读出就 dims=None 不印数字（参数表数字跟官方图打架 = 图文矛盾，ES60H-Q3 实锤）
+    _si_chk = os.path.join(mdir, "sizeimg.jpg") if mdir else None
+    _have_si = bool(_si_chk and os.path.isfile(_si_chk))
+    if ai_dims:
+        dims = list(ai_dims)
+    elif _have_si:
+        dims = None
     if cap and cap[0].isdigit():
         capn = re.sub(r"[^0-9.]", "", cap.split("kg")[0] if "kg" in cap else cap)
     else:
@@ -1647,7 +1769,11 @@ def _build_cfg(info, prod_size_ok=True):
     titles = _kit_titles(brand, model, pd, info, sp)
     # 文案区卖点 = 硬货模板行（2026-10-23 用户拍板），不再官网句照抄
     points = [s.replace("dB(A)", "分贝").replace("dB", "分贝") for s in hard]
-    _si = os.path.join(model_dir(model), "sizeimg.jpg")
+    # 2026-10-26 实锤坑：官网原始型号常带后缀（ES60H-Q3白），norm_model 不剥「白」，
+    # model_dir(model) 会指到 kitset/ES60H-Q3白/ 而 generate 实际用归一化目录
+    # kitset/ES60H-Q3/ —— sizeimg.jpg 明明落了盘这里却 isfile=False，img4 永远退化手绘。
+    # 改为 generate 直传 mdir（同一次调用里落盘和读取必须同一目录）。
+    _si = os.path.join(mdir, "sizeimg.jpg") if mdir else os.path.join(model_dir(model), "sizeimg.jpg")
     cfg = {
         "brand": brand, "brand_en": brand_en, "model": model, "cat": cat, "cap": cap,
         "series": (brand + cat) or brand,
@@ -1717,7 +1843,9 @@ def generate(model, force=0, log=None):
     if not prod:
         raise RuntimeError("没抓到可用机图——先在「写文案」里生成一次图片，或确认欣盛/官网/中关村有该型号图")
     log("组装套图数据…")
-    cfg, titles, points, aftersale = _build_cfg(info)
+    _ai_dims = _ai_read_size_nums(os.path.join(mdir, "sizeimg.jpg"), log) if (
+        mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg"))) else None
+    cfg, titles, points, aftersale = _build_cfg(info, mdir=mdir, ai_dims=_ai_dims)
     log("渲染四张 1080×1080…")
     _render_img1(cfg, Image.open(prod), os.path.join(mdir, "img_1.jpg"))
     _render_img2(cfg, Image.open(prod), os.path.join(mdir, "img_2.jpg"))
