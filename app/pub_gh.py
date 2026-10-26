@@ -65,8 +65,9 @@ def api(method, path, data=None, tok=None):
     if data is not None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         req.add_header("Content-Type", "application/json")
+        req.data = body   # 2026-10-26 修：urlopen_ssl(req, timeout) 只收 2 参，body 挂 Request
     try:
-        with urlopen_ssl(req, body, timeout=180) as r:
+        with urlopen_ssl(req, timeout=180) as r:
             raw = r.read().decode("utf-8", "ignore")
             try:
                 return r.status, json.loads(raw or "{}")

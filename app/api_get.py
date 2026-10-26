@@ -280,17 +280,14 @@ class ApiGetMixin:
                         wf = b.get("wf") if b.get("wf") in ("all", "kd", "yy") else "all"
                     except Exception:
                         pass
-                if state._ALLRUN[0] or read_state()["status"] in ("running", "login"):
-                    self._send(200, json.dumps({"ok": False, "running": True,
-                                                "msg": "已有更新在进行中"}, ensure_ascii=False))
-                    return
                 if state.PERM_STATE.get("role") not in (None, "admin"):
                     self._send(200, json.dumps({"ok": False, "msg": "只有管理号能触发云端更新（子账号的数据会自动跟着云端走）"},
                                                ensure_ascii=False))
                     return
-                state._ALLRUN[0] = True
-                state._ALLRUN[1] = ""
-                state._ALLRUN[2] = ""
+                if not state.allrun_try_start(lambda: read_state()["status"] in ("running", "login")):
+                    self._send(200, json.dumps({"ok": False, "running": True,
+                                                "msg": "已有更新在进行中"}, ensure_ascii=False))
+                    return
                 set_state("running", "正在触发云端更新（GitHub Actions）…")
                 threading.Thread(target=_updateall_bg, args=(state.LOG.append, wf), daemon=True).start()
                 self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
@@ -305,17 +302,14 @@ class ApiGetMixin:
 
         if path == "/api/update":
             # 2026-10-10 全云端：本机直拉金山已退役 → 触发云端任务（同「全部更新」的 kd 分支）
-            if read_state()["status"] in ("running", "login") or state._ALLRUN[0]:
-                self._send(200, json.dumps({"ok": False, "running": state._ALLRUN[0],
-                                            "msg": "已有更新在进行中"}, ensure_ascii=False))
-                return
             if state.PERM_STATE.get("role") not in (None, "admin"):
                 self._send(200, json.dumps({"ok": False, "msg": "只有管理号能触发云端更新（子账号的数据会自动跟着云端走）"},
                                            ensure_ascii=False))
                 return
-            state._ALLRUN[0] = True
-            state._ALLRUN[1] = ""
-            state._ALLRUN[2] = ""
+            if not state.allrun_try_start(lambda: read_state()["status"] in ("running", "login")):
+                self._send(200, json.dumps({"ok": False, "running": state._ALLRUN[0],
+                                            "msg": "已有更新在进行中"}, ensure_ascii=False))
+                return
             set_state("running", "正在触发云端更新（GitHub Actions）…")
             threading.Thread(target=_updateall_bg, args=(state.LOG.append, "kd"), daemon=True).start()
             self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))

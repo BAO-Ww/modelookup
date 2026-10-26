@@ -531,7 +531,7 @@ async function route(request, env, path, ctx) {
     if (!u || !p) return jerr("账号和密码都要填");
     // 审计（静态1）防爆破：按「账号+天」计失败次数，一天错 10 次锁 1 小时（KV 尽力而为）
     const day = new Date().toISOString().slice(0, 10);
-    const fk = "faillog_" + u;
+    const fk = "faillog_" + safeKey(u, 24);   // 审计（2026-10-26）：u 未过滤可造无限 KV 键烧写额度
     const fl = await getJSON(env, fk, { d: "", n: 0, lock: 0 });
     if (fl.d === day && fl.n >= 10) {
       if (Date.now() < (fl.lock || 0))
@@ -1362,9 +1362,13 @@ async function route(request, env, path, ctx) {
   }
 
   // ---------- 用友登录失败告警（2026-10-08）----------
-  // 自动登录失败（密码不对/冒验证码）→ 任意登录者 POST 上报；管理号软件每分钟轮询
-  // GET，有新告警就在页面顶部亮横幅。KV: yyalert = { ts, msg, by }
+  // 自动登录失败 → 上报云端告警；管理号软件每分钟轮询 GET，有新告警就亮横幅。
+  // KV: yyalert = { ts, msg, by }。2026-10-26 收紧为仅管理号可 POST：
+  // 用友账密（/yyauth）本就只有管理号能取，子账号机器永远不会跑用友登录，
+  // 放开"任意登录者"只会给伪造告警留口子。
   if (path === "/yyalert" && request.method === "POST") {
+    const usersGate = await getUsers(env);
+    if ((usersGate[who] || {}).role !== "admin") return jerr("只有管理号能上报用友告警", 403);
     const b = await request.json().catch(() => ({}));
     const msg = String(b.msg || "").trim().slice(0, 200);
     if (!msg) return jerr("告警内容为空");

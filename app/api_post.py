@@ -80,19 +80,16 @@ class ApiPostMixin:
         if u.path == "/api/stock":
             # 2026-10-10 全云端：管理号→触发云端拉用友（同「全部更新」的 yy 分支）；
             # 子账号→直接从云端同步。本机 CAS 直拉/自动登录已退役（错密码撞锁号风险）。
-            if read_state()["status"] in ("running", "login") or state._ALLRUN[0]:
-                self._send(200, json.dumps({"ok": False, "running": state._ALLRUN[0],
-                                            "msg": "已有更新在进行中"}, ensure_ascii=False))
-                return
             if state.PERM_STATE.get("role") not in (None, "admin"):
                 set_state("running", "正在从云端同步库存…")
                 threading.Thread(target=stock_pull_cloud, args=(state.LOG.append,),
                                  daemon=True).start()
                 self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
                 return
-            state._ALLRUN[0] = True
-            state._ALLRUN[1] = ""
-            state._ALLRUN[2] = ""
+            if not state.allrun_try_start(lambda: read_state()["status"] in ("running", "login")):
+                self._send(200, json.dumps({"ok": False, "running": state._ALLRUN[0],
+                                            "msg": "已有更新在进行中"}, ensure_ascii=False))
+                return
             set_state("running", "正在触发云端更新（GitHub Actions）…")
             threading.Thread(target=_updateall_bg, args=(state.LOG.append, "yy"), daemon=True).start()
             self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
@@ -106,17 +103,14 @@ class ApiPostMixin:
                 wf = b.get("wf") if b.get("wf") in ("all", "kd", "yy") else "all"
             except Exception:
                 pass
-            if read_state()["status"] in ("running", "login") or state._ALLRUN[0]:
-                self._send(200, json.dumps({"ok": False, "running": True,
-                                            "msg": "已有更新在进行中"}, ensure_ascii=False))
-                return
             if state.PERM_STATE.get("role") not in (None, "admin"):
                 self._send(200, json.dumps({"ok": False, "msg": "只有管理号能触发云端更新（子账号的数据会自动跟着云端走）"},
                                            ensure_ascii=False))
                 return
-            state._ALLRUN[0] = True
-            state._ALLRUN[1] = ""
-            state._ALLRUN[2] = ""
+            if not state.allrun_try_start(lambda: read_state()["status"] in ("running", "login")):
+                self._send(200, json.dumps({"ok": False, "running": True,
+                                            "msg": "已有更新在进行中"}, ensure_ascii=False))
+                return
             set_state("running", "正在触发云端更新（GitHub Actions）…")
             threading.Thread(target=_updateall_bg, args=(state.LOG.append, wf), daemon=True).start()
             self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
@@ -258,8 +252,16 @@ class ApiPostMixin:
                 d = {}
             url = str(d.get("url") or "")
             acc = str(d.get("acc") or "default")[:24]
-            if not url.startswith(("https://www.goofish.com/", "https://seller.goofish.com/",
-                                   "https://www.goofish.com")):
+            # 2026-10-26 修：改 hostname 精确比对。原 startswith 含无尾斜杠项
+            # "https://www.goofish.com"，https://www.goofish.com.evil.com/ 可绕过
+            try:
+                from urllib.parse import urlparse as _urlparse
+                _pu = _urlparse(url)
+                _host_ok = _pu.scheme == "https" and \
+                    (_pu.hostname or "").lower() in ("www.goofish.com", "seller.goofish.com")
+            except Exception:
+                _host_ok = False
+            if not _host_ok:
                 self._send(400, json.dumps({"ok": False, "msg": "只许打开 goofish.com 页面"},
                                            ensure_ascii=False))
                 return

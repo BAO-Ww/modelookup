@@ -223,11 +223,8 @@ def run_app(httpd, port, startup_xlsx=None):
              "正在打开金山文档…</body>",
         width=lw, height=lh, x=lx, y=ly, min_size=(700, 520), hidden=True,
     )
-    # 定时跟随线程（与 Windows 版完全同一套）
-    threading.Thread(target=auto_updater, daemon=True).start()
-    threading.Thread(target=xlsx_follower, daemon=True).start()
-    threading.Thread(target=xinsheng_follower, daemon=True).start()   # 欣盛商城月度同步（官方售价/补图）
-    threading.Thread(target=yy_alert_loop, daemon=True).start()
+    # 定时跟随线程统一在 after_start 起（2026-10-26 修：此处曾提前起过一份，
+    # after_start 又起一份 → Mac 上每条跟随线程双跑、云端请求翻倍、告警双弹）
 
     def on_login_closed():
         winref.LOGIN_CLOSED.set()

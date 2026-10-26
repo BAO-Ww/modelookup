@@ -267,6 +267,9 @@ def _data_sentinel(j, err, ts):
         _sentinel_put("")
 
 
+_sync_fail = {"ts": "", "at": 0.0}   # 2026-10-26：同步失败退避记录（同 ts 10 分钟内不重试）
+
+
 def sync_xlsx_cloud(log, touch=False):
     """从云端同步金山表格（2026-10-09 v2.8 全云端口径）：
     轻探 /xlsxmeta（ts=各文件内容哈希）→ 有新内容拉 /xlsxcloud 全量 →
@@ -289,6 +292,10 @@ def sync_xlsx_cloud(log, touch=False):
             if touch:
                 state.set_state(price_at=time.strftime("%Y-%m-%d %H:%M"))
             return "unchanged"
+        # 2026-10-26 修：同一 ts 失败过 → 退避 10 分钟。此前失败路径 ts 永不更新，
+        # 每 60s 重拉重建且注定再失败（金山表改版=无限白烧云端流量）。
+        if ts == _sync_fail["ts"] and time.time() - _sync_fail["at"] < 600:
+            return "unchanged"
         if not state._update_lock.acquire(blocking=False):
             return "busy"                # 别的更新正在跑，这轮先不动
         try:
@@ -297,6 +304,7 @@ def sync_xlsx_cloud(log, touch=False):
             j2, err2 = cloud_req("/xlsxcloud", "GET", timeout=300)
             if err2 or not j2 or not j2.get("ok"):
                 msg = "云端表格同步失败：%s" % (err2 or (j2 or {}).get("msg"))
+                _sync_fail.update(ts=ts, at=time.time())   # 退避，防 60s 无限重拉
                 state.set_state("error", msg)
                 return msg
             files = j2.get("files") or {}
@@ -325,6 +333,11 @@ def sync_xlsx_cloud(log, touch=False):
             state._update_lock.release()
     except Exception as e:
         try:
+            # 2026-10-26 修：重建/落盘失败同样退避（同 ts 10 分钟内不重试）
+            try:
+                _sync_fail.update(ts=ts, at=time.time())
+            except Exception:
+                pass
             state.LOG.append("云端表格同步异常：%s" % e)
             state.set_state("error", "云端表格同步异常：%s" % e)
         except Exception:
