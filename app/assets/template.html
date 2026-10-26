@@ -4870,9 +4870,10 @@ function openCopyView(k, kind, force, tb){
     h += '<div style="background:#fff;border:1px solid #e5e7eb;padding:5px 9px 7px;margin-bottom:5px">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px"><b style="font-size:12.5px">标题（三选一）</b>'
       + '<span style="display:flex;gap:8px;align-items:center">'
+      + '<button id="cv_regen" style="border:1px solid #bcd3e8;background:#eef4fb;color:#185fa5;border-radius:6px;padding:3px 9px;font-size:11.5px;cursor:pointer">重新生成</button>'
       + '<button id="cv_polishT" style="border:1px solid #bcd3e8;background:#eef4fb;color:#185fa5;border-radius:6px;padding:3px 9px;font-size:11.5px;cursor:pointer">AI 润色标题</button>'
       + '<button id="cv_polishT3" style="border:1px solid #bcd3e8;background:#eef4fb;color:#185fa5;border-radius:6px;padding:3px 9px;font-size:11.5px;cursor:pointer">AI 连续测试</button></span></div>';
-    if (!(D.titles || []).length) h += '<div style="color:#b42318;font-size:12.5px;margin-bottom:10px">标题全被防编造校验剔掉了，点「重新生成」再试一次</div>';
+    if (!(D.titles || []).length) h += '<div style="color:#b42318;font-size:12.5px;margin-bottom:10px">标题全被防编造校验剔掉了，点右上「重新生成」再试一次</div>';
     for (var i = 0; i < (D.titles || []).length; i++){
       h += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">'
         + '<div style="flex:1;background:#fafbfc;border:1px solid #eef0f4;border-radius:6px;padding:4px 9px;line-height:1.5;font-size:12px">' + esc(D.titles[i]) + '</div>'
@@ -4900,9 +4901,10 @@ function openCopyView(k, kind, force, tb){
       + '</div>';
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>标题（三选一）</b>'
       + '<span style="display:flex;gap:8px;align-items:center"><span style="font-size:12px;color:#8a94a6">分段式 · 不带价格</span>'
+      + '<button id="cv_regen" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:5px 12px;font-size:12.5px">重新生成</button>'
       + '<button id="cv_polishT" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:5px 12px;font-size:12.5px">AI 润色标题</button>'
       + '<button id="cv_polishT3" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:5px 12px;font-size:12.5px">AI 连续测试</button></span></div>';
-    if (!(D.titles || []).length) h += '<div style="color:#b42318;font-size:12.5px;margin-bottom:10px">标题全被防编造校验剔掉了，点「重新生成」再试一次</div>';
+    if (!(D.titles || []).length) h += '<div style="color:#b42318;font-size:12.5px;margin-bottom:10px">标题全被防编造校验剔掉了，点右上「重新生成」再试一次</div>';
     for (var i = 0; i < (D.titles || []).length; i++) h += rowABC('ABC'[i], D.titles[i]);
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px"><b>商品描述</b>'
       + '<span style="display:flex;gap:8px;align-items:center">'
@@ -4918,6 +4920,9 @@ function openCopyView(k, kind, force, tb){
       el.style.cursor = 'pointer';
       el.onclick = function(){ shipMode = el.getAttribute('data-ship'); renderMain(); };
     }) : null;
+    /* 重新生成：force=1 绕过缓存重跑全链（2026-10-26 用户令：老缓存不自动变，要能手动刷新） */
+    var rg = wrap.querySelector('#cv_regen');
+    if (rg) rg.onclick = function(){ openCopyView(k, kind, true, tb); };
     var dc = wrap.querySelector('#cv_descCopy');
     if (dc) dc.onclick = function(){ doCopy(wrap.querySelector('#cv_desc').value, dc); };
     /* AI 润色标题（对齐闲鱼配文pro）：GLM 重写三选一，防编造校验后再上屏 */

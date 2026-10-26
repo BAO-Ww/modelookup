@@ -767,8 +767,8 @@ def prop_dict(props):
 
 def sellpoints(info, exclude=None):
     """本地生成最多 6 条卖点（XianyuPeiwen Pro 原版方案 + 用户要求扩到 6）。
-    候选顺序=优先级（超薄>容量>能效>静音>风冷>变频），不够由软兜底凑满 6。
-    exclude 为【参数】行已展示过的字符串集合，
+    2026-10-26 用户令：只要机器的卖点（从真实参数提炼），不要口号凑数——
+    凑不满 6 条就少几条。exclude 为【参数】行已展示过的字符串集合，
     命中则跳过对应卖点，避免描述和参数复读同一个数字（如 10kg）。"""
     pd = prop_dict(info.get("props") or [])
     cat = info.get("cat") or ""
@@ -799,34 +799,98 @@ def sellpoints(info, exclude=None):
         if s not in pts:
             pts.append(s)
 
+    # ---------- 参数化卖点（2026-10-26 用户令：要机器的卖点，不要口号凑数）----------
+    # 全品类从真实参数提炼；凑不满 6 条就少几条，绝不拿空话填。
+    def num_of(*names):
+        m = re.search(r"(\d+(?:\.\d+)?)", str(find(*names) or ""))
+        return m.group(1) if m else ""
+
+    def has_kw(*names):
+        for n in names:
+            for k, v in pd.items():
+                if n in k or n in str(v):
+                    return True
+        return False
+
     size = find("尺寸", "外形尺寸")
     if size:
         m = re.match(r"(\d{3})", size)
         if m and int(m.group(1)) < 600:
             add("%smm超薄机身，嵌入式安装更省空间" % m.group(1))
-    vol = find("总容积", "容积", "容量")
+    # 容量/容积：冰箱讲分储、热水器讲水量、洗衣机讲一次洗多少
+    vol = num_of("总容积", "容积", "额定容量", "洗涤容量", "额定升数", "出水量")
     if vol:
-        add(vol + "大容量，分储空间充足")
+        if "热水器" in cat:
+            add(vol + "升大水量，全家接力洗不排队")
+        elif "洗衣机" in cat or "干衣机" in cat:
+            add(vol + "kg大容量，床品四件套一次洗完")
+        elif "洗碗机" in cat:
+            add(vol + "套大容量，锅碗瓢盆一起洗")
+        else:
+            add(vol + "升大容量，分储空间充足")
+    # 加热/动力类
+    heat = num_of("加热功率", "额定功率", "输入功率")
+    if heat and ("热水器" in cat or "烤箱" in cat or "微波" in cat):
+        add(heat + "W速热，洗澡不用等")
+    pizz = find("匹数", "制冷量")
+    if "空调" in cat and pizz:
+        add(str(pizz) + "，客厅房间都压得住")
+    # 冰箱/冷柜特有
     ee = find("能效等级", "能效")
     if ee:
-        add(ee + "能效，省电耐用")
+        add(str(ee) + "能效，省电耐用")
     noise = find("噪声", "噪音", "声功率")
     if noise:
-        add("运行噪音仅" + noise + "，静音不扰眠")
+        add("运行噪音仅" + str(noise) + "，静音不扰眠")
     cool = find("制冷方式")
-    if cool and "风冷" in cool:
+    if cool and "风冷" in str(cool):
         add("风冷无霜，免手动除霜")
-    comp = find("压缩机", "定变频")
-    if comp and "变频" in comp:
-        add("变频动力，恒温更稳定")
-    # 兜底软卖点：与参数数字无关，保证凑满 6 条且不复读参数
-    _SOFT = ("用料扎实，细节经得起细看", "安装省心，师傅上门服务",
-             "日常好打理，省时省力", "全新未拆封，开箱即用",
-             "官方正品渠道，支持当面验货", "现货在仓，下单即发不久等")
-    for s in _SOFT:
-        if len(pts) >= 6:
-            break
-        add(s)
+    comp = find("压缩机", "定变频", "电机类型")
+    if comp and "变频" in str(comp):
+        if "洗衣机" in cat:
+            add("变频电机，安静省电还耐用")
+        elif "空调" in cat:
+            add("变频恒温，凉得快还不费电")
+        else:
+            add("变频动力，恒温更稳定")
+    # 洗衣机特有
+    if "洗衣机" in cat:
+        if has_kw("烘干", "洗烘"):
+            add("洗烘一体，阴雨天晾不干也不愁")
+        if has_kw("除菌", "杀菌", "除螨"):
+            add("除菌洗护，贴身衣物更安心")
+        if has_kw("直驱"):
+            add("直驱电机，动力稳噪音低")
+    # 空调特有
+    if "空调" in cat:
+        if has_kw("自清洁", "清洁"):
+            add("自清洁内机，吹出干净风")
+        if has_kw("新风"):
+            add("带新风，关窗也有新鲜空气")
+    # 热水器特有
+    if "热水器" in cat:
+        if has_kw("防电墙", "安全防"):
+            add("安全防电墙，全家洗澡更放心")
+        if has_kw("零冷水", "即热"):
+            add("即开即热，不用放冷水干等")
+        ht = num_of("最高温度", "出水温度")
+        if ht:
+            add("最高" + ht + "℃，热水管够")
+    # 油烟机特有
+    if "油烟机" in cat:
+        air = num_of("排风量", "风量", "排风")
+        if air:
+            add(air + "立方米大风量，爆炒不呛鼻")
+    # 电视特有
+    if "电视" in cat:
+        inch = num_of("屏幕尺寸", "对角线尺寸")
+        if inch:
+            add(inch + "英寸大屏，客厅看着更过瘾")
+        if has_kw("4K", "超高清", "8K"):
+            add("超高清画质，细节看得清")
+    # 智能通用
+    if has_kw("WiFi", "WIFI", "wifi", "物联", "智能互联", "远程"):
+        add("手机远程可控，出门在外也能管")
     return pts[:6]
 
 
@@ -1043,7 +1107,7 @@ def desc_text(info, version, points=None):
     【品牌+规格品类】型号 xxx
     ·卖点1
     ·卖点2
-    …共 6 条（XianyuPeiwen Pro 方案 + 2026-10-17 扩到 6，软兜底凑满）
+    …最多 6 条（2026-10-26 用户令：只收机器参数卖点，不满就少几条；全空才落静态兜底）
     【参数】k v | k v | ...
     【官网价】xxx（本店售价见标价，全新未拆封）
     【交易】先验后签收，破损拒收
@@ -1091,7 +1155,10 @@ def desc_text(info, version, points=None):
             for num in re.findall(r"\d+(?:\.\d+)?", v):
                 excl.add(num)
     # XianyuPeiwen Pro 原版链路 + 2026-10-17 扩到 6 条：
-    # AI 卖点优先取前 6 → 不足 6 条由本地池补齐（防重复+防特征词复读）→ 静态兜底 6 条
+    # AI 卖点优先取前 6 → 不足由本地池补齐（防重复+防特征词复读）。
+    # 2026-10-26 用户令二修：参数行数字进排除表后卖点常被毙光（热水器 60/2200/75/1
+    # 全在参数里 → 实锤），宁可数字跟参数行重复也绝不落服务口号——
+    # 第一轮严排除 → 不足 3 条第二轮不排除重跑 → 仍空才落 3 条服务兜底（最后手段）。
     sp = [str(x).strip() for x in (points or []) if str(x).strip()][:6]
     # 本地候选与已有卖点撞同一特征（风冷/能效/变频…）→ 跳过，防语义复读
     _FEAT = ("风冷", "无霜", "除霜", "能效", "省电", "变频", "定频", "温区",
@@ -1104,9 +1171,18 @@ def desc_text(info, version, points=None):
         if any(w in x and any(w in e for e in sp) for w in _FEAT):
             continue
         sp.append(x)
+    if len(sp) < 3:
+        for x in sellpoints(info):
+            if len(sp) >= 6:
+                break
+            if x in sp:
+                continue
+            if any(w in x and any(w in e for e in sp) for w in _FEAT):
+                continue
+            sp.append(x)
     if not sp:
-        sp = ["全新未拆封，官方正品", "全国联保，售后有保障", "支持专业送货安装",
-              "先验货后签收，放心购", "机身小巧好安放", "现货在仓，下单即发"]
+        sp = ["全新未拆封，官方正品", "全国联保，售后有保障",
+              "现货在仓，下单即发"]
     for pt in sp:
         lines.append("·" + pt)
     lines.append("")
