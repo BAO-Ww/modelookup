@@ -4498,6 +4498,7 @@ function openKitView(k){
     +   '<span style="font-size:12px;color:#8a929e">' + esc(k) + '</span>'
     +   '<span style="flex:1"></span>'
     +   '<span id="kv_msg" style="font-size:11.5px;color:#9fe0a8"></span>'
+    +   '<button id="kv_extra" title="一键追加生成规格参数+机器展示（深灰影棚风格，存到「追加图」子文件夹）" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">追加图</button>'
     +   '<button id="kv_folder" title="打开这套图的保存文件夹（img_1~4.jpg 就在里面，跟写文案图片一个存法）" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">图片文件夹</button>'
     +   '<button id="kv_force" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">重新生成</button>'
     +   '<button id="kv_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
@@ -4508,15 +4509,25 @@ function openKitView(k){
   wrap.querySelector('#kv_folder').addEventListener('click', function(){
     fetch('/api/kitset?model=' + encodeURIComponent(k) + '&open=1');
   });
-  var D = null, cur = 1;
-  function imgSrc(n){ return '/api/kitimg/' + encodeURIComponent(k) + '/img_' + n + '.jpg'; }
+  var D = null, cur = 1, EX = [];   /* EX = 追加图清单 [{n,label}]（extra.json） */
+  function imgSrc(n, extra){ return '/api/kitimg/' + encodeURIComponent(k) + (extra ? '/' + encodeURIComponent('追加图') : '') + '/img_' + n + '.jpg'; }
+  function loadExtras(cb){
+    fetch('/api/kitimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('追加图') + '/extra.json', {cache:'no-store'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){ EX = (j && j.extras) || []; if (cb) cb(); })
+      .catch(function(){ EX = []; if (cb) cb(); });
+  }
   function render(){
     var body = wrap.querySelector('#kv_body');
+    var items = [{n:1,label:'主图',src:imgSrc(1)},{n:2,label:'参数',src:imgSrc(2)},{n:3,label:'卖点',src:imgSrc(3)},{n:4,label:'尺寸',src:imgSrc(4)}]
+      .concat(EX.map(function(e){ return {n:e.n, label:e.label, src:imgSrc(e.n, true)}; }));
+    var NUMS = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
+    if (cur >= items.length) cur = 0;
     body.innerHTML =
       '<div style="flex:0 0 430px;display:flex;flex-direction:column;background:#fff;border-radius:14px;border:1px solid #e8e8e4;overflow:hidden;height:100%">'
-      +   '<div style="padding:10px 16px;border-bottom:1px solid #f0f0ec;display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">配 图 · 一套四张</b><span style="font-size:11px;color:#9a9ea6">1080 × 1080 · 无价格</span></div>'
-      +   '<div style="flex:1;display:flex;align-items:center;justify-content:center;background:#fff;min-height:0"><img id="kv_img" src="' + imgSrc(cur) + '?t=' + Date.now() + '" style="max-width:100%;max-height:100%;object-fit:contain;display:block"></div>'
-      +   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px 14px" id="kv_switch"></div>'
+      +   '<div style="padding:10px 16px;border-bottom:1px solid #f0f0ec;display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">配 图 · 一套 ' + (4 + EX.length) + ' 张</b><span style="font-size:11px;color:#9a9ea6">1080 × 1080 · 无价格</span></div>'
+      +   '<div style="flex:1;display:flex;align-items:center;justify-content:center;background:#fff;min-height:0"><img id="kv_img" src="' + items[cur].src + '?t=' + Date.now() + '" style="max-width:100%;max-height:100%;object-fit:contain;display:block"></div>'
+      +   '<div style="display:grid;grid-template-columns:repeat(' + Math.min(items.length, 4) + ',1fr);gap:8px;padding:10px 14px" id="kv_switch"></div>'
       + '</div>'
       + '<div style="flex:1;display:flex;flex-direction:column;gap:10px;min-width:0;margin-left:16px;min-height:0">'
       +   '<div style="background:#fff;border-radius:14px;border:1px solid #e8e8e4;padding:10px 16px;flex:0 0 auto">'
@@ -4537,19 +4548,19 @@ function openKitView(k){
       +   '</div>'
       + '</div>';
     var sw = body.querySelector('#kv_switch');
-    for (var i = 1; i <= 4; i++){
-      (function(n){
+    items.forEach(function(it, idx){
+      (function(i, txt, src){
         var b = document.createElement('button');
-        b.textContent = ['① 主图','② 参数','③ 卖点','④ 尺寸'][n-1];
-        b.style.cssText = 'padding:9px 0;border-radius:10px;border:1px solid #e0e0dc;background:' + (n===cur?'#1c1e22':'#fff') + ';color:' + (n===cur?'#fff':'#43464c') + ';font-size:12px;cursor:pointer';
+        b.textContent = txt;
+        b.style.cssText = 'padding:9px 0;border-radius:10px;border:1px solid #e0e0dc;background:' + (i===cur?'#1c1e22':'#fff') + ';color:' + (i===cur?'#fff':'#43464c') + ';font-size:12px;cursor:pointer';
         b.addEventListener('click', function(){
-          cur = n;
-          body.querySelector('#kv_img').src = imgSrc(n) + '?t=' + Date.now();
+          cur = i;
+          body.querySelector('#kv_img').src = src + '?t=' + Date.now();
           render();
         });
         sw.appendChild(b);
-      })(i);
-    }
+      })(idx, (NUMS[idx] || ('' + (idx + 1))) + ' ' + it.label, it.src);
+    });
     var tl = body.querySelector('#kv_titles');
     tl.innerHTML = '';
     (D.titles || []).forEach(function(t){
@@ -4587,9 +4598,9 @@ function openKitView(k){
       .then(function(j){
         if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
         pollJob('kitset:' + k, function(res){
-          D = res; cur = 1;
+          D = res; cur = 0;
           wrap.querySelector('#kv_msg').textContent = res.cached ? '缓存秒出' : '生成完成';
-          render();
+          loadExtras(render);
         }, function(err){
           wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#b42318;font-size:14px">生成失败：' + esc(String(err.message || err)) + '</div>';
           wrap.querySelector('#kv_msg').textContent = '';
@@ -4603,6 +4614,35 @@ function openKitView(k){
       });
   }
   wrap.querySelector('#kv_force').addEventListener('click', function(){ load(true); });
+  /* 追加图（2026-10-26 用户令二改）：点击直接生成规格参数+机器展示（尺寸标注整个砍掉），
+     产物存「追加图」子文件夹，切换条自动多出对应按钮 */
+  wrap.querySelector('#kv_extra').addEventListener('click', function(){
+    var go = this; go.disabled = true; go.textContent = '生成中…';
+    wrap.querySelector('#kv_msg').textContent = '正在生成追加图…';
+    fetch('/api/kitset?model=' + encodeURIComponent(k) + '&extra=1')
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
+        pollJob('kitextra:' + k, function(res){
+          loadExtras(function(){
+            if (EX.length) cur = 4;   /* 第一张追加图（主图0/参数1/卖点2/尺寸3 之后） */
+            render();
+            wrap.querySelector('#kv_msg').textContent = res.msg || '追加图完成';
+            go.disabled = false; go.textContent = '追加图';
+          });
+        }, function(err){
+          wrap.querySelector('#kv_msg').textContent = '追加图失败：' + (err.message || err);
+          go.disabled = false; go.textContent = '追加图';
+        }, function(sec){
+          wrap.querySelector('#kv_msg').textContent = '追加图生成中…已 ' + sec + ' 秒';
+        });
+      })
+      .catch(function(err){
+        wrap.querySelector('#kv_msg').textContent = '追加图失败：' + (err.message || err);
+        go.disabled = false; go.textContent = '追加图';
+      });
+  });
+  loadExtras(null);
   load(false);
 }
 
