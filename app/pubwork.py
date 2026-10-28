@@ -365,6 +365,34 @@ def _last_get(model):
         return dict(_LAST.get(_safe(model)) or {})
 
 
+def _auto_qa_spot(model, info, src, out, style, paths):
+    """聚光四件套生成完自动 AI 复检（2026-10-29 用户令「做好的四张让AI过一遍」）。
+    商汤免费额度优先；无 key/视觉不可用静默跳过不挡出货。
+    压字/出画/截断等确定性布局问题自动微调重渲（复用 qa_render + auto_optimize）。"""
+    import pei_core
+    key = _ai_key() or pei_core._sn_key()
+    if not key:
+        _logf()("AI 复检跳过：未配置视觉 key")
+        return
+    _job_prog(92, "AI 复检成片 ...")
+    res = pei_core.qa_render(key, paths, info)
+    if res is None:
+        _logf()("AI 复检不可用（视觉模型无应答），跳过")
+        return
+    if not res:
+        _logf()("AI 复检通过：%d 张成片无问题" % len(paths))
+        return
+    _logf()("AI 复检发现 %d 处问题：%s" % (
+        len(res), "；".join("%s(%s)" % (x["issue"], x["severity"]) for x in res)))
+    import pei_ai9
+    r = pei_ai9.auto_optimize(key, info, src, out, style, res, rounds=2,
+                              progress=_job_prog, log=lambda s: _logf()(s))
+    if r.get("fixed"):
+        _logf()("AI 自动修复槽位 %s，重渲完成" % r["fixed"])
+    for x in (r.get("remaining") or []):
+        _logf()("需人工确认：%s（%s）" % (x.get("issue"), x.get("severity")))
+
+
 def gen_style(model, style, sell_price=None, version="N"):
     """生成一套 6 张精修（后台线程跑，JOB 汇报进度）"""
     name = STYLE_NAMES.get(style, style)
@@ -378,6 +406,12 @@ def gen_style(model, style, sell_price=None, version="N"):
                                  api_key=_ai_key(), progress=_job_prog, style=style,
                                  slots=SLOTS6, overview=False)
         _last_set(model, paths, out, style)
+        if style == "spot":
+            # 聚光四件套出完自动让 AI 过一遍（复检失败绝不影响已生成的图）
+            try:
+                _auto_qa_spot(model, info, src, out, style, paths)
+            except Exception as e:
+                _logf()("AI 复检异常（不影响成片）：%s" % e)
         _logf()("发布图·%s 生成完成：%d 张 -> %s" % (name, len(paths), out))
         _job_end(True)
     except Exception as e:
