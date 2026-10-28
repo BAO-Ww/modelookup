@@ -260,55 +260,87 @@ def _render_img2(cfg, prod, out):
     C.save(out, quality=95)
 
 
+def _serif(sz, bold=True):
+    """V8 卖点图衬线数字/英文（Times）；找不到就退回黑体（Mac 兼容）。"""
+    name = "timesbd.ttf" if bold else "times.ttf"
+    for d in (os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"),
+              "/System/Library/Fonts/Supplemental", "/Library/Fonts"):
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return ImageFont.truetype(p, sz)
+    try:
+        return ImageFont.truetype("/System/Library/Fonts/Supplemental/Times New Roman%s.ttf" % (" Bold" if bold else ""), sz)
+    except Exception:
+        return _font(F_BOLD if bold else F_REG, sz)
+
+
+def _v8_points(points, params_rows, n=6):
+    """V8 卖点池（2026-10-28 用户拍板）：话术卖点去重（kg/公斤归一）+ 官网参数补足到 6 条。
+    参数条以「k：v」入池，渲染时值做主词、标签做灰小字。只影响卖点图，文案区不受影响。"""
+    out, seen = [], set()
+    for t in (points or []):
+        t = str(t).strip()
+        if not t:
+            continue
+        head = (t.split("，")[0] or t.split(",")[0]).strip()
+        key = head.replace("kg", "公斤").replace("KG", "公斤").replace("Kg", "公斤").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+    for k, v in (params_rows or []):
+        if len(out) >= n:
+            break
+        t = ("%s：%s" % (k, v)).strip()
+        if v and t not in out:
+            out.append(t)
+    return out[:n]
+
+
 def _render_img3(cfg, points, out):
-    """卖点图（2026-10-26 用户令二改）：蓝底色系小卡片有多少摆多少，不要机图、不要大 2X2。
-    3 列浅色小卡（彩条+黑字名称+灰描述，同追加图卡样式但换蓝底浅色系），
-    末行不满居中，整块在内容区垂直居中。"""
+    """卖点图 V8 非对称编辑排版（2026-10-28 用户拍板定稿，样张 _kit_demo 卖点_V8）：
+    左栏品牌头+金色短竖线+竖排「官方卖点」+金色字距 HIGHLIGHTS+底部型号；
+    右栏 6 条等分：上行粗黑主词+下行灰小字说明（参数条值做主词），
+    金衬线序号 01-06 + 细分隔线。白底。"""
     C = Image.new("RGB", (1080, 1080), (255, 255, 255))
     d = ImageDraw.Draw(C)
-    _header(d, "官 方 卖 点")
-    pts = [str(p).strip() for p in (points or []) if str(p).strip()]
+    d.text((66, 92), " ".join(cfg.get("brand_en") or "HAIER"), font=_font(F_BOLD, 26), fill=(150, 158, 168), anchor="lm")
+    d.text((66, 132), (cfg.get("brand") or "") + (cfg.get("cat") or ""), font=_font(F_BOLD, 26), fill=(90, 98, 108), anchor="lm")
+    d.rounded_rectangle([66, 158, 116, 163], 2, fill=BLUE)
+    vt = "官方卖点"
+    vy0 = 264
+    d.rounded_rectangle([100, vy0 + 10, 104, vy0 + 10 + 130], 2, fill=(201, 168, 102))
+    for j, chch in enumerate(vt):
+        d.text((166, vy0 + j * 122), chch, font=_font(F_BOLD, 84), fill=INK, anchor="mm")
+    d.text((166, vy0 + len(vt) * 122 + 34), "H I G H L I G H T S", font=_serif(18, False), fill=(201, 168, 102), anchor="mm")
+    d.text((66, 1020), cfg.get("model") or "", font=_font(F_REG, 20), fill=(190, 196, 204), anchor="lm")
+    d.line([262, 96, 262, 1006], fill=(232, 236, 242), width=1)
+    pts = _v8_points(points, cfg.get("params_rows"))
     if not pts:
         C.save(out, quality=95)
         return
-    BAR = [(60, 205, 140), (46, 107, 230), (255, 200, 70),
-           (170, 135, 255), (90, 205, 255), (120, 215, 255)]
-    CARD_BG, CARD_LN = (246, 249, 252), (224, 231, 239)
-    cols = 3
-    rows = (len(pts) + cols - 1) // cols
-    gx, gy = 18, 22
-    x0, x1, y0, y1 = 60, 1020, 250, 1008
-    cw = (x1 - x0 - gx * (cols - 1)) / float(cols)
-    ch = max(150.0, min(210.0, (y1 - y0 - gy * (rows - 1)) / rows))
-    yy = y0 + max(0.0, ((y1 - y0) - (rows * ch + (rows - 1) * gy)) / 2.0)
-    for i, pt in enumerate(pts):
-        r, c = divmod(i, cols)
-        row_n = min(cols, len(pts) - r * cols)
-        rw = row_n * cw + (row_n - 1) * gx
-        x = int(x0 + ((x1 - x0) - rw) / 2.0 + c * (cw + gx))
-        y = int(yy + r * (ch + gy))
-        cw_i, ch_i = int(cw), int(ch)
-        d.rounded_rectangle([x, y, x + cw_i, y + ch_i], 16,
-                            fill=CARD_BG, outline=CARD_LN, width=2)
-        d.rounded_rectangle([x + 22, y + 26, x + 34, y + ch_i - 26], 6, fill=BAR[i % len(BAR)])
-        name, _, desc = pt.partition("，")
-        tx = x + 54
-        maxw = cw_i - 54 - 24
-        nls = []
-        for fs in (30, 26, 22):
-            f_name = _font(F_BOLD, fs)
-            nls = _wrap(d, name, f_name, maxw)
-            if len(nls) == 1:
-                break
-        f_desc = _font(F_REG, 20)
-        dls = _wrap(d, desc, f_desc, maxw) if desc else []
-        name_h, desc_h = len(nls) * 44, len(dls) * 30 + (12 if dls else 0)
-        ty = y + max(20, (ch_i - name_h - desc_h) // 2)
-        for k, ln in enumerate(nls[:2]):
-            d.text((tx, ty + k * 44), ln, font=f_name, fill=INK)
-        ty2 = ty + name_h + (12 if dls else 0)
-        for k, ln in enumerate(dls[:2]):
-            d.text((tx, ty2 + k * 30), ln, font=f_desc, fill=GRAY)
+    rx = 316
+    y0, y1 = 132, 992
+    m = len(pts)
+    rh = (y1 - y0) / float(m)
+    for i, t in enumerate(pts):
+        if "：" in t or ":" in t:
+            # 参数条：值为主词（粗黑），标签为说明（灰小）
+            k, _, v = t.replace("：", ":").partition(":")
+            main, sub = v.strip(), k.strip()
+        else:
+            seg = t.replace("，", "\x01").replace(",", "\x01").split("\x01")
+            main, sub = seg[0].strip(), (seg[1].strip() if len(seg) > 1 else "")
+        yy = y0 + rh * (i + 0.5)
+        d.text((rx, yy - 14), "%02d" % (i + 1), font=_serif(30), fill=(201, 168, 102), anchor="lm")
+        fs = 36
+        while fs > 22 and _tw(d, main, _font(F_BOLD, fs)) > 1080 - rx - 230:
+            fs -= 2
+        d.text((rx + 58, yy - 14), main, font=_font(F_BOLD, fs), fill=INK, anchor="lm")
+        if sub:
+            d.text((rx + 58, yy + 22), sub, font=_font(F_BOLD, 20), fill=GRAY, anchor="lm")
+        if i < m - 1:
+            d.line([rx, y0 + rh * (i + 1), 1080 - 72, y0 + rh * (i + 1)], fill=(238, 240, 244), width=1)
     C.save(out, quality=95)
 
 
@@ -415,11 +447,13 @@ def _render_img4(cfg, out):
     if not cfg.get("sizeimg"):
         _header(d, "产 品 尺 寸")   # 官方尺寸图铺满整卡时不需要页眉
     if cfg.get("sizeimg"):
-        # 官方尺寸图直接铺满整卡（调成闲鱼 1080×1080）：裁白边+超分放大，数字跟原图一样大，
-        # 底部一条白带加「同时支持」卖点胶囊，不挤图
+        # 纯白版式（2026-10-28 用户拍板样张）：顶部「产品尺寸」+金线，官方线稿
+        # 840×620 双限居中，底部品牌型号 + 宽高深一行——「同时支持」胶囊带删除
+        d.text((540, 96), "产 品 尺 寸", font=_font(F_BOLD, 50), fill=INK, anchor="mm")
+        d.rounded_rectangle([500, 136, 580, 142], 3, fill=(212, 175, 108))
         simg = _rescue_prod(_autocrop_white(_flat_white(Image.open(cfg["sizeimg"])), margin=6), None)
         w, h = simg.size
-        sc = min(1080.0 / w, 940.0 / h)
+        sc = min(840.0 / w, 620.0 / h)
         im2 = simg.resize((max(1, int(w * sc)), max(1, int(h * sc))), Image.LANCZOS)
         im2 = im2.filter(ImageFilter.UnsharpMask(radius=2, percent=60, threshold=2))
         sp = cfg.get("size_pills") or []
@@ -429,29 +463,21 @@ def _render_img4(cfg, out):
             try:
                 im3 = _label_size_drawing(im2, int(nums[0]), int(nums[1]), int(nums[2]))
                 if im3.size != im2.size:
-                    # 标注函数为写字垫了白边 → 整体缩回 1080×940 预算内
-                    sc3 = min(1080.0 / im3.size[0], 940.0 / im3.size[1])
+                    # 标注函数为写字垫了白边 → 整体缩回预算内
+                    sc3 = min(840.0 / im3.size[0], 620.0 / im3.size[1])
                     im2 = im3.resize((max(1, int(im3.size[0] * sc3)), max(1, int(im3.size[1] * sc3))), Image.LANCZOS)
                 else:
                     im2 = im3
             except Exception:
                 pass
-        C.paste(im2, (int(540 - im2.size[0] / 2), int((940 - im2.size[1]) / 2)))
-        d.rectangle([0, 940, 1080, 1080], fill=(255, 255, 255))
-        # 第一行：外形尺寸文字（官方图没印数字时的兜底，如 400WDCTU1 紫块图）
-        sp = cfg.get("size_pills") or []
-        if sp:
-            d.text((60, 952), "外形尺寸：" + sp[0] + "，" + sp[1], font=_font(F_REG, 27), fill=INK)
-        # 第二行：同时支持 + 卖点胶囊
-        d.text((60, 1012), "同时支持", font=_font(F_LIGHT, 25), fill=GRAY)
-        xx = 210
-        fp = _font(F_REG, 23)
-        for s in cfg["feature_pills"][:8]:
-            w2 = _tw(d, s, fp) + 28
-            if xx + w2 > 1020:
-                break
-            _pill_left(d, xx, 1004, s, fp)
-            xx += w2 + 12
+        C.paste(im2, (int(540 - im2.size[0] / 2), 180 + max(0, int((640 - im2.size[1]) / 2))))
+        # 底部两行：品牌+型号 / 宽高深（无实测数字就不硬标）
+        d.text((540, 918), "%s  %s" % (cfg.get("brand", ""), cfg.get("model", "")),
+               font=_font(F_BOLD, 30), fill=INK, anchor="mm")
+        dims = cfg.get("dims") or ([int(n) for n in nums[:3]] if len(nums) >= 3 else None)
+        if dims and all(dims):
+            d.text((540, 972), "宽 %d mm · 高 %d mm · 深 %d mm" % tuple(dims),
+                   font=_font(F_REG, 25), fill=GRAY, anchor="mm")
         C.save(out, quality=95)
         return
     if cfg.get("dims"):
@@ -1020,7 +1046,7 @@ def _same_img(a, b, thr=0.6):
         return False
 
 
-def _pick_prod(model, img_urls, mdir, log, page_url=None):
+def _pick_prod(model, img_urls, mdir, log, page_url=None, kind=""):
     """机图：①软件图库（payload imgs / 欣盛 ximg，与卡片同源）②抓取链候选做
     「边框同色+泛洪抠底」选抠出主体最大且落地的。官网尺寸线框图顺带识别存
     sizeimg.jpg 给 img4。横幅/场景图/拼图/悬浮创意图自动淘汰。"""
@@ -1038,6 +1064,28 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None):
         have_prod = True
         if log:
             log("机图用软件图库（与卡片同款）")
+    # ①.5 AI 选图（2026-10-28 用户令「蓝底没有AI选图嘛，没有的话也给他加上去」）：
+    # 复用聚光/发布图同款视觉选图（pei_core.zhipu_pick_images，缓存 _ai_pick_v4.json
+    # 与聚光共享——同一台机器两边不重复烧视觉额度），取 front（正面整机）抠底；
+    # AI 不可用/候选不足/没认出 → 落回下面的启发式，行为与旧版完全一致。
+    if not have_prod:
+        try:
+            import pubwork as _pw
+            _key = _pw._ai_key()
+            if _key:
+                import pei_core as _pc
+                _src = os.path.join(_pw.sroot(), norm_model(model) or model)
+                if os.path.isdir(_src):
+                    _pick = _pc.zhipu_pick_images(_key, _src, kind or "", log=log)
+                    if _pick and _pick.get("front"):
+                        _fp = os.path.join(_src, _pick["front"])
+                        if os.path.isfile(_fp):
+                            _rescue_prod(_fp, log).save(picked)
+                            have_prod = True
+                            if log:
+                                log("机图用 AI 选图（front=%s，与聚光同源）" % _pick["front"])
+        except Exception:
+            pass
     # ② 候选源：写文案已生成的官方图（copy/<型号>/img_*.jpg）优先入队，再接抓取链 URL。
     # 没机图就选机图；有机图只找官网尺寸线框图
     srcs = []
@@ -1871,7 +1919,8 @@ def generate(model, force=0, log=None):
             img_urls = zimgs
         if zprops and not (info.get("props") or []):
             info["props"] = zprops
-    prod = _pick_prod(model, img_urls, mdir, log, page_url=(info or {}).get("url") or None)
+    prod = _pick_prod(model, img_urls, mdir, log, page_url=(info or {}).get("url") or None,
+                      kind=(info or {}).get("kind") or (info or {}).get("cat") or "")
     if not prod and zimgs:
         log("中关村图单独再试一轮…")
         prod = _pick_prod(model, zimgs, mdir, log)
