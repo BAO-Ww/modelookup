@@ -400,12 +400,14 @@ def _check():
         out.append("数据读取 ❌ %r" % (e,))
 
     # 关键提速验证：exe 版页面必须是「骨架页」（不含数据），否则又会退回 5 秒启动
+    # 阈值 500KB（2026-10-28）：template.html 本体已长到 403KB（聚光视图+V8 卖点图），
+    # 旧阈值 400KB 把骨架页误判成数据内联（CI #170 实锤）；数据内联是 MB 级，500 仍可靠区分
     try:
         bootstrap()
         sz = os.path.getsize(wp("index.html")) / 1024.0
         out.append("查询页 = %s（%.0f KB）%s" % (wp("index.html"), sz,
-                                             "✅ 骨架页" if sz < 400 else "❌ 又把数据内联进去了"))
-        if sz >= 400:
+                                             "✅ 骨架页" if sz < 500 else "❌ 又把数据内联进去了"))
+        if sz >= 500:
             ok = False
     except Exception as e:
         ok = False
