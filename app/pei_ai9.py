@@ -511,9 +511,124 @@ def save(cv, p):
 
 
 # ================= 9 张 =================
+GOLD = (212, 175, 108)   # 聚光金（样张定稿色）
+
+def _spot_bg(cx=None, cy=470, light_col=(88, 99, 118), strength=1.0):
+    """聚光专用干净背景（2026-10-28 用户令「背景也用这个背景」=样张同款）：
+    深灰蓝底 + 中心一束聚光 + 四角压暗，程序绘制，不走 AI 背景。"""
+    cx = W // 2 if cx is None else cx
+    low = 270
+    base = Image.new("RGB", (low, low), (10, 11, 14))
+    d = ImageDraw.Draw(base)
+    lx, ly, lr = cx * low // W, cy * low // W, int(low * 0.62)
+    for r in range(lr, 0, -2):
+        t = 1 - r / lr
+        a = int(210 * (t ** 1.7) * strength)
+        col = tuple(int(c * (0.35 + 0.65 * t)) for c in light_col)
+        d.ellipse([lx - r, ly - r, lx + r, ly + r], fill=col)
+    base = base.filter(ImageFilter.GaussianBlur(low // 30)).resize((W, H), Image.LANCZOS)
+    vig = Image.new("L", (W, H), 0)
+    dv = ImageDraw.Draw(vig)
+    for r in range(760, 0, -6):
+        a = int(120 * (1 - r / 760) ** 2)
+        dv.ellipse([W // 2 - int(r * 1.35), H // 2 - r, W // 2 + int(r * 1.35), H // 2 + r], fill=a)
+    vig = vig.filter(ImageFilter.GaussianBlur(60))
+    dark = Image.new("RGB", (W, H), (4, 5, 7))
+    base = Image.composite(dark, base, vig)
+    return base.convert("RGBA")
+
+def _ground_glow(cv, cy, rx=470, ry=64, col=(120, 134, 158), a=90):
+    """机器脚下的地面光带（样张同款）。"""
+    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    dg = ImageDraw.Draw(glow)
+    dg.ellipse([W // 2 - rx, cy - ry, W // 2 + rx, cy + ry], fill=col + (a,))
+    glow = glow.filter(ImageFilter.GaussianBlur(46))
+    cv.alpha_composite(glow)
+
+def _brand_minimal(dr, x=64, y=74):
+    """聚光左上角极简品牌（2026-10-28 样张定稿）：HAIER 金色字距拉开 + 海尔白色大字，
+    无徽章片。机器展示/机器参数用。"""
+    t_en = " ".join(list(str(P.get('ben', '')).upper()))
+    T(dr, (x, y), t_en, 24, GOLD, "lm")
+    T(dr, (x, y + 46), str(P.get('brand', '')), 40, TX1, "lm")
+
+def _brand_line(dr, cx=None, y=74):
+    """首图顶部居中品牌行：HAIER 海尔（金+白）。"""
+    t_en = " ".join(list(str(P.get('ben', '')).upper()))
+    f1, f2 = font(23, True), font(34, True)
+    w1 = dr.textlength(t_en, font=f1)
+    w2 = dr.textlength(str(P.get('brand', '')), font=f2)
+    gap = 26
+    cx = W // 2 if cx is None else cx
+    x = cx - (w1 + gap + w2) / 2
+    T(dr, (x, y), t_en, 23, GOLD, "lm")
+    T(dr, (x + w1 + gap, y + 2), str(P.get('brand', '')), 34, TX1, "lm")
+
+def _grad_scrim(cv, y0, y1, a=170, col=(6, 7, 10)):
+    """垂直三角形渐变压暗带（中间最实、向上下两边渐隐），保中部文字可读且不生硬。"""
+    n = y1 - y0
+    band = Image.new("L", (W, n), 0)
+    db = ImageDraw.Draw(band)
+    for i in range(n):
+        t = i / max(1, n - 1)
+        db.line([(0, i), (W, i)], fill=int(a * (1 - abs(t * 2 - 1))))
+    band = band.filter(ImageFilter.GaussianBlur(6))
+    full = Image.new("L", (W, H), 0)
+    full.paste(band, (0, y0))
+    layer = Image.new("RGBA", (W, H), col + (0,))
+    layer.putalpha(full)
+    cv.alpha_composite(layer)
+
+def _spot_param_items():
+    """聚光参数页数据（2026-10-28 样张定稿 C1v2）：官网真参数优先
+    （kitset set.json params，跳过「尺寸」——尺寸图有专门一张），兜底 build_text
+    的 specs/cards。返回 [(标签, 值)]，最多 6 条，绝不瞎编。"""
+    try:
+        import json as _json
+        import kitset
+        sp = os.path.join(kitset.model_dir((P.get('model') or '').strip()), "set.json")
+        if os.path.isfile(sp):
+            with open(sp, encoding="utf-8") as f:
+                pr = (_json.load(f).get("params") or {})
+            out = [(str(k), str(v).strip()) for k, v in pr.items()
+                   if k != "尺寸" and str(v).strip()]
+            if out:
+                return out
+    except Exception:
+        pass
+    out = [(str(k), str(v)) for v, k in (P.get('specs') or [])]
+    if not out:
+        out = [(str(k), str(v)) for v, k, _ in (P.get('cards') or [])]
+    return out
+
+
 def img1(front, out):                 # 首图：干净版——不放大数字/价格块，机器放大占满
     cv = prep_bg("a").convert("RGBA")
     dr = ImageDraw.Draw(cv)
+    if GEN_POP:
+        # 聚光首图（2026-10-28 用户令）：品牌小字挪左上角，机器满幅放大，
+        # 标题+黄底白字型号胶囊整组居中压在机器上。**不压整幅暗带**——那会把
+        # 银色机器压黑（EC5003-BK3U1 用户实锤），改用标题深色描边保可读。
+        cv = _spot_bg(cy=560, strength=1.15)
+        pf, px, py = place_band(cv, front, 185, 1035, maxw=1160)
+        halo(cv, px, py, pf.width, pf.height, strength=34, blur=60, m=190, col=(205, 218, 238))
+        soft_shadow(cv, px, py, pf.width, pf.height, alpha=135, blur=32, drop=16, w=0.98)
+        cv.alpha_composite(pf, (px, py))
+        dr = ImageDraw.Draw(cv)
+        _brand_minimal(dr)
+        _t1 = (P['brand'] + (P['cat'] or P['kind'] or '') + (P.get('cap') or '')).strip() or P['model']
+        _s1 = 74
+        while _s1 > 40 and dr.textlength(_t1, font=font(_s1, True)) > W * 0.75:
+            _s1 -= 2
+        dr.text((W // 2, 462), _t1, font=font(_s1, True), fill="#ffffff",
+                anchor="mm", stroke_width=6, stroke_fill=(10, 12, 17, 210))
+        _mt = P['model']
+        _tw_ = dr.textlength(_mt, font=font(31))
+        _pw, _ph, _py = int(_tw_) + 92, 71, 533
+        _px = W // 2 - _pw // 2
+        dr.rounded_rectangle([_px, _py, _px + _pw, _py + _ph], _ph // 2, fill=(255, 199, 0, 255))
+        T(dr, (W // 2, _py + _ph // 2 + 2), _mt, 31, "#ffffff", "mm")
+        return save(cv, out / "1_首图.jpg")
     # 顶栏：成色 + 全国联保
     dim(cv, (0, 0, W, 52), SCRIM_COL, SCRIM_A)
     T(dr, (40, 27), "全新未拆封", 27, TX1, "lm")
@@ -535,24 +650,46 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
 
 
 def img2(front, out):                 # 机器图（深色，同色系）
+    if GEN_POP:
+        # 聚光·机器展示（2026-10-28 样张定稿 B1）：干净聚光底+地面光带，零文字，
+        # 只留左上角极简品牌小字，机器放大居中。
+        cv = _spot_bg(cy=520)
+        _ground_glow(cv, 960)
+        dr = ImageDraw.Draw(cv)
+        # 展示图机器必须 ≥ 首图（用户令）：带高 855（首图 850）、maxw 1170，
+        # 顶边钳 185 不压左上品牌字（品牌字底 ~130）。
+        pf, px, py = place_band(cv, front, 180, 1035, maxw=1170)
+        py = max(py, 185)
+        halo(cv, px, py, pf.width, pf.height, strength=32, blur=60, m=190, col=(210, 222, 240))
+        soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=34, drop=26, w=0.98)
+        cv.alpha_composite(pf, (px, py))
+        _brand_minimal(dr)
+        return save(cv, out / "2_机器图.jpg")
     cv = prep_bg("char").convert("RGBA")
     dr = ImageDraw.Draw(cv)
     T(dr, (W // 2, 76), f"{P['brand']} {P['cat']}", 40, TX1, "mm")
     sub = (P['color'] + " · " if P['color'] else "") + "全新未拆封"
     T(dr, (W // 2, 122), sub, 20, TX2, "mm")
-    pf, px, py = place_band(cv, front, 156, 826, maxw=1010)
+    specs = P['specs']
+    if specs:
+        pf, px, py = place_band(cv, front, 156, 826, maxw=1010)
+    else:
+        # 参数为空（XQG100-H28E 欣盛源 props=[] 实锤）→ 没有胶囊行，机器带拉到底，
+        # 不然 // len(specs) 除零炸整单（2026-10-28 实锤）
+        pf, px, py = place_band(cv, front, 156, 994, maxw=1010)
     halo(cv, px, py, pf.width, pf.height, strength=32, blur=60, m=190, col=(210, 222, 240))
     soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=34, drop=26, w=0.98)
     cv.alpha_composite(pf, (px, py))
-    specs = P['specs']; n = len(specs); mg = 34; g = 16
-    cw = (W - 2 * mg - (n - 1) * g) // n; ch = 118; y0 = 848
-    for i, (v, k) in enumerate(specs):
-        x = mg + i * (cw + g)
-        dim(cv, (x, y0, x + cw, y0 + ch), (20, 24, 30), 222, radius=18)
-        dr.rounded_rectangle([x, y0, x + cw, y0 + ch], 18, outline=(150, 162, 180, 200), width=2)
-        _s = 27 if dr.textlength(v, font=font(27, True)) <= cw - 20 else 20
-        T(dr, (x + cw // 2, y0 + 42), v, _s, "#ffffff", "mm")
-        T(dr, (x + cw // 2, y0 + 84), k, 17, "#aab3c0", "mm")
+    n = len(specs); mg = 34; g = 16
+    if n:
+        cw = (W - 2 * mg - (n - 1) * g) // n; ch = 118; y0 = 848
+        for i, (v, k) in enumerate(specs):
+            x = mg + i * (cw + g)
+            dim(cv, (x, y0, x + cw, y0 + ch), (20, 24, 30), 222, radius=18)
+            dr.rounded_rectangle([x, y0, x + cw, y0 + ch], 18, outline=(150, 162, 180, 200), width=2)
+            _s = 27 if dr.textlength(v, font=font(27, True)) <= cw - 20 else 20
+            T(dr, (x + cw // 2, y0 + 42), v, _s, "#ffffff", "mm")
+            T(dr, (x + cw // 2, y0 + 84), k, 17, "#aab3c0", "mm")
     T(dr, (W // 2, 1026), f"{P['brand']} {P['model']} · 全新未拆封", 23, TX2, "mm")
     return save(cv, out / "2_机器图.jpg")
 
@@ -578,6 +715,31 @@ def img3(angle, out):                 # 立体角度
 
 
 def img4(front, out):                 # 核心参数
+    if GEN_POP:
+        # 聚光·机器参数（2026-10-28 样张定稿 C1v2）：干净聚光底（光心偏右），左上
+        # 标题+金线，左侧官网真参数列表（最多 6 条），右侧机器，底部型号。
+        cv = _spot_bg(cx=760, cy=520)
+        _ground_glow(cv, 950, rx=330)
+        dr = ImageDraw.Draw(cv)
+        # 机器放右侧区（x 560~1030）内自适应居中——横宽机型（热水器）也绝不越界出画
+        # （2026-10-28 用户实锤：px 写死 640 + 热水器 560 宽 → 右半截出画）。
+        pf, px, py = place_band(cv, front, 260, 970, maxw=470)
+        px = 560 + max(0, (470 - pf.width) // 2)
+        px = min(px, W - 50 - pf.width)
+        halo(cv, px, py, pf.width, pf.height, strength=30, blur=58, m=185, col=(205, 220, 245))
+        soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=30, drop=16, w=0.9)
+        cv.alpha_composite(pf, (px, py))
+        T(dr, (72, 110), "机器参数", 50, TX1, "lm")
+        dr.line([(74, 176), (218, 176)], fill=GOLD, width=4)
+        y = 236
+        for k, v in _spot_param_items()[:6]:
+            T(dr, (76, y), k, 23, "#969eaa", "lm")
+            _s = 34 if dr.textlength(str(v), font=font(34, True)) <= 460 else 26
+            T(dr, (76, y + 36), str(v), _s, "#ffffff", "lm")
+            dr.line([(76, y + 96), (520, y + 96)], fill=(255, 255, 255, 36), width=1)
+            y += 126
+        T(dr, (76, 1012), P['model'], 24, "#78808c", "lm")
+        return save(cv, out / "4_核心参数.jpg")
     cv = prep_bg("a").convert("RGBA")
     dr = ImageDraw.Draw(cv)
     vgrad_overlay(cv, top_alpha=120, bot_alpha=140, band=200)
@@ -606,6 +768,87 @@ def img4(front, out):                 # 核心参数
     T(dr, (W // 2, 1006), P['pl1'], _s1, TX2, "mm")
     T(dr, (W // 2, 1048), P['pl2'], _s2, TX3, "mm")
     return save(cv, out / "4_核心参数.jpg")
+
+
+def img_size(info, out):              # 聚光·尺寸图：深色同色系（2026-10-28 用户令）
+    """聚光第 4 张：产品尺寸——底图跟首图/机器参数同款暗色聚光（prep_bg("a")），
+    官方尺寸线稿垫白色圆角卡居中；**不带蓝底那排「同时支持」卖点胶囊**。
+    没官方图 → 暗底手绘线框标真实尺寸；连尺寸都没有 → 一句话兜底（绝不瞎编）。"""
+    dst = out / "5_尺寸图.jpg"
+    cv = _spot_bg(cy=430)
+    _ground_glow(cv, 900)
+    dr = ImageDraw.Draw(cv)
+    T(dr, (W // 2, 96), "产 品 尺 寸", 46, TX1, "mm")
+    dr.rounded_rectangle([W // 2 - 64, 142, W // 2 + 64, 148], 3, fill=(255, 205, 60, 230))
+    si = None; pills = []; dims = None
+    try:
+        import kitset
+        kdir = kitset.model_dir((P.get('model') or '').strip())
+        _si = os.path.join(kdir, "sizeimg.jpg")
+        ai_dims = None
+        if os.path.isfile(_si):
+            try:
+                ai_dims = kitset._ai_read_size_nums(_si, lambda s: None)
+            except Exception:
+                ai_dims = None
+        cfg, _, _, _ = kitset._build_cfg(info, mdir=kdir, ai_dims=ai_dims)
+        si = cfg.get("sizeimg")
+        pills = cfg.get("size_pills") or []
+        dims = cfg.get("dims")
+    except Exception:
+        si, pills, dims = None, [], None
+    if si:
+        # 官方线稿反白铺深底（2026-10-28 样张定稿 D4）：黑线变浅白线、白底变透明，
+        # 色系跟前三张统一；细线（横向尺寸线）加增益别反白时丢线；底部品牌型号+宽高深。
+        try:
+            g = Image.open(si).convert("L")
+            bb = Image.eval(g, lambda v: 255 - v).getbbox()
+            if bb:
+                g = g.crop(bb)
+            # 宽高双限自适应：限宽 840 + 限高 620 取小——竖长机型（冰箱 1776mm）
+            # 线稿按宽缩放会冲出画底（2026-10-28 用户实锤），必须同时夹高度。
+            sc = min(840 / max(1, g.width), 620 / max(1, g.height))
+            tw = max(1, int(g.width * sc))
+            th = max(1, int(g.height * sc))
+            g = g.resize((tw, th), Image.LANCZOS)
+            alpha = g.point(lambda v: min(255, max(0, (225 - v) * 255 // 150)))
+            alpha = alpha.point(lambda v: min(255, int(v * 1.45)))
+            white = Image.new("RGBA", g.size, (238, 242, 248, 0))
+            white.putalpha(alpha)
+            cv.alpha_composite(white, ((W - tw) // 2, 170 + max(0, (600 - th) // 2)))
+        except Exception:
+            pass
+        if dims:
+            Wd, Hd, Dd = dims
+            T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, TX1, "mm")
+            T(dr, (W // 2, 972), "宽 %s mm · 高 %s mm · 深 %s mm" % (Wd, Hd, Dd), 25, "#aab2be", "mm")
+        else:
+            T(dr, (W // 2, 940), "%s %s" % (P['brand'], P['model']), 30, TX1, "mm")
+        return save(cv, dst)
+    if dims:
+        # 暗底手绘线框：正视图+宽高金色标注，深度一句话（几何同蓝底、线条改浅色）
+        Wd, Hd, Dd = dims
+        fh = 470; fw = max(70, int(Wd / float(Hd) * fh))
+        fx, fy = (W - fw) // 2 - 50, 286
+        dr.rounded_rectangle([fx, fy, fx + fw, fy + fh], 12,
+                             outline=(225, 232, 242, 230), width=3)
+        def _dl(x1, y1, x2, y2, label, vert=False):
+            dr.line([x1, y1, x2, y2], fill=(255, 205, 60, 220), width=2)
+            if vert:
+                dr.line([x1 - 8, y1, x1 + 8, y1], fill=(255, 205, 60, 220), width=2)
+                dr.line([x2 - 8, y2, x2 + 8, y2], fill=(255, 205, 60, 220), width=2)
+                T(dr, (x1 + 18, (y1 + y2) // 2), label, 26, TX1, "lm")
+            else:
+                dr.line([x1, y1 - 8, x1, y1 + 8], fill=(255, 205, 60, 220), width=2)
+                dr.line([x2, y2 - 8, x2, y2 + 8], fill=(255, 205, 60, 220), width=2)
+                T(dr, ((x1 + x2) // 2, y1 - 20), label, 26, TX1, "mb")
+        _dl(fx, fy - 46, fx + fw, fy - 46, "%s mm" % Wd)
+        _dl(fx + fw + 46, fy, fx + fw + 46, fy + fh, "%s mm" % Hd, vert=True)
+        T(dr, (W // 2, fy + fh + 72), "深 %s mm · 外形尺寸以实物为准" % Dd, 27, TX2, "mm")
+        return save(cv, dst)
+    T(dr, (W // 2, 512), "外形尺寸以实物为准", 34, TX2, "mm")
+    T(dr, (W // 2, 572), "可咨询客服获取详细规格", 24, TX3, "mm")
+    return save(cv, dst)
 
 
 def img5(openpng, out):               # 开门大容量
@@ -1282,6 +1525,12 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
             except Exception:
                 ai_copy = None
     P = build_text(info, version, sell_price, ai_copy)
+    if GEN_STYLE == "spot":
+        # 聚光首图中部标题要「品牌+品类+容量」（2026-10-28 用户令，如 海尔波轮洗衣机10公斤）
+        try:
+            P["cap"] = ((core.capacity_str(info) or "")).replace("kg", "公斤") if core is not None else ""
+        except Exception:
+            P["cap"] = ""
     # 机型专属背景微差：每台机器的深灰影棚各不相同（同冷灰族）
     BG_SEED = _seed_phrase(info)
 
@@ -1344,17 +1593,28 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
 
     # 9 张按槽位定义；slots=None 出全部 9 张（默认「发布图」），
     # 指定 slots（如 [1,2,3,4,6,9]）则只出对应几张（「生成6张」按钮用）。
-    STEPS = [
-        (1, "首图", lambda: img1(front, out)),
-        (2, "机器图", lambda: img2(front, out)),
-        (3, "立体角度", lambda: img3(angle, out)),
-        (4, "核心参数", lambda: img4(front, out)),
-        (5, "内部容量", lambda: img5(openv, out)),
-        (6, "实拍场景", lambda: img6(scene, front, out)),
-        (7, "能效静音", lambda: img7(front, out)),
-        (8, "品质细节", lambda: img8(front, out)),
-        (9, "交易保障", lambda: img9(out)),
-    ]
+    if GEN_STYLE == "spot":
+        # 聚光独立成套（2026-10-28 用户令）：只出 4 张——首图/机器展示/机器参数/尺寸图，
+        # 立体角度/实拍/交易保障等全不要；slots 入参（SLOTS6）对聚光不生效。
+        STEPS = [
+            (1, "首图", lambda: img1(front, out)),
+            (2, "机器展示", lambda: img2(front, out)),
+            (4, "机器参数", lambda: img4(front, out)),
+            (5, "尺寸图", lambda: img_size(info, out)),
+        ]
+        slots = [s for s, _, _ in STEPS]
+    else:
+        STEPS = [
+            (1, "首图", lambda: img1(front, out)),
+            (2, "机器图", lambda: img2(front, out)),
+            (3, "立体角度", lambda: img3(angle, out)),
+            (4, "核心参数", lambda: img4(front, out)),
+            (5, "内部容量", lambda: img5(openv, out)),
+            (6, "实拍场景", lambda: img6(scene, front, out)),
+            (7, "能效静音", lambda: img7(front, out)),
+            (8, "品质细节", lambda: img8(front, out)),
+            (9, "交易保障", lambda: img9(out)),
+        ]
     if slots is None:
         slots = [s for s, _, _ in STEPS]
     sel = [(s, lab, fn) for s, lab, fn in STEPS if s in slots]
