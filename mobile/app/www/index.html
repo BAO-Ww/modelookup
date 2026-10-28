@@ -2,45 +2,605 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1f2b45">
 <title>型号查询</title>
 <style>
-  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
-       font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-       background:#f2f5fa;color:#2e6be6;}
-  .box{text-align:center;padding:32px}
-  .t{font-size:20px;font-weight:700;margin:16px 0 8px}
-  .s{font-size:14px;color:#7a8699;line-height:1.6}
-  button{margin-top:20px;padding:10px 28px;border:0;border-radius:22px;background:#2e6be6;
-         color:#fff;font-size:15px;}
-  .spin{width:34px;height:34px;margin:0 auto;border-radius:50%;
-        border:3px solid rgba(46,107,230,.25);border-top-color:#2e6be6;
-        animation:sp 0.9s linear infinite}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0;height:100%}
+  body{font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+       background:#eef1f6;color:#1c2230;overscroll-behavior-y:none}
+  #app{height:100%;display:flex;flex-direction:column}
+  .hide{display:none!important}
+  button{font-family:inherit;border:0;background:none;cursor:pointer}
+  input{font-family:inherit}
+
+  /* ---------- 启动页 ---------- */
+  #v_splash{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#1f2b45;color:#fff}
+  #v_splash .logo{font-size:30px;font-weight:800;letter-spacing:2px}
+  #v_splash .sub{margin-top:10px;font-size:13px;color:#9fb0d0}
+  .spin{width:34px;height:34px;margin:26px auto 0;border-radius:50%;
+        border:3px solid rgba(255,255,255,.2);border-top-color:#fff;animation:sp .9s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
+  #v_splash .msg{margin-top:14px;font-size:12px;color:#7e90b5;min-height:18px}
+
+  /* ---------- 登录页 ---------- */
+  #v_login{flex:1;display:flex;flex-direction:column;justify-content:center;padding:36px 30px;background:#1f2b45;color:#fff}
+  #v_login .logo{font-size:28px;font-weight:800;text-align:center;letter-spacing:2px}
+  #v_login .sub{text-align:center;font-size:13px;color:#9fb0d0;margin:8px 0 30px}
+  #v_login input{width:100%;padding:13px 16px;border-radius:12px;border:1px solid #33415e;
+                 background:#26334f;color:#fff;font-size:15px;outline:none;margin-bottom:12px}
+  #v_login input::placeholder{color:#64769a}
+  #v_login input:focus{border-color:#5b8cff}
+  #btn_login{width:100%;padding:14px;border-radius:12px;background:#2e6be6;color:#fff;
+             font-size:16px;font-weight:700;margin-top:8px}
+  #btn_login:active{opacity:.85}
+  #login_err{color:#ff8f8f;font-size:13px;text-align:center;min-height:18px;margin-top:12px}
+
+  /* ---------- 主界面 ---------- */
+  #v_main{flex:1;display:flex;flex-direction:column;min-height:0}
+  #hd{background:#1f2b45;color:#fff;padding:calc(env(safe-area-inset-top) + 10px) 14px 10px;
+      display:flex;align-items:center;gap:10px}
+  #hd .t{font-size:17px;font-weight:800;letter-spacing:1px;flex:1}
+  #hd .info{font-size:11px;color:#9fb0d0;text-align:right;line-height:1.4}
+  #hd button{color:#c6d2ea;font-size:13px;padding:6px 8px;border-radius:8px;background:#2a3856}
+  #hd button:active{background:#33456e}
+  #searchbar{background:#1f2b45;padding:0 14px 12px;display:flex;gap:8px}
+  #q{flex:1;padding:11px 16px;border-radius:22px;border:0;outline:none;font-size:15px;background:#fff;color:#1c2230}
+  #btn_search{padding:0 18px;border-radius:22px;background:#2e6be6;color:#fff;font-size:14px;font-weight:600}
+  #cats{display:flex;gap:8px;overflow-x:auto;padding:10px 14px;background:#fff;border-bottom:1px solid #e3e7ee;
+        scrollbar-width:none;flex-shrink:0}
+  #cats::-webkit-scrollbar{display:none}
+  .chip{flex-shrink:0;padding:6px 15px;border-radius:16px;background:#f0f3f8;color:#4a5568;font-size:13px}
+  .chip.on{background:#1f2b45;color:#fff;font-weight:600}
+  #list{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:10px 12px calc(env(safe-area-inset-bottom) + 16px)}
+  .sync{background:#fff7e0;color:#8a6d1a;font-size:12px;border-radius:10px;padding:8px 12px;margin-bottom:10px}
+  .card{background:#fff;border-radius:14px;padding:12px;margin-bottom:10px;display:flex;gap:12px;
+        box-shadow:0 1px 3px rgba(20,30,60,.06)}
+  .card:active{background:#f6f8fc}
+  .thumb{width:86px;height:86px;border-radius:10px;background:#f0f3f8;flex-shrink:0;overflow:hidden;
+         display:flex;align-items:center;justify-content:center;color:#b6c0d0;font-size:26px;font-weight:700}
+  .thumb img{width:100%;height:100%;object-fit:contain}
+  .cbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+  .crow1{display:flex;align-items:center;gap:6px}
+  .brand{flex-shrink:0;font-size:11px;font-weight:700;color:#2e6be6;background:#e8f0ff;border-radius:6px;padding:2px 7px}
+  .cat{font-size:11px;color:#8a94a6}
+  .mo{font-size:15px;font-weight:700;color:#1c2230;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .nm{font-size:12px;color:#6a7686;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tags{display:flex;gap:5px;flex-wrap:wrap}
+  .tag{font-size:10.5px;border-radius:5px;padding:2px 6px;font-weight:600}
+  .tag.l{background:#fff1f0;color:#d4380d}
+  .tag.s{background:#fff8e6;color:#ad6800}
+  .tag.nat{background:#e6f7ef;color:#0a7a4d}
+  .tag.stk0{background:#fff1f0;color:#d4380d}
+  .tag.stk1{background:#e6f7ef;color:#0a7a4d}
+  .tag.stkf{background:#f0f3f8;color:#6a7686}
+  .prow{display:flex;align-items:baseline;gap:8px;margin-top:2px}
+  .plp{font-size:17px;font-weight:800;color:#d4380d}
+  .plp small{font-size:11px;font-weight:600;color:#d4380d}
+  .pxp{font-size:12px;color:#0a7a4d;font-weight:600}
+  .psub{font-size:11px;color:#2e6be6}
+  .more{display:block;width:100%;padding:12px;text-align:center;color:#2e6be6;font-size:14px;background:none}
+  #empty{text-align:center;color:#8a94a6;font-size:14px;padding:60px 20px;line-height:1.8}
+
+  /* ---------- 详情 ---------- */
+  #v_detail{position:fixed;inset:0;background:#eef1f6;z-index:50;display:flex;flex-direction:column}
+  #dh{background:#1f2b45;color:#fff;padding:calc(env(safe-area-inset-top) + 10px) 14px 12px;
+      display:flex;align-items:center;gap:10px}
+  #dh button{color:#fff;font-size:20px;padding:4px 10px}
+  #dh .t{font-size:16px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #dbody{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px calc(env(safe-area-inset-bottom) + 14px)}
+  .dimg{width:100%;max-height:300px;background:#fff;border-radius:14px;overflow:hidden;
+        display:flex;align-items:center;justify-content:center;min-height:180px;color:#b6c0d0;font-size:40px;font-weight:700}
+  .dimg img{width:100%;height:100%;max-height:300px;object-fit:contain}
+  .dtitle{font-size:18px;font-weight:800;margin:14px 2px 4px;line-height:1.4}
+  .dsub{font-size:13px;color:#6a7686;margin:0 2px 12px}
+  .dprice{background:#fff;border-radius:14px;padding:14px;display:flex;gap:18px;align-items:baseline;flex-wrap:wrap}
+  .dp .v{font-size:22px;font-weight:800;color:#d4380d}
+  .dp .k{font-size:11px;color:#8a94a6;display:block;margin-top:2px}
+  .dgrid{background:#fff;border-radius:14px;padding:4px 14px;margin-top:10px}
+  .drow{display:flex;justify-content:space-between;gap:14px;padding:11px 0;border-bottom:1px solid #f0f2f6;font-size:13.5px}
+  .drow:last-child{border-bottom:0}
+  .drow .k{color:#8a94a6;flex-shrink:0}
+  .drow .v{text-align:right;color:#1c2230;font-weight:500;word-break:break-all}
+  .drow .v.good{color:#0a7a4d;font-weight:700}
+  .drow .v.bad{color:#d4380d;font-weight:700}
+  .dsec{margin-top:10px;background:#fff;border-radius:14px;padding:12px 14px}
+  .dsec .h{font-size:12px;color:#8a94a6;font-weight:600;margin-bottom:8px}
+  .srcrow{display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px dashed #f0f2f6}
+  .srcrow:last-child{border-bottom:0}
+  #btn_web{display:block;width:100%;margin-top:12px;padding:13px;border-radius:12px;background:#1f2b45;
+           color:#fff;font-size:15px;font-weight:600;text-align:center;text-decoration:none}
+  #toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 40px);transform:translateX(-50%);
+         background:rgba(20,28,48,.92);color:#fff;font-size:13px;border-radius:20px;padding:9px 20px;
+         z-index:99;max-width:80vw;text-align:center;transition:opacity .3s;opacity:0;pointer-events:none}
 </style>
 </head>
 <body>
-<div class="box">
-  <div class="spin"></div>
-  <div class="t">正在连接云端…</div>
-  <div class="s">数据实时读取云端，不在本机存储</div>
-  <button id="retry" style="display:none">重新连接</button>
+<div id="app">
+
+  <!-- 启动页 -->
+  <div id="v_splash">
+    <div class="logo">型号查询</div>
+    <div class="sub">滞销样机清理 · 数据实时同步</div>
+    <div class="spin"></div>
+    <div class="msg" id="splash_msg"></div>
+  </div>
+
+  <!-- 登录页 -->
+  <div id="v_login" class="hide">
+    <div class="logo">型号查询</div>
+    <div class="sub">用软件里的账号密码登录（和电脑端同一套）</div>
+    <input id="in_u" placeholder="账号" autocapitalize="off" autocorrect="off">
+    <input id="in_p" type="password" placeholder="密码">
+    <button id="btn_login">登 录</button>
+    <div id="login_err"></div>
+  </div>
+
+  <!-- 主界面 -->
+  <div id="v_main" class="hide">
+    <div id="hd">
+      <div class="t">型号查询</div>
+      <div class="info" id="hd_info"></div>
+      <button id="btn_refresh">刷新</button>
+      <button id="btn_logout">退出</button>
+    </div>
+    <div id="searchbar">
+      <input id="q" placeholder="搜型号 / 品名，如 EB100Z35Pro2">
+      <button id="btn_search">搜索</button>
+    </div>
+    <div id="cats"></div>
+    <div id="list"></div>
+  </div>
+
+  <!-- 详情 -->
+  <div id="v_detail" class="hide">
+    <div id="dh">
+      <button id="btn_back">‹</button>
+      <div class="t" id="d_title"></div>
+    </div>
+    <div id="dbody"></div>
+  </div>
+
+  <div id="toast"></div>
 </div>
+
 <script>
-  // 纯云壳：不烤任何数据，进入即跳云端 /m（数据全部实时读云端）
-  // 若连不上，本页停留显示「正在连接云端」，可点重新连接
-  var URL = "https://auth.tingjiabaobao.de5.net/m";
-  setTimeout(function(){
-    location.replace(URL);
-    // 8 秒还没跳走（网络断了，WebView 报错页也可能被拦），亮出重试按钮
-    setTimeout(function(){
-      var b = document.getElementById('retry');
-      if (b) b.style.display = '';
-      var s = document.querySelector('.s');
-      if (s) s.innerHTML = '连不上云端<br>请检查网络后重试';
-    }, 8000);
-  }, 300);
-  document.getElementById('retry').addEventListener('click', function(){ location.replace(URL); });
+"use strict";
+/* ================================================================
+   型号查询 · 手机版（2026-10-29 重做：真 APP，不再跳网页）
+   · 界面/数据全部本机 + 云端接口：/login /mpayload /stockcloud
+     /xlsxmeta（数据新鲜度探针）/stockmeta（库存新鲜度探针）
+   · 数据与电脑端同源同份：worker KV 的 mpayload 由 CI 每小时构建上传，
+     库存 stocklive 由用友 cron 每 30 分钟上传——电脑端重建用的也是同一批
+   · rows+imgs 缓存 IndexedDB（按 xlsx ts 失效），断网可用旧数据
+   ================================================================ */
+
+var API = (location.hostname && location.hostname.indexOf("tingjiabaobao") >= 0)
+          ? "" : "https://auth.tingjiabaobao.de5.net";
+var UA = { "Content-Type": "application/json" };
+
+/* ---------- 基础工具 ---------- */
+function $(id){ return document.getElementById(id); }
+function show(id){ $(id).classList.remove("hide"); }
+function hide(id){ $(id).classList.add("hide"); }
+function toast(s){
+  var t = $("toast"); t.textContent = s; t.style.opacity = 1;
+  clearTimeout(t._tm); t._tm = setTimeout(function(){ t.style.opacity = 0; }, 2200);
+}
+function fmt(n){ return (n === 0 || n) ? String(n) : ""; }
+
+/* ---------- 归一化（与电脑端 template.html 同一套） ---------- */
+function half(s){
+  return String(s || "").replace(/[\uFF01-\uFF5E\u3000]/g, function(ch){
+    var o = ch.charCodeAt(0);
+    return o === 0x3000 ? " " : String.fromCharCode(o - 0xFEE0);
+  });
+}
+function norm(s){ return half(s).replace(/\s+/g, "").toUpperCase(); }
+function coreOf(s){
+  var n = norm(s);
+  var m = n.match(/[\u4e00-\u9fff]/);
+  if (m && m.index >= 3) return n.slice(0, m.index).replace(/[()\-_/+.,、，]+$/, "");
+  return n;
+}
+
+/* ---------- 登录态 ---------- */
+var TOKEN = localStorage.getItem("ml_token") || "";
+var ME = localStorage.getItem("ml_u") || "";
+function saveToken(tok, u){
+  TOKEN = tok || ""; ME = u || "";
+  if (TOKEN){ localStorage.setItem("ml_token", TOKEN); localStorage.setItem("ml_u", ME); }
+  else { localStorage.removeItem("ml_token"); localStorage.removeItem("ml_u"); }
+}
+function req(path, opt, timeout){
+  opt = opt || {};
+  var h = Object.assign({}, UA, opt.headers || {});
+  if (TOKEN) h["X-Token"] = TOKEN;
+  var ctl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+  var tm = setTimeout(function(){ if (ctl) ctl.abort(); }, timeout || 60000);
+  return fetch(API + path, {
+    method: opt.method || "GET",
+    headers: h,
+    body: opt.body ? JSON.stringify(opt.body) : undefined,
+    signal: ctl ? ctl.signal : undefined
+  }).then(function(r){
+    clearTimeout(tm);
+    if (r.status === 401){ saveToken("", ""); enterLogin("登录已过期，请重新登录"); throw new Error("401"); }
+    return r.json().catch(function(){ return null; });
+  }).catch(function(e){
+    clearTimeout(tm);
+    if (String(e.message) === "401") throw e;
+    throw new Error("网络不通");
+  });
+}
+
+/* ---------- 数据缓存（IndexedDB） ---------- */
+var DB = null;
+function idb(){
+  if (DB) return Promise.resolve(DB);
+  return new Promise(function(res){
+    var rq = indexedDB.open("mlcache", 1);
+    rq.onupgradeneeded = function(){ rq.result.createObjectStore("kv"); };
+    rq.onsuccess = function(){ DB = rq.result; res(DB); };
+    rq.onerror = function(){ res(null); };
+  });
+}
+function idbGet(k){
+  return idb().then(function(db){
+    if (!db) return null;
+    return new Promise(function(res){
+      var tx = db.transaction("kv", "readonly").objectStore("kv").get(k);
+      tx.onsuccess = function(){ res(tx.result || null); };
+      tx.onerror = function(){ res(null); };
+    });
+  });
+}
+function idbSet(k, v){
+  return idb().then(function(db){
+    if (!db) return;
+    try{
+      var tx = db.transaction("kv", "readwrite");
+      tx.objectStore("kv").put(v, k);
+    }catch(e){}
+  });
+}
+
+/* ---------- 全局数据 ---------- */
+var META = {}, ROWS = [], IMGS = {}, WEB = {};
+var STOCK = null;                 // {ts, stock:{norm:{q,a,wt}}, sbc:{code:{...}}}
+var CACHE_TS = "";                // 本地缓存对应的 xlsx ts
+var FILTER_CAT = "";
+var SHOW_N = 60;
+
+/* ---------- 库存口径（与电脑端 stockOf/extStockFree 同一套） ---------- */
+function extStockFree(it){
+  if (!it) return false;
+  var r = (META && META.stock_rules) || { ext_free_brands: ["美的", "容声", "科沃斯"], ext_free_source: "HM夏" };
+  if ((r.ext_free_brands || []).indexOf(it.b) >= 0) return true;
+  return String(it.sfrom || "").trim() === (r.ext_free_source || "HM夏");
+}
+function stockOf(mo, name, code){
+  if (!STOCK || !STOCK.stock) return null;
+  if (code){
+    var bc = STOCK.sbc, ck = norm(code);
+    if (bc && ck && bc[ck]) return bc[ck];        // 编码硬核对命中（a=0 也照回：真没货）
+  }
+  var k = norm(mo);
+  if (STOCK.stock[k]) return STOCK.stock[k];      // 一字不差精确
+  if (!name) return null;
+  var n = norm(name), hit = null;
+  for (var key in STOCK.stock){
+    if (key.length > k.length && key.lastIndexOf(k, 0) === 0 && n.indexOf(key) >= 0){
+      if (hit) return null;                       // 两台都像 → 保守不认
+      hit = STOCK.stock[key];
+    }
+  }
+  return hit;
+}
+/* 显示用可用量：用友实时是唯一准绳，豁免名单恒有货 */
+function availOf(it){
+  if (extStockFree(it)) return { v: -1, free: true };
+  var live = stockOf(it.mo, it.n, it.code);
+  if (live) return { v: (typeof live.a === "number") ? Math.round(live.a) : 0 };
+  if (STOCK && STOCK.stock && Object.keys(STOCK.stock).length) return { v: 0 };
+  var q = (typeof it.lq === "number") ? it.lq : ((typeof it.sq === "number") ? it.sq : null);
+  return { v: (q === null) ? -2 : q };
+}
+
+/* ---------- 视图切换 ---------- */
+function enterLogin(msg){
+  hide("v_splash"); hide("v_main"); hide("v_detail"); show("v_login");
+  $("login_err").textContent = msg || "";
+}
+function enterMain(){
+  hide("v_splash"); hide("v_login"); hide("v_detail"); show("v_main");
+}
+
+/* ---------- 启动 ---------- */
+function boot(){
+  if (!TOKEN) return enterLogin();
+  enterMain();
+  renderHeader();
+  // 先上缓存（秒开），再探新鲜度
+  idbGet("payload").then(function(c){
+    if (c && c.rows){
+      CACHE_TS = c.ts || "";
+      META = c.meta || {}; ROWS = c.rows || []; IMGS = c.imgs || {}; WEB = c.web || {};
+      renderCats(); renderList();
+    }
+    return refreshAll(!!(c && c.rows));
+  }).then(function(){ /* done */ })
+  .catch(function(e){ toast(String(e.message || e)); });
+}
+
+/* ---------- 数据刷新 ---------- */
+var BUSY = false;
+function refreshAll(silent){
+  if (BUSY) return Promise.resolve();
+  BUSY = true;
+  var prog = function(s){ $("splash_msg").textContent = s; if (!silent) toast(s); };
+  var p1 = req("/xlsxmeta", {}, 30000)
+    .then(function(m){ return (m && m.ts) ? String(m.ts) : ""; })
+    .catch(function(){ return ""; });
+  var p2 = req("/stockmeta", {}, 30000)
+    .then(function(m){ return (m && m.ts) ? String(m.ts) : ""; })
+    .catch(function(){ return ""; });
+  var p3 = p1.then(function(ts){
+    if (!ts) return null;
+    if (ts === CACHE_TS && ROWS.length) return null;      // 数据没变，缓存直用
+    prog(silent ? "" : "更新数据中…");
+    return req("/mpayload", {}, 300000).then(function(d){
+      if (!d || !d.rows) throw new Error("云端数据还没就绪");
+      META = d.meta || {}; ROWS = d.rows || []; IMGS = d.imgs || {}; WEB = d.web || {};
+      CACHE_TS = ts;
+      idbSet("payload", { ts: ts, meta: META, rows: ROWS, imgs: IMGS, web: WEB });
+      renderCats(); renderList();
+    });
+  });
+  var p4 = p2.then(function(sts){
+    var cur = localStorage.getItem("stock_ts") || "";
+    var curStock = null;
+    try{ curStock = JSON.parse(localStorage.getItem("stockdata") || "null"); }catch(e){}
+    if (sts && sts === cur && curStock){ STOCK = curStock; return null; }
+    return req("/stockcloud", {}, 120000).then(function(s){
+      if (s && s.stock){ STOCK = s; localStorage.setItem("stockdata", JSON.stringify(s)); localStorage.setItem("stock_ts", sts); }
+    });
+  });
+  return Promise.all([p3, p4]).then(function(){
+    BUSY = false;
+    renderHeader(); renderList();
+  }).catch(function(e){
+    BUSY = false; renderHeader();
+    toast(String(e.message || e));
+  });
+}
+
+/* ---------- 头部信息 ---------- */
+function renderHeader(){
+  var built = (META && META.built) || "";
+  var stk = STOCK ? (STOCK.ts || "") : "";
+  $("hd_info").innerHTML = "数据 " + (built || "…") + "<br>库存 " + (stk || "…");
+}
+
+/* ---------- 品类 chips ---------- */
+function renderCats(){
+  var cnt = {};
+  for (var i = 0; i < ROWS.length; i++){
+    var c = ROWS[i].cat || "其他";
+    cnt[c] = (cnt[c] || 0) + 1;
+  }
+  var cats = Object.keys(cnt).sort(function(a, b){ return cnt[b] - cnt[a]; });
+  var el = $("cats");
+  el.innerHTML = "";
+  function mk(txt, val){
+    var b = document.createElement("button");
+    b.className = "chip" + (FILTER_CAT === val ? " on" : "");
+    b.textContent = txt;
+    b.addEventListener("click", function(){
+      FILTER_CAT = (FILTER_CAT === val) ? "" : val;
+      SHOW_N = 60; renderCats(); renderList();
+      $("list").scrollTop = 0;
+    });
+    el.appendChild(b);
+  }
+  mk("全部", "");
+  for (var i = 0; i < cats.length; i++) mk(cats[i] + " " + cnt[cats[i]], cats[i]);
+}
+
+/* ---------- 搜索/列表 ---------- */
+function matchRows(q, cat){
+  var nq = norm(q), out = [], pre = [];
+  for (var i = 0; i < ROWS.length; i++){
+    var it = ROWS[i];
+    if (cat && (it.cat || "其他") !== cat) continue;
+    if (!q){ out.push(it); continue; }
+    var nmo = norm(it.mo), nc = norm(it.c), nn = norm(it.n);
+    var hit = nmo.indexOf(nq) >= 0 || nc.indexOf(nq) >= 0 || nn.indexOf(nq) >= 0;
+    if (!hit) continue;
+    if (nmo.indexOf(nq) === 0 || nc.indexOf(nq) === 0) pre.push(it);
+    else out.push(it);
+  }
+  return pre.concat(out);
+}
+function thumbHTML(it){
+  var url = IMGS[it.c] || it.ximg || "";
+  if (url) return '<div class="thumb"><img loading="lazy" src="' + url + '" onerror="this.parentNode.textContent=\'' +
+                  (it.cat || "机") + '\'"></div>';
+  return '<div class="thumb">' + (it.cat || "机").slice(0, 1) + "</div>";
+}
+function stockTag(it){
+  var a = availOf(it);
+  if (a.free) return '<span class="tag stkf">不核库存</span>';
+  if (a.v === -2) return "";
+  if (a.v === -1) return '<span class="tag stk1">有货</span>';
+  if (a.v > 0) return '<span class="tag stk1">库存 ' + a.v + "</span>";
+  return '<span class="tag stk0">无库存</span>';
+}
+function priceHTML(it){
+  var h = "";
+  if (it.lp) h += '<span class="plp"><small>指导价 </small>' + it.lp + "</span>";
+  if (it.xp) h += '<span class="pxp">商城价 ' + it.xp + "</span>";
+  if (it.sub2 && it.sub2.p) h += '<span class="psub">换新补 ' + it.sub2.p + "</span>";
+  return h || '<span class="plp">—</span>';
+}
+function cardHTML(it){
+  var tags = "";
+  if ((it.k || "").indexOf("l") >= 0) tags += '<span class="tag l">滞销' + (it.lq ? " " + it.lq + "台" : "") + "</span>";
+  if ((it.k || "").indexOf("s") >= 0) tags += '<span class="tag s">样机' + (it.sq ? " " + it.sq + "台" : "") + "</span>";
+  if (it.nats) tags += '<span class="tag nat">样机全国发</span>';
+  if (it.natl) tags += '<span class="tag nat">滞销全国发</span>';
+  tags += stockTag(it);
+  return '<div class="card" data-c="' + it.c.replace(/"/g, "&quot;") + '">'
+       +   thumbHTML(it)
+       +   '<div class="cbody">'
+       +     '<div class="crow1"><span class="brand">' + (it.b || "—") + '</span><span class="cat">' + (it.cat || "") + "</span></div>"
+       +     '<div class="mo">' + (it.mo || it.c) + "</div>"
+       +     '<div class="nm">' + (it.n || "") + "</div>"
+       +     '<div class="tags">' + tags + "</div>"
+       +     '<div class="prow">' + priceHTML(it) + "</div>"
+       +   "</div>"
+       + "</div>";
+}
+function renderList(){
+  var q = $("q").value.trim();
+  var rows = matchRows(q, FILTER_CAT);
+  var el = $("list");
+  if (!ROWS.length){
+    el.innerHTML = '<div id="empty">还没有数据<br>下拉刷新或点右上角「刷新」</div>';
+    return;
+  }
+  if (!rows.length){
+    el.innerHTML = '<div id="empty">没搜到「' + q.replace(/</g, "&lt;") + '」<br>试试只输型号主体，如 100Z35</div>';
+    return;
+  }
+  var h = "";
+  for (var i = 0; i < rows.length && i < SHOW_N; i++) h += cardHTML(rows[i]);
+  if (rows.length > SHOW_N)
+    h += '<button class="more" id="btn_more">还有 ' + (rows.length - SHOW_N) + ' 台，点开更多</button>';
+  el.innerHTML = h;
+  var mb = $("btn_more");
+  if (mb) mb.addEventListener("click", function(){ SHOW_N += 60; renderList(); });
+  var cards = el.querySelectorAll(".card");
+  for (var j = 0; j < cards.length; j++){
+    (function(node){
+      node.addEventListener("click", function(){ openDetail(node.getAttribute("data-c")); });
+    })(cards[j]);
+  }
+}
+
+/* ---------- 详情 ---------- */
+function rowOf(c){
+  for (var i = 0; i < ROWS.length; i++) if (ROWS[i].c === c) return ROWS[i];
+  return null;
+}
+function fmtWt(wt){
+  if (!wt) return "";
+  var parts = [];
+  for (var k in wt) parts.push(k + " " + Math.round(wt[k]));
+  return parts.join(" / ");
+}
+function openDetail(c){
+  var it = rowOf(c);
+  if (!it) return;
+  $("d_title").textContent = it.mo || it.c;
+  var url = IMGS[it.c] || it.ximg || "";
+  var h = '<div class="dimg">' + (url ? '<img src="' + url + '">' : (it.cat || "机").slice(0, 1)) + "</div>";
+  h += '<div class="dtitle">' + (it.n || it.mo || "") + "</div>";
+  h += '<div class="dsub">' + (it.b || "") + " · " + (it.cat || "") + " · 型号 " + (it.mo || it.c) + "</div>";
+  h += '<div class="dprice">';
+  if (it.lp) h += '<div class="dp"><span class="v">' + it.lp + '</span><span class="k">指导价</span></div>';
+  if (it.xp) h += '<div class="dp"><span class="v" style="color:#0a7a4d">' + it.xp + '</span><span class="k">商城价</span></div>';
+  if (it.xyp) h += '<div class="dp"><span class="v" style="color:#1f2b45">' + it.xyp + '</span><span class="k">闲鱼参考</span></div>';
+  if (it.sub2 && it.sub2.p) h += '<div class="dp"><span class="v" style="color:#2e6be6">' + it.sub2.p + '</span><span class="k">以旧换新补贴</span></div>';
+  if (it.pt) h += '<div class="dp"><span class="v">' + it.pt + '</span><span class="k">采购价</span></div>';
+  h += "</div>";
+  var live = stockOf(it.mo, it.n, it.code);
+  var free = extStockFree(it);
+  h += '<div class="dgrid">';
+  if (free){
+    h += '<div class="drow"><span class="k">库存</span><span class="v good">不核库存（豁免货源）</span></div>';
+  } else if (live){
+    h += '<div class="drow"><span class="k">可用量</span><span class="v ' + (live.a > 0 ? "good" : "bad") + '">'
+       + Math.round(live.a) + "</span></div>";
+    h += '<div class="drow"><span class="k">现存量</span><span class="v">' + Math.round(live.q || 0) + "</span></div>";
+    var wt = fmtWt(live.wt);
+    if (wt) h += '<div class="drow"><span class="k">分仓</span><span class="v">' + wt + "</span></div>";
+  } else {
+    h += '<div class="drow"><span class="k">库存</span><span class="v bad">用友无此行（没货）</span></div>';
+  }
+  if (it.ship) h += '<div class="drow"><span class="k">发货地</span><span class="v">' + it.ship + "</span></div>";
+  if (it.sfrom) h += '<div class="drow"><span class="k">货源</span><span class="v">' + it.sfrom + "</span></div>";
+  if (it.natl || it.nats){
+    var nn = [];
+    if (it.natl) nn.push("滞销全国发");
+    if (it.nats) nn.push("样机全国发");
+    h += '<div class="drow"><span class="k">全国可发</span><span class="v good">' + nn.join("、") + "</span></div>";
+  }
+  if ((it.k || "").indexOf("l") >= 0)
+    h += '<div class="drow"><span class="k">滞销</span><span class="v">' + fmt(it.lq) + " 台" + (it.lpz ? " · " + it.lpz + " 元" : "") + (it.lb ? " · " + it.lb : "") + "</span></div>";
+  if ((it.k || "").indexOf("s") >= 0)
+    h += '<div class="drow"><span class="k">样机</span><span class="v">' + fmt(it.sq) + " 台" + (it.spz ? " · " + it.spz + " 元" : "") + (it.sb ? " · " + it.sb : "") + "</span></div>";
+  if (it.code) h += '<div class="drow"><span class="k">物料编码</span><span class="v">' + it.code + "</span></div>";
+  if (it.sub2 && it.sub2.c) h += '<div class="drow"><span class="k">补贴 69 码</span><span class="v">' + it.sub2.c + "</span></div>";
+  h += "</div>";
+  if (it.srcs && it.srcs.length){
+    h += '<div class="dsec"><div class="h">各货源报价</div>';
+    for (var i = 0; i < it.srcs.length; i++){
+      var s = it.srcs[i];
+      h += '<div class="srcrow"><span>' + (s.sfrom || "货源") + '</span><span>'
+         + (s.lpz ? "隆阳 " + s.lpz : "") + (s.spz ? (s.lpz ? " · " : "") + "样机 " + s.spz : "") + "</span></div>";
+    }
+    h += "</div>";
+  }
+  var web = WEB && WEB[it.c];
+  if (web) h += '<a id="btn_web" href="' + web + '" target="_blank" rel="noopener">打开官网详情页</a>';
+  $("dbody").innerHTML = h;
+  hide("v_main"); show("v_detail");
+  $("dbody").scrollTop = 0;
+}
+function closeDetail(){ hide("v_detail"); show("v_main"); }
+
+/* ---------- 登录 ---------- */
+function doLogin(){
+  var u = $("in_u").value.trim(), p = $("in_p").value;
+  if (!u || !p){ $("login_err").textContent = "账号和密码都要填"; return; }
+  $("btn_login").textContent = "登录中…";
+  $("login_err").textContent = "";
+  fetch(API + "/login", {
+    method: "POST", headers: UA, body: JSON.stringify({ u: u, p: p })
+  }).then(function(r){ return r.json(); }).then(function(j){
+    $("btn_login").textContent = "登 录";
+    if (j && j.ok){
+      saveToken(j.token, u);
+      boot();
+    } else {
+      $("login_err").textContent = (j && j.msg) || "登录失败";
+    }
+  }).catch(function(){
+    $("btn_login").textContent = "登 录";
+    $("login_err").textContent = "连不上云端，检查网络后重试";
+  });
+}
+
+/* ---------- 事件绑定 ---------- */
+$("btn_login").addEventListener("click", doLogin);
+$("in_p").addEventListener("keydown", function(e){ if (e.key === "Enter") doLogin(); });
+$("in_u").addEventListener("keydown", function(e){ if (e.key === "Enter") $("in_p").focus(); });
+$("btn_search").addEventListener("click", function(){ SHOW_N = 60; renderList(); $("list").scrollTop = 0; });
+$("q").addEventListener("keydown", function(e){ if (e.key === "Enter"){ SHOW_N = 60; renderList(); $("list").scrollTop = 0; $("q").blur(); } });
+$("q").addEventListener("input", function(){ SHOW_N = 60; renderList(); });
+$("btn_refresh").addEventListener("click", function(){ toast("刷新中…"); refreshAll(false); });
+$("btn_logout").addEventListener("click", function(){
+  if (!confirm("退出登录？")) return;
+  saveToken("", ""); enterLogin();
+});
+$("btn_back").addEventListener("click", closeDetail);
+document.addEventListener("visibilitychange", function(){
+  if (!document.hidden && TOKEN && !$("v_main").classList.contains("hide")) refreshAll(true);
+});
+
+boot();
 </script>
 </body>
 </html>
