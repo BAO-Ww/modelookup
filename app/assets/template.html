@@ -4575,6 +4575,8 @@ function openKitView(k){
   function load(force){
     wrap.querySelector('#kv_msg').textContent = '正在抓参数/机图并渲染…（首次约 1-2 分钟）';
     wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#8a929e;font-size:14px;line-height:2">正在生成套图：爬虫 → 官网 → 欣盛 抓参数与机图，再渲染四张 1080×1080…<br>第一次跑这个型号要 1-2 分钟，生成过一次秒开。</div>';
+    var tried = 0;
+    (function go(){
     fetch('/api/kitset?model=' + encodeURIComponent(k) + (force ? '&force=1' : '') + '&bg=1')
       .then(function(r){ return r.json(); })
       .then(function(j){
@@ -4593,9 +4595,12 @@ function openKitView(k){
         });
       })
       .catch(function(err){
+        /* Mac 上偶发 Load failed（本地服务刚起/瞬时抖动）：自动重试一次再认输 */
+        if (tried++ < 1){ setTimeout(go, 1500); return; }
         wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#b42318;font-size:14px">生成失败：' + esc(String(err.message || err)) + '</div>';
         wrap.querySelector('#kv_msg').textContent = '';
       });
+    })();
   }
   wrap.querySelector('#kv_force').addEventListener('click', function(){ load(true); });
   load(false);
@@ -4712,13 +4717,13 @@ function openSpotView(k){
         if (!j || !j.ok){ throw new Error((j && j.msg) || '素材准备失败'); }
         if (j.started){
           pollPub(function(jb){
-            if (!jb.ok){ throw_(); }
+            if (!jb.ok){ throw_(jb); }
             else startGen();
           });
         } else startGen();
       })
       .catch(function(e){ genning = false; msg(''); alert('聚光图生成失败：' + (e.message || e)); });
-    function throw_(){ genning = false; msg(''); alert('聚光图生成失败：素材抓取没成功'); }
+    function throw_(jb){ genning = false; msg(''); alert('聚光图生成失败：素材抓取没成功' + (jb && jb.err ? '（' + jb.err + '）' : '')); }
     function startGen(){
       msg('已开始，等 AI 出图…（首次 1-2 分钟）');
       fetch('/api/pubgen', {method: 'POST', headers: {'Content-Type': 'application/json'},
