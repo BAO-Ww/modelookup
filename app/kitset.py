@@ -16,7 +16,7 @@ import re
 import urllib.parse
 from collections import Counter
 
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
 from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch
 from normalize import norm_model
@@ -148,21 +148,29 @@ def _autocrop_white(im, margin=16):
     return im.crop((l, t, r, b))
 
 
-def _paste_product(C, img, cx, bottom_y, target_h, max_w=1080):
+def _crop_prod(img):
+    """机图裁边成紧贴内容的 RGBA（透明 bbox / 白底转 alpha 再裁）。
+    img1/img2 的定位预算必须用这份裁后尺寸——原图带透明边距时按原图算预算高偏小，
+    机器实际贴出来上沿顶进「核心参数」标题（2026-10-28 实锤）。"""
     rgba = img.convert("RGBA")
     alo, _ = rgba.split()[3].getextrema()
     if alo < 250:
-        img = rgba.crop(rgba.split()[3].getbbox())
+        out = rgba.crop(rgba.split()[3].getbbox())
     else:
-        img = _white_to_alpha(_autocrop_white(rgba.convert("RGB")))
-        bbox = img.split()[3].getbbox()
+        out = _white_to_alpha(_autocrop_white(rgba.convert("RGB")))
+        bbox = out.split()[3].getbbox()
         if bbox:
-            img = img.crop(bbox)
+            out = out.crop(bbox)
+    return out
+
+
+def _paste_product(C, img, cx, bottom_y, target_h, max_w=1080):
+    img = _crop_prod(img)
     w, h = img.size
     if h < 10:
         return
     # 高度卡 target_h、宽度卡 max_w（电视等 16:9 横图按高放会糊满整卡，2026-10-22 实锤）
-    sc = min(target_h / h, max_w / w)
+    sc = min(target_h / float(h), max_w / float(w))
     im2 = img.resize((max(1, int(w * sc)), max(1, int(h * sc))), Image.LANCZOS)
     C.paste(im2, (int(cx - im2.size[0] / 2), int(bottom_y - im2.size[1])), im2)
 
@@ -188,6 +196,8 @@ def _render_img1(cfg, prod, out):
     th = cfg.get("img1_h", 860)
     # 电视等 16:9 横图实际渲染高远小于 th，按 th 定位会沉底/偏移——用实际高定位（2026-10-22）
     # 大方块（洗碗机等高宽都大的深色机身）再整体缩到 680 高，别顶页眉别压字（CWY15 实锤）
+    # 预算用裁完边的内容尺寸（2026-10-28）：原图透明边距会让预算高偏小、机器顶到页眉
+    prod = _crop_prod(prod)
     try:
         _pw, _ph = prod.size
         sc = min(th / float(_ph), 960.0 / _pw)
@@ -234,7 +244,9 @@ def _render_img2(cfg, prod, out):
     d = ImageDraw.Draw(C)
     _header(d, "核 心 参 数")
     th2 = cfg.get("img2_h", 640)
-    # 横图实际高小，按 th2 定位会沉到带底——用实际高在 250~850 带内垂直居中（2026-10-22 用户实锤）
+    # 定位预算用裁完边的内容尺寸（2026-10-28 实锤）：原图透明边距大时预算高偏小，
+    # 机器实际贴出来上沿顶进「核心参数」标题——先裁再算，所见即所得
+    prod = _crop_prod(prod)
     try:
         _pw2, _ph2 = prod.size
         h2_act = _ph2 * min(th2 / float(_ph2), 440.0 / _pw2)
@@ -441,11 +453,46 @@ def _label_size_drawing(im2, wmm, hmm, dmm):
     return im
 
 
-def _render_img4(cfg, out):
+def _sketch_rgba(path, color=(28, 30, 34)):
+    """机图 → 线稿 RGBA（2026-10-28 用户令「没有尺寸的就画一个」）：
+    透明抠图 = alpha 轮廓实边 + 实心区内部灰阶边缘（弱化 45%）当细节线；
+    白底图 = 整图 FIND_EDGES。只描形，绝不编尺寸数字。失败返回 None。
+    color=线条颜色：聚光深底传浅色 (238,242,248)，蓝底白底传深色 (28,30,34)。"""
+    try:
+        im = Image.open(path).convert("RGBA")
+        a = im.getchannel("A")
+        lo, _ = a.getextrema()
+        if lo < 245:
+            bb = a.getbbox()
+            if bb:
+                im = im.crop(bb)
+                a = im.getchannel("A")
+            er = a.filter(ImageFilter.MinFilter(5))
+            outline = ImageChops.subtract(a, er)
+            rgb = Image.alpha_composite(Image.new("RGBA", im.size, (255, 255, 255, 255)), im).convert("L")
+            ie = rgb.filter(ImageFilter.FIND_EDGES).point(lambda v: min(255, int(v * 1.6)))
+            ie = ImageChops.multiply(ie, er)              # 只留机器内部的细节边
+            alpha = ImageChops.lighter(outline, ie.point(lambda v: v * 45 // 100))
+        else:
+            rgb = im.convert("L")
+            bb = Image.eval(rgb, lambda v: 255 - v).getbbox()
+            if bb:
+                rgb = rgb.crop(bb)
+            alpha = rgb.filter(ImageFilter.FIND_EDGES).point(lambda v: min(255, int(v * 1.8)))
+        sk = Image.new("RGBA", alpha.size, tuple(color) + (0,))
+        sk.putalpha(alpha)
+        return sk
+    except Exception:
+        return None
+
+
+def _render_img4(cfg, out, prod=None):
     C = Image.new("RGB", (1080, 1080), (255, 255, 255))
     d = ImageDraw.Draw(C)
     if not cfg.get("sizeimg"):
-        _header(d, "产 品 尺 寸")   # 官方尺寸图铺满整卡时不需要页眉
+        # 无官方线稿的两个兜底分支（手绘线框/机图线稿）也按聚光版式：标题居中+金短线
+        d.text((540, 96), "产 品 尺 寸", font=_font(F_BOLD, 50), fill=INK, anchor="mm")
+        d.rounded_rectangle([500, 136, 580, 142], 3, fill=(212, 175, 108))
     if cfg.get("sizeimg"):
         # 纯白版式（2026-10-28 用户拍板样张）：顶部「产品尺寸」+金线，官方线稿
         # 840×620 双限居中，底部品牌型号 + 宽高深一行——「同时支持」胶囊带删除
@@ -514,19 +561,19 @@ def _render_img4(cfg, out):
             dim_line(px + pw + 40, py, px + pw + 40, py + ph, str(D), vertical=True)
             d.text((px + pw // 2, py + ph + 40), "俯视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
     else:
-        # 无官方尺寸图、参数里也没真实尺寸：不画不标（瞎编数字=造假），一句话兜底
-        d.text((540, 500), "外形尺寸以实物为准", font=_font(F_LIGHT, 36), fill=GRAY, anchor="mm")
-        d.text((540, 560), "可咨询客服获取详细规格", font=_font(F_LIGHT, 26), fill=LGRAY, anchor="mm")
-    d.rectangle([60, 880, 1020, 881], fill=LINE)
-    d.text((60, 916), cfg["feat_label"], font=_font(F_LIGHT, 25), fill=GRAY)
-    x, y = 60, 958
-    f_p = _font(F_REG, 23)
-    for s in cfg["feature_pills"]:
-        w2 = _tw(d, s, f_p) + 28
-        if x + w2 > 1020:
-            x, y = 60, y + 52
-        _pill_left(d, x, y, s, f_p)
-        x += w2 + 12
+        # 无官方尺寸图、参数里也没真实尺寸（2026-10-28 用户令「没有尺寸的就画一个」）：
+        # 机图描深色线稿占主位（版式同聚光、纯白底），绝不编数字，底部一句话兜底
+        sk = _sketch_rgba(prod, color=(28, 30, 34)) if prod else None
+        if sk is not None:
+            sc4 = min(840.0 / max(1, sk.width), 620.0 / max(1, sk.height))
+            tw4 = max(1, int(sk.width * sc4))
+            th4 = max(1, int(sk.height * sc4))
+            sk = sk.resize((tw4, th4), Image.LANCZOS)
+            C.paste(sk, (int(540 - tw4 / 2), 180 + max(0, int((640 - th4) / 2))), sk)
+        d.text((540, 918), "%s  %s" % (cfg.get("brand", ""), cfg.get("model", "")),
+               font=_font(F_BOLD, 30), fill=INK, anchor="mm")
+        d.text((540, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格",
+               font=_font(F_REG, 25), fill=GRAY, anchor="mm")
     C.save(out, quality=95)
 
 
@@ -642,6 +689,17 @@ def _gather_info(model, log):
                         props.append((str(k), str(v)))
         if props:
             info["props"] = props
+    # 官网参数并集（2026-10-28 用户令）：pubwork/欣盛先到的 props 常缺「尺寸」键
+    # （EB100Z35Pro2 官网明摆着 尺寸(宽*高*深)mm=550*1030*570 却没进 props 实锤）——
+    # 官网命中的键追加到 props 尾部、不动已有顺序；_parse_dims 按键名找尺寸，补上即出真尺寸
+    if (data or {}).get("groups") and info.get("props") is not None:
+        _have = {str(k).strip() for k, _ in (info.get("props") or [])}
+        for _g, kv in (data.get("groups") or []):
+            for k, v in (kv or []):
+                ks, vs = str(k).strip(), str(v).strip()
+                if ks and vs and ks not in _have:
+                    info["props"].append((ks, vs))
+                    _have.add(ks)
     if not (info.get("title") or ""):
         for src in (data, xs):
             if src and src.get("pname"):
@@ -947,6 +1005,18 @@ def _hunt_sizeimg_page(page_url, sizeimg, log, skip_urls=(), prod_path=None):
     except Exception:
         return False
     hints, generic = [], []
+    # 规格参数区的官方规格图（class=js_specification_img 的 data-src）是官网尺寸图的固定位置，
+    # 直接置顶——EB100Z35Pro2 实锤：它是 JPG，被下面「PNG 优先」排序压到 19 张之后，
+    # generic 12 次预算永远轮不到，导致有官方尺寸图却走了手绘兜底（2026-10-28 用户实锤）。
+    for sp in re.finditer(r'<img[^>]*js_specification_img[^>]*>', html, re.I):
+        sm = (re.search(r'data-src="([^"]+?\.(?:png|jpe?g))"', sp.group(0), re.I)
+              or re.search(r'src="([^"]+?\.(?:png|jpe?g))"', sp.group(0), re.I))
+        if sm:
+            u = sm.group(1)
+            if u.startswith("//"):
+                u = "https:" + u
+            if u not in hints:
+                hints.append(u)
     for m in re.finditer(r'(?:data-src|srcset|src)="([^"]+?\.(?:png|jpe?g))"', html, re.I):
         u = m.group(1)
         if u.startswith("//"):
@@ -1259,32 +1329,46 @@ _KNOWN_DIMS = {
 
 
 def _parse_dims(pd):
-    """从 props 解析外形尺寸 -> (宽, 高, 深)。键里标了「深*宽*高」顺序就按标签对号入座
-    （如 外形尺寸(深*宽*高)mm = 590*565*1560），没标才按大小猜（最大=高、次大=宽、最小=深）。"""
-    for k, v in pd.items():
-        ks, vs = str(k), str(v)
+    """从 props 解析外形尺寸 -> (宽, 高, 深)。
+    ① 键里标了顺序（尺寸(宽*高*深)mm / 外形尺寸(深*宽*高)mm）→ 按标签对号入座；
+    ② 没标签的「尺寸/外形尺寸」才按大小猜（最大=高、次大=宽、最小=深）。
+    EB100Z35Pro2 实锤（2026-10-28）：官网同时给「尺寸」和「尺寸(宽*高*深)mm」同值键，
+    先撞无标签键会把宽深对调（深 570 > 宽 550）——必须让带标签的键优先。"""
+    items = list((pd or {}).items())
+    def _nums(vs):
+        ns = re.findall(r"\d{3,4}(?:\.\d+)?", str(vs))
+        return [int(float(x)) for x in ns[-3:]] if len(ns) >= 3 else None
+    for k, v in items:                  # ① 带顺序标签：对号入座
+        ks = str(k)
+        if ("尺寸" not in ks and "外形" not in ks):
+            continue
+        if not ("深" in ks and "宽" in ks and "高" in ks):
+            continue
+        nums = _nums(v)
+        if not nums:
+            continue
+        order = []
+        for ch, idx in (("深", 0), ("宽", 1), ("高", 2)):
+            order.append((ks.find(ch), idx))
+        order.sort()
+        vals = [None, None, None]       # [宽, 高, 深]
+        for pos, (_fpos, idx) in enumerate(order):
+            nm = nums[pos]
+            if idx == 0:
+                vals[2] = nm            # 深
+            elif idx == 1:
+                vals[0] = nm            # 宽
+            else:
+                vals[1] = nm            # 高
+        if all(vals):
+            return tuple(vals)
+    for k, v in items:                  # ② 无标签：按大小猜
+        ks = str(k)
         if "尺寸" not in ks and "外形" not in ks:
             continue
-        nums = re.findall(r"\d{3,4}(?:\.\d+)?", vs)
-        if len(nums) < 3:
+        nums = _nums(v)
+        if not nums:
             continue
-        nums = [int(float(x)) for x in nums[-3:]]
-        if ("深" in ks and "宽" in ks and "高" in ks):
-            order = []
-            for ch, idx in (("深", 0), ("宽", 1), ("高", 2)):
-                order.append((ks.find(ch), idx))
-            order.sort()
-            vals = [None, None, None]   # [宽, 高, 深]
-            for pos, (_fpos, idx) in enumerate(order):
-                nm = nums[pos]
-                if idx == 0:
-                    vals[2] = nm        # 深
-                elif idx == 1:
-                    vals[0] = nm        # 宽
-                else:
-                    vals[1] = nm        # 高
-            if all(vals):
-                return tuple(vals)
         ns = sorted(nums, reverse=True)
         return ns[1], ns[0], ns[2]      # 兜底：宽=次大, 高=最大, 深=最小
     return None
@@ -1942,7 +2026,7 @@ def generate(model, force=0, log=None):
     _render_img1(cfg, Image.open(prod), os.path.join(mdir, "img_1.jpg"))
     _render_img2(cfg, Image.open(prod), os.path.join(mdir, "img_2.jpg"))
     _render_img3(cfg, points, os.path.join(mdir, "img_3.jpg"))
-    _render_img4(cfg, os.path.join(mdir, "img_4.jpg"))
+    _render_img4(cfg, os.path.join(mdir, "img_4.jpg"), prod)
     res = {"ok": True, "cached": False, "model": cfg["model"], "name": cfg["series"] + " " + cfg["model"],
            "titles": titles, "points": points, "aftersale": aftersale,
            "params": dict(cfg["params_rows"]), "src": cfg["url"],

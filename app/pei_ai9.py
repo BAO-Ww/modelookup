@@ -17,7 +17,7 @@ AI9张 · 通用版（按当前型号生成，深灰高级风）
 import os
 import json
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFilter, ImageStat
+from PIL import Image, ImageDraw, ImageFilter, ImageStat, ImageChops
 
 try:
     import pei_core as core
@@ -770,7 +770,17 @@ def img4(front, out):                 # 核心参数
     return save(cv, out / "4_核心参数.jpg")
 
 
-def img_size(info, out):              # 聚光·尺寸图：深色同色系（2026-10-28 用户令）
+def _sketch_rgba(path):
+    """机图 → 浅色线稿 RGBA（聚光深底用）；实现统一收在 kitset._sketch_rgba（带颜色参数），
+    这里只传浅色。失败返回 None。"""
+    try:
+        import kitset
+        return kitset._sketch_rgba(path, color=(238, 242, 248))
+    except Exception:
+        return None
+
+
+def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（2026-10-28 用户令）
     """聚光第 4 张：产品尺寸——底图跟首图/机器参数同款暗色聚光（prep_bg("a")），
     官方尺寸线稿垫白色圆角卡居中；**不带蓝底那排「同时支持」卖点胶囊**。
     没官方图 → 暗底手绘线框标真实尺寸；连尺寸都没有 → 一句话兜底（绝不瞎编）。"""
@@ -785,6 +795,13 @@ def img_size(info, out):              # 聚光·尺寸图：深色同色系（20
         import kitset
         kdir = kitset.model_dir((P.get('model') or '').strip())
         _si = os.path.join(kdir, "sizeimg.jpg")
+        # 本地没有官方尺寸图时先去官网详情页定向抓一次（2026-10-28 用户实锤：
+        # 官网规格参数区就有 js_specification_img 官方线稿，聚光不能只等蓝底跑过才有）
+        if (not os.path.isfile(_si)) and (info or {}).get("url"):
+            try:
+                kitset._hunt_sizeimg_page(info["url"], _si, lambda s: None)
+            except Exception:
+                pass
         ai_dims = None
         if os.path.isfile(_si):
             try:
@@ -846,8 +863,17 @@ def img_size(info, out):              # 聚光·尺寸图：深色同色系（20
         _dl(fx + fw + 46, fy, fx + fw + 46, fy + fh, "%s mm" % Hd, vert=True)
         T(dr, (W // 2, fy + fh + 72), "深 %s mm · 外形尺寸以实物为准" % Dd, 27, TX2, "mm")
         return save(cv, dst)
-    T(dr, (W // 2, 512), "外形尺寸以实物为准", 34, TX2, "mm")
-    T(dr, (W // 2, 572), "可咨询客服获取详细规格", 24, TX3, "mm")
+    # 没官方线稿、连尺寸数字都没有（绝不瞎编数字）：拿机图描一张浅色线稿占主位，
+    # 底部品牌型号+一句话兜底（2026-10-28 用户令「没有尺寸的你就画一个」）
+    sk = _sketch_rgba(front) if front else None
+    if sk is not None:
+        sc = min(840 / max(1, sk.width), 620 / max(1, sk.height))
+        tw = max(1, int(sk.width * sc))
+        th = max(1, int(sk.height * sc))
+        sk = sk.resize((tw, th), Image.LANCZOS)
+        cv.alpha_composite(sk, ((W - tw) // 2, 170 + max(0, (600 - th) // 2)))
+    T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, TX1, "mm")
+    T(dr, (W // 2, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格", 24, TX2, "mm")
     return save(cv, dst)
 
 
@@ -1600,7 +1626,7 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
             (1, "首图", lambda: img1(front, out)),
             (2, "机器展示", lambda: img2(front, out)),
             (4, "机器参数", lambda: img4(front, out)),
-            (5, "尺寸图", lambda: img_size(info, out)),
+            (5, "尺寸图", lambda: img_size(info, front, out)),
         ]
         slots = [s for s, _, _ in STEPS]
     else:
