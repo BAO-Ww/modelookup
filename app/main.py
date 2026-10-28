@@ -445,6 +445,27 @@ def _check():
         ok = False
         out.append("本地服务 ❌ %r" % (e,))
 
+    # 功能模块 import 冒烟（2026-10-29）：Mac 上蓝底/聚光全炸而 CI 全绿——
+    # --check 此前不碰这些模块，缺模块/坏依赖要到用户手里才炸。任一 import 失败=自检失败
+    try:
+        import importlib
+        _mods = ("net", "cloud", "jobman", "copywriter", "pei_core", "pei_hero",
+                 "pei_xdjdy", "pei_ai9", "kitset", "pubwork")
+        _bad = []
+        for _m in _mods:
+            try:
+                importlib.import_module(_m)
+            except Exception as _e:
+                _bad.append("%s(%r)" % (_m, _e))
+        out.append("功能模块 import 冒烟 = %d/%d %s"
+                   % (len(_mods) - len(_bad), len(_mods),
+                      "✅" if not _bad else "❌ " + "、".join(_bad)))
+        if _bad:
+            ok = False
+    except Exception as e:
+        ok = False
+        out.append("模块冒烟 ❌ %r" % (e,))
+
     if is_frozen():
         mb = os.path.getsize(sys.executable) / 1048576.0
         out.append("exe 体积 = %.2f MB" % mb)

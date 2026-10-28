@@ -123,6 +123,19 @@ def _job_end(ok, err=""):
         JOB["pct"] = 100 if ok else JOB["pct"]
         JOB["ok"] = bool(ok)
         JOB["err"] = err or ""
+    if not ok:
+        # 2026-10-29 Mac 实锤：job 失败只进 job 状态，前端 throw_() 又把 err 吞了，
+        # app.log 里啥都没有——远程完全没法查。失败必记日志 + 立即上报诊断（异步不挡）。
+        try:
+            _logf()("套图任务失败：%s" % (err or "未知错误"))
+        except Exception:
+            pass
+        try:
+            import cloud
+            threading.Thread(target=cloud.client_log_upload,
+                             args=("job:fail " + str(err)[:80],), daemon=True).start()
+        except Exception:
+            pass
 
 
 def job_state():

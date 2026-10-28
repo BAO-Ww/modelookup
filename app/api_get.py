@@ -112,11 +112,24 @@ class ApiGetMixin:
                 import jobman
 
                 def _do():
-                    res = kitset.generate(model, force,
-                                          log=lambda s: state.LOG.append("[蓝底] " + s))
-                    res["dir"] = kitset.model_dir(model)
-                    return res
-                if not jobman.submit("kitset:" + model, _do):
+                    try:
+                        res = kitset.generate(model, force,
+                                              log=lambda s: state.LOG.append("[蓝底] " + s))
+                        res["dir"] = kitset.model_dir(model)
+                        return res
+                    except Exception as e:
+                        # 2026-10-29 Mac 实锤：job 里炸了 app.log 啥都没有，远程没法查——
+                        # 失败必记日志 + 上报诊断，再把异常抛回给 jobman 记进 job 状态
+                        try:
+                            state.LOG.append("[蓝底] 生成失败：%r" % e)
+                            import cloud
+                            threading.Thread(target=cloud.client_log_upload,
+                                             args=("kitset:fail %s" % model,), daemon=True).start()
+                        except Exception:
+                            pass
+                        raise
+                if not jobman.submit("kitset:" + model, _do,
+                                     _log=lambda s: state.LOG.append("[蓝底] " + s)):
                     self._send(200, json.dumps({"ok": False, "msg": "该型号已在生成中，等一下"},
                                                ensure_ascii=False))
                     return
