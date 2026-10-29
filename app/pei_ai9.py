@@ -15,6 +15,7 @@ AI9张 · 通用版（按当前型号生成，深灰高级风）
 依赖：同目录 core（用于字体 core.font）
 """
 import os
+import re
 import json
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageStat, ImageChops
@@ -734,8 +735,17 @@ def img4(front, out):                 # 核心参数
         y = 236
         for k, v in _spot_param_items()[:6]:
             T(dr, (76, y), k, 23, "#969eaa", "lm")
-            _s = 34 if dr.textlength(str(v), font=font(34, True)) <= 460 else 26
-            T(dr, (76, y + 36), str(v), _s, "#ffffff", "lm")
+            # 长值循环缩字号到装得下（2026-10-29 LTD-575WDS9U1 气候类型 25 字实锤：
+            # 只缩一档 34→26 仍溢出压线压图）；16px 仍装不下就截断加省略号
+            _s = 34
+            _sv = str(v)
+            while _s > 16 and dr.textlength(_sv, font=font(_s, True)) > 460:
+                _s -= 3
+            if dr.textlength(_sv, font=font(16, True)) > 460:
+                while _sv and dr.textlength(_sv + "…", font=font(16, True)) > 460:
+                    _sv = _sv[:-1]
+                _sv += "…"
+            T(dr, (76, y + 36), _sv, _s, "#ffffff", "lm")
             dr.line([(76, y + 96), (520, y + 96)], fill=(255, 255, 255, 36), width=1)
             y += 126
         T(dr, (76, 1012), P['model'], 24, "#78808c", "lm")
@@ -797,9 +807,12 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
         _si = os.path.join(kdir, "sizeimg.jpg")
         # 本地没有官方尺寸图时先去官网详情页定向抓一次（2026-10-28 用户实锤：
         # 官网规格参数区就有 js_specification_img 官方线稿，聚光不能只等蓝底跑过才有）
-        if (not os.path.isfile(_si)) and (info or {}).get("url"):
+        if (not os.path.isfile(_si)) and (info or {}).get("url") \
+                and not kitset._neg_get(kdir, "sizeimg_official"):
             try:
                 kitset._hunt_sizeimg_page(info["url"], _si, lambda s: None)
+                if not os.path.isfile(_si):
+                    kitset._neg_set(kdir, "sizeimg_official")   # 试过没有，7 天内不再跑
             except Exception:
                 pass
         ai_dims = None
@@ -814,11 +827,31 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
             info, _ = kitset._ensure_dims(info, kdir, None, lambda s: None)
         cfg, _, _, _ = kitset._build_cfg(info, mdir=kdir, ai_dims=ai_dims)
         si = cfg.get("sizeimg")
+        # ZOL 图集兜底（2026-10-29 用户令「ZOL 是蓝底跟聚光的最后兜底」）：
+        # 聚光此前只到官网详情页，官网没图直接手绘——漏了 ZOL 这层。补上：
+        # 官网没有 → ZOL 图集（AI 对号锁，对不上宁手绘）→ 手绘。
+        if not si and cfg.get("dims"):
+            if kitset._neg_get(kdir, "sizeimg_zol"):
+                pass    # 中关村图集试过没有（7 天内不重复找）
+            else:
+                try:
+                    if kitset._zol_hunt_sizeimg(P.get('model') or '', cfg["dims"], _si, lambda s: None):
+                        si = _si
+                    else:
+                        kitset._neg_set(kdir, "sizeimg_zol")    # 试过没有，7 天内不再跑
+                except Exception:
+                    pass
         pills = cfg.get("size_pills") or []
         dims = cfg.get("dims")
     except Exception:
         si, pills, dims = None, [], None
     if si:
+        # 时间线对账（2026-10-29 用户令「官网有的必须用官网的」）：本次聚光拿到的官方
+        # 尺寸图可能比蓝底 img_4 新（蓝底先跑手绘落盘实锤）——自动重出蓝底参数图
+        try:
+            kitset.sync_blue4_size(P.get('model') or '', info, lambda s: None)
+        except Exception:
+            pass
         # 官方线稿反白铺深底（2026-10-28 样张定稿 D4）：黑线变浅白线、白底变透明，
         # 色系跟前三张统一；细线（横向尺寸线）加增益别反白时丢线；底部品牌型号+宽高深。
         try:
@@ -866,6 +899,24 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
         _dl(fx, fy - 46, fx + fw, fy - 46, "%s mm" % Wd)
         _dl(fx + fw + 46, fy, fx + fw + 46, fy + fh, "%s mm" % Hd, vert=True)
         T(dr, (W // 2, fy + fh + 72), "深 %s mm · 外形尺寸以实物为准" % Dd, 27, TX2, "mm")
+        # 2026-10-29 用户令「官网那么多参数又不会写」：手绘卡别光秃秃仨数字，
+        # 底部对齐官方线稿分支版式（918 品牌型号 / 972 真参数行，只挑真参数绝不编）
+        _kv = []
+        try:
+            for k, v in ((info or {}).get("props") or []):
+                k, v = str(k).strip(), str(v).strip()
+                if len(_kv) >= 3:
+                    break
+                if (0 < len(v) <= 14 and not any(w in v for w in ("http", "，", "、"))
+                        and any(w in k for w in ("容量", "能效", "电机", "变频", "热负荷", "匹数", "洗涤", "烘干"))):
+                    _kv.append("%s %s" % (k, v))
+        except Exception:
+            _kv = []
+        T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, TX1, "mm")
+        if _kv:
+            _pt = " · ".join(_kv)
+            _ps = 23 if dr.textlength(_pt, font=font(23, True)) <= W - 120 else 19
+            T(dr, (W // 2, 972), _pt, _ps, "#aab2be", "mm")
         return save(cv, dst)
     # 没官方线稿、连尺寸数字都没有（绝不瞎编数字）：拿机图描一张浅色线稿占主位，
     # 底部品牌型号+一句话兜底（2026-10-28 用户令「没有尺寸的你就画一个」）
@@ -877,7 +928,14 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
         sk = sk.resize((tw, th), Image.LANCZOS)
         cv.alpha_composite(sk, ((W - tw) // 2, 170 + max(0, (600 - th) // 2)))
     T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, TX1, "mm")
-    T(dr, (W // 2, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格", 24, TX2, "mm")
+    # 灶具式两段真数据上卡（2026-10-29 JZT-QHA7BE9 实锤：官网有 台面/挖孔 却只落一句空话）
+    _stove_pills = [p for p in (pills or []) if re.search(r"\d", str(p))]
+    if _stove_pills:
+        _pt = " · ".join(_stove_pills)
+        _ps = 26 if dr.textlength(_pt, font=font(26, True)) <= W - 120 else 21
+        T(dr, (W // 2, 972), _pt, _ps, "#aab2be", "mm")
+    else:
+        T(dr, (W // 2, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格", 24, TX2, "mm")
     return save(cv, dst)
 
 

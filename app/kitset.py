@@ -187,7 +187,7 @@ def _header(d, cn):
     _spaced(d, (60, 116), cn, _font(F_REG, 34), INK, tracking=10)
 
 
-def _render_img1(cfg, prod, out):
+def _render_img1(cfg, prod, out, safe=False):
     C = Image.new("RGB", (1080, 1080), (255, 255, 255))
     d = ImageDraw.Draw(C)
     _spaced(d, (60, 88), cfg.get("brand_en", "HAIER"), _font(F_LIGHT, 30), INK, tracking=14)
@@ -211,7 +211,9 @@ def _render_img1(cfg, prod, out):
     _paste_product(C, prod, 540, bottom, h_act, max_w=960)
     ov = Image.new("RGBA", C.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(ov)
-    f1, f2 = _font(F_BOLD, 58), _font(F_BOLD, 50)
+    # safe=AI 复检保守档（2026-10-29 用户令「蓝底也要接上」）：标题胶囊/底部行字号
+    # 各缩一档，胶囊带自动变矮，压字/截断类问题重渲即解
+    f1, f2 = _font(F_BOLD, 52 if safe else 58), _font(F_BOLD, 45 if safe else 50)
     def _ph(f):
         a, dsc = f.getmetrics()
         return a + dsc + 40
@@ -235,11 +237,11 @@ def _render_img1(cfg, prod, out):
         y0 += h + 18
     C = Image.alpha_composite(C.convert("RGBA"), ov).convert("RGB")
     d = ImageDraw.Draw(C)
-    d.text((540, 962), cfg["features_line"], font=_font(F_REG, 31), fill=INK, anchor="ma")
+    d.text((540, 962), cfg["features_line"], font=_font(F_REG, 27 if safe else 31), fill=INK, anchor="ma")
     C.save(out, quality=95)
 
 
-def _render_img2(cfg, prod, out):
+def _render_img2(cfg, prod, out, safe=False):
     C = Image.new("RGB", (1080, 1080), (255, 255, 255))
     d = ImageDraw.Draw(C)
     _header(d, "核 心 参 数")
@@ -256,18 +258,21 @@ def _render_img2(cfg, prod, out):
     d.ellipse([270 - 150, bottom2 - 24, 270 + 150, bottom2 + 6], fill=(243, 244, 246))
     _paste_product(C, prod, 270, bottom2, th2, max_w=440)
     x0, y0, cw = 520, 246, 500
+    _fk = 23 if safe else 26
+    _fv = 20 if safe else 23
     for i, (k, v) in enumerate(cfg["params_rows"]):
         y = y0 + i * 74
-        d.text((x0, y + 26), k, font=_font(F_LIGHT, 26), fill=GRAY)
-        _pill(d, x0 + cw, y + 9, v, _font(F_REG, 23))
+        d.text((x0, y + 26), k, font=_font(F_LIGHT, _fk), fill=GRAY)
+        _pill(d, x0 + cw, y + 9, v, _font(F_REG, _fv))
         d.rectangle([x0, y + 62, x0 + cw, y + 63], fill=LINE)
     d.text((60, 900), cfg["size_label"], font=_font(F_LIGHT, 27), fill=GRAY)
     sp2 = cfg.get("size_pills") or []
+    _fp = _font(F_REG, 21 if safe else 23)
     if sp2:
-        w2 = _pill(d, 1020, 894, sp2[1], _font(F_REG, 23), h=42)
-        _pill(d, 1020 - w2 - 12, 894, sp2[0], _font(F_REG, 23), h=42)
+        w2 = _pill(d, 1020, 894, sp2[1], _fp, h=42)
+        _pill(d, 1020 - w2 - 12, 894, sp2[0], _fp, h=42)
     else:
-        _pill(d, 1020, 894, "以实物为准", _font(F_REG, 23), h=42)
+        _pill(d, 1020, 894, "以实物为准", _fp, h=42)
     d.rectangle([60, 960, 1020, 961], fill=LINE)
     C.save(out, quality=95)
 
@@ -309,7 +314,7 @@ def _v8_points(points, params_rows, n=6):
     return out[:n]
 
 
-def _render_img3(cfg, points, out):
+def _render_img3(cfg, points, out, safe=False):
     """卖点图 V8 非对称编辑排版（2026-10-28 用户拍板定稿，样张 _kit_demo 卖点_V8）：
     左栏品牌头+金色短竖线+竖排「官方卖点」+金色字距 HIGHLIGHTS+底部型号；
     右栏 6 条等分：上行粗黑主词+下行灰小字说明（参数条值做主词），
@@ -345,12 +350,12 @@ def _render_img3(cfg, points, out):
             main, sub = seg[0].strip(), (seg[1].strip() if len(seg) > 1 else "")
         yy = y0 + rh * (i + 0.5)
         d.text((rx, yy - 14), "%02d" % (i + 1), font=_serif(30), fill=(201, 168, 102), anchor="lm")
-        fs = 36
-        while fs > 22 and _tw(d, main, _font(F_BOLD, fs)) > 1080 - rx - 230:
+        fs = 32 if safe else 36
+        while fs > (20 if safe else 22) and _tw(d, main, _font(F_BOLD, fs)) > 1080 - rx - 230:
             fs -= 2
         d.text((rx + 58, yy - 14), main, font=_font(F_BOLD, fs), fill=INK, anchor="lm")
         if sub:
-            d.text((rx + 58, yy + 22), sub, font=_font(F_BOLD, 20), fill=GRAY, anchor="lm")
+            d.text((rx + 58, yy + 22), sub, font=_font(F_BOLD, 18 if safe else 20), fill=GRAY, anchor="lm")
         if i < m - 1:
             d.line([rx, y0 + rh * (i + 1), 1080 - 72, y0 + rh * (i + 1)], fill=(238, 240, 244), width=1)
     C.save(out, quality=95)
@@ -459,7 +464,10 @@ def _sketch_rgba(path, color=(28, 30, 34)):
     白底图 = 整图 FIND_EDGES。只描形，绝不编尺寸数字。失败返回 None。
     color=线条颜色：聚光深底传浅色 (238,242,248)，蓝底白底传深色 (28,30,34)。"""
     try:
-        im = Image.open(path).convert("RGBA")
+        # 2026-10-29 实锤：聚光 generate 传进来的 front 是 load_cut 后的内存 Image，
+        # 不是路径——Image.open(Image) 必炸、静默 None，尺寸卡中间永远空白。
+        # 两种都收：Image 直用，路径才 open。
+        im = path.convert("RGBA") if isinstance(path, Image.Image) else Image.open(path).convert("RGBA")
         a = im.getchannel("A")
         lo, _ = a.getextrema()
         if lo < 245:
@@ -486,17 +494,20 @@ def _sketch_rgba(path, color=(28, 30, 34)):
         return None
 
 
-def _render_img4(cfg, out, prod=None):
+def _render_img4(cfg, out, prod=None, safe=False):
     C = Image.new("RGB", (1080, 1080), (255, 255, 255))
     d = ImageDraw.Draw(C)
+    _t4 = 46 if safe else 50
+    _b4 = 27 if safe else 30
+    _d4 = 23 if safe else 25
     if not cfg.get("sizeimg"):
         # 无官方线稿的两个兜底分支（手绘线框/机图线稿）也按聚光版式：标题居中+金短线
-        d.text((540, 96), "产 品 尺 寸", font=_font(F_BOLD, 50), fill=INK, anchor="mm")
+        d.text((540, 96), "产 品 尺 寸", font=_font(F_BOLD, _t4), fill=INK, anchor="mm")
         d.rounded_rectangle([500, 136, 580, 142], 3, fill=(212, 175, 108))
     if cfg.get("sizeimg"):
         # 纯白版式（2026-10-28 用户拍板样张）：顶部「产品尺寸」+金线，官方线稿
         # 840×620 双限居中，底部品牌型号 + 宽高深一行——「同时支持」胶囊带删除
-        d.text((540, 96), "产 品 尺 寸", font=_font(F_BOLD, 50), fill=INK, anchor="mm")
+        d.text((540, 96), "产 品 尺 寸", font=_font(F_BOLD, _t4), fill=INK, anchor="mm")
         d.rounded_rectangle([500, 136, 580, 142], 3, fill=(212, 175, 108))
         simg = _rescue_prod(_autocrop_white(_flat_white(Image.open(cfg["sizeimg"])), margin=6), None)
         w, h = simg.size
@@ -520,11 +531,11 @@ def _render_img4(cfg, out, prod=None):
         C.paste(im2, (int(540 - im2.size[0] / 2), 180 + max(0, int((640 - im2.size[1]) / 2))))
         # 底部两行：品牌+型号 / 宽高深（无实测数字就不硬标）
         d.text((540, 918), "%s  %s" % (cfg.get("brand", ""), cfg.get("model", "")),
-               font=_font(F_BOLD, 30), fill=INK, anchor="mm")
+               font=_font(F_BOLD, _b4), fill=INK, anchor="mm")
         dims = cfg.get("dims") or ([int(n) for n in nums[:3]] if len(nums) >= 3 else None)
         if dims and all(dims):
             d.text((540, 972), "宽 %d mm · 高 %d mm · 深 %d mm" % tuple(dims),
-                   font=_font(F_REG, 25), fill=GRAY, anchor="mm")
+                   font=_font(F_REG, _d4), fill=GRAY, anchor="mm")
         C.save(out, quality=95)
         return
     if cfg.get("dims"):
@@ -571,9 +582,9 @@ def _render_img4(cfg, out, prod=None):
             sk = sk.resize((tw4, th4), Image.LANCZOS)
             C.paste(sk, (int(540 - tw4 / 2), 180 + max(0, int((640 - th4) / 2))), sk)
         d.text((540, 918), "%s  %s" % (cfg.get("brand", ""), cfg.get("model", "")),
-               font=_font(F_BOLD, 30), fill=INK, anchor="mm")
+               font=_font(F_BOLD, _b4), fill=INK, anchor="mm")
         d.text((540, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格",
-               font=_font(F_REG, 25), fill=GRAY, anchor="mm")
+               font=_font(F_REG, _d4), fill=GRAY, anchor="mm")
     C.save(out, quality=95)
 
 
@@ -711,6 +722,7 @@ def _web_params(model, log=None):
     欣盛库设计上就没参数字段、中关村没收录、参数图识别无米下锅——四路全空成废卡）。
     最后一路：必应搜型号，抓前几条结果页，从正文抠「参数名：值」对。
     键名白名单过滤；页面必须真的提到型号主段（防搜到同名别的产品）。"""
+    _web_params._last_ok = False
     frag = ""
     for m in re.finditer(r"[A-Za-z0-9]{6,}", model):
         if len(m.group(0)) > len(frag):
@@ -744,6 +756,7 @@ def _web_params(model, log=None):
             break
     if log and out:
         log("全网搜参（%s）补到 %d 条参数" % (frag, len(out)))
+    _web_params._last_ok = bool(out)
     return out[:18]
 
 
@@ -755,6 +768,7 @@ def _glm_params(model, log=None):
     「容量4.2L」），search_std 和 search_pro 都编。所以要求每条参数带来源 URL，
     代码抓 URL 验证「型号主段真出现在该页」才收——编的链接必过不了验证，自动全拒。
     验证不过=空手回=和没挂这层一样，绝不比现状差。"""
+    _glm_params._last_ok = False
     frag = ""
     for m in re.finditer(r"[A-Za-z0-9]{6,}", model):
         if len(m.group(0)) > len(frag):
@@ -832,6 +846,7 @@ def _glm_params(model, log=None):
             break
     if log:
         log("GLM 联网搜参（%s）：%s" % (model, ("来源验证过 %d 条" % len(out)) if out else "没搜到可验证的"))
+    _glm_params._last_ok = bool(out)
     return out[:12]
 
 
@@ -890,22 +905,54 @@ def _gather_info(model, log):
                     _have.add(ks)
     # 全网搜参兜底（2026-10-29 用户令）：pubwork/官网/欣盛/中关村全空时（渠道机实锤），
     # 必应搜型号从结果页正文抠参数。已有键不覆盖；凑不满 5 条才算「参数残缺」才触发。
-    if len(info.get("props") or []) < 5:
+    # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 7 天内不再跑。
+    _mdir = model_dir(model)
+    # 中关村全量参数源（2026-10-29 LTD-575WDS9U1 实锤：leader 官网 WAF 拦 IP 403、
+    # pubwork/欣盛 0 参数、必应 0 结果，ZOL 却有 23 条全参数）——必应之前先问 ZOL，
+    # 图也并进候选。负缓存键 zol_params 与 _ensure_dims 的 zol_dims（尺寸专用）分开。
+    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "zol_params"):
+        try:
+            _zi, _zp = _zol_data(model, (info.get("brand") or ""), log)
+            if _zi:
+                imgs.extend([u for u in _zi if u])
+            if _zp:
+                _have = {str(k).strip() for k, _v in (info.get("props") or [])}
+                for k, v in _zp:
+                    if str(k).strip() not in _have:
+                        info.setdefault("props", []).append((str(k), str(v)))
+                if log:
+                    log("中关村补全参数：%d 条（合计 %d 条）" % (len(_zp), len(info.get("props") or [])))
+            if not _zp:
+                _neg_set(_mdir, "zol_params")
+                if log:
+                    log("中关村没有参数（已记住，7 天内不再重复找）")
+        except Exception as e:
+            if log:
+                log("中关村补参失败：%r" % (e,))
+    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "web_params"):
         try:
             for k, v in _web_params(model, log):
                 if str(k).strip() not in {str(x).strip() for x, _ in (info.get("props") or [])}:
                     info.setdefault("props", []).append((str(k), str(v)))
         except Exception:
             pass
+        if not _web_params._last_ok:
+            _neg_set(_mdir, "web_params")
+            if log:
+                log("全网搜参没有结果（已记住，7 天内不再重复找）")
         # GLM 联网搜参（2026-10-29 用户令「把 GLM 加上让它去找」）：必应也空才动用，
         # glm-4.5-flash 挂 web_search 真上网搜，免费。同样只补缺键、绝不覆盖已有参数。
-        if len(info.get("props") or []) < 5:
+        if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "glm_params"):
             try:
                 for k, v in _glm_params(model, log):
                     if str(k).strip() not in {str(x).strip() for x, _ in (info.get("props") or [])}:
                         info.setdefault("props", []).append((str(k), str(v)))
             except Exception:
                 pass
+            if not _glm_params._last_ok:
+                _neg_set(_mdir, "glm_params")
+                if log:
+                    log("GLM 联网搜参也没有结果（已记住，7 天内不再重复找）")
     if not (info.get("title") or ""):
         for src in (data, xs):
             if src and src.get("pname"):
@@ -921,6 +968,23 @@ def _gather_info(model, log):
             _c = _pc.cat_from_url(info["url"])
             if _c:
                 info["cat"] = _c  # 缓存里的 cat 可能是旧映射（HKC3000 净水机被标洗衣机实锤），按 URL 现算覆盖
+        except Exception:
+            pass
+    # 抓到参数就落盘（2026-10-29 LTD-575WDS9U1 实锤：凑到 23 条却只活在内存，
+    # info.json 永远 0 条，下回生成又从头来）。只写有目录的（本地已有素材的）。
+    if (info.get("props") or []) and info.get("dir"):
+        try:
+            import pubwork as _pw
+            _disk = _pw.load_info(model)
+            _disk_n = len((_disk or {}).get("props") or [])
+            if len(info["props"]) > _disk_n:
+                _disk = dict(_disk or info)
+                _disk["props"] = info["props"]
+                if info.get("title"):
+                    _disk.setdefault("title", info["title"])
+                _pw._save_info(_disk)
+                if log:
+                    log("参数落盘：%d 条（原 %d 条）" % (len(info["props"]), _disk_n))
         except Exception:
             pass
     return info, imgs
@@ -1283,6 +1347,34 @@ def _try_save_sizeimg(u, sizeimg, log, prod_path=None, ai_budget=None):
     except Exception:
         pass
     return False
+
+
+def _neg_get(mdir, key, ttl_days=7):
+    """负缓存（2026-10-29 用户令「跑完没有就提示没有，别反复跑」）：试过没有的
+    来源记下来，TTL 天内直接跳过。以后来源可能上新，过期自动重试。"""
+    try:
+        import time as _t
+        p = os.path.join(mdir, "_neg.json")
+        d = json.load(open(p, encoding="utf-8"))
+        ts = d.get(key)
+        if not ts:
+            return False
+        return (_t.time() - float(ts)) < ttl_days * 86400
+    except Exception:
+        return False
+
+
+def _neg_set(mdir, key):
+    try:
+        import time as _t
+        p = os.path.join(mdir, "_neg.json")
+        d = {}
+        if os.path.isfile(p):
+            d = json.load(open(p, encoding="utf-8"))
+        d[key] = _t.time()
+        json.dump(d, open(p, "w", encoding="utf-8"))
+    except Exception:
+        pass
 
 
 def _zol_hunt_sizeimg(model, want_dims, sizeimg, log, prod_path=None):
@@ -1675,20 +1767,33 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 if log:
                     log("视觉 AI 不可用，尺寸图复核跳过")
                 break
-    if not have_size and page_url:
-        # 候选图里没认出尺寸图：去官网详情页定向翻一遍（有官方尺寸图就不用手绘）
+    if not have_size and page_url and mdir and not _neg_get(mdir, "sizeimg_official"):
+        # 候选图里没认出尺寸图：去官网详情页定向翻一遍（有官方尺寸图就不用手绘）。
+        # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 7 天内不再跑
         _hunt_sizeimg_page(page_url, sizeimg, log,
                            skip_urls=(picked_url,) if picked_url else (),
                            prod_path=picked if have_prod and os.path.isfile(picked) else None)
+        if not os.path.isfile(sizeimg):
+            _neg_set(mdir, "sizeimg_official")
+            if log:
+                log("官网没有官方尺寸图（已记住，7 天内不再重复找）")
     if not have_size and want_dims:
         # 官网也没有 → 中关村图集兜底（2026-10-29 用户令「中关村有图怎么还自己画」）：
         # 真图优先，AI 读图上数字跟本机真实参数全对上号才收，对不上宁走手绘防张冠李戴
-        try:
-            if _zol_hunt_sizeimg(model, want_dims, sizeimg, log,
-                                 prod_path=picked if have_prod and os.path.isfile(picked) else None):
-                have_size = True
-        except Exception:
-            pass
+        if mdir and _neg_get(mdir, "sizeimg_zol"):
+            if log:
+                log("中关村图集已试过没有（7 天内不重复找）")
+        else:
+            try:
+                if _zol_hunt_sizeimg(model, want_dims, sizeimg, log,
+                                     prod_path=picked if have_prod and os.path.isfile(picked) else None):
+                    have_size = True
+                elif mdir:
+                    _neg_set(mdir, "sizeimg_zol")
+                    if log:
+                        log("中关村图集也没有尺寸图（已记住，7 天内不再重复找）")
+            except Exception:
+                pass
     return picked
 
 
@@ -1755,14 +1860,21 @@ def _ensure_dims(info, mdir, img_urls=None, log=None):
     model = (info.get("model") or "").strip()
     pd0 = pei_core.prop_dict(info.get("props") or [])
     have_si = bool(mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg")))
-    if have_si or _parse_dims(pd0) or _KNOWN_DIMS.get(model) \
-            or _KNOWN_DIMS.get(norm_model(model) or ""):
+    # 灶具式两段尺寸也算「有尺寸」（2026-10-29 JZT-QHA7BE9 实锤：官网给了
+    # 台面730*420/挖孔650*350，这里却跑去中关村找不存在的「外形尺寸」白烧一轮）
+    if have_si or _parse_dims(pd0) or any(k in pd0 for k in ("台面尺寸", "挖孔尺寸", "开孔尺寸")) \
+            or _KNOWN_DIMS.get(model) or _KNOWN_DIMS.get(norm_model(model) or ""):
         return info, img_urls
     log("参数里没外形尺寸，去中关村补…")
+    if mdir and _neg_get(mdir, "zol_dims"):
+        log("中关村补参已试过没有（7 天内不重复找）")
+        return info, img_urls
     try:
         zi, zp = _zol_data(model, (info.get("brand") or ""), log)
     except Exception as e:
         log("中关村补参失败：%r" % (e,))
+        if mdir:
+            _neg_set(mdir, "zol_dims")
         return info, img_urls
     if zi and not img_urls:
         img_urls = zi
@@ -1772,6 +1884,9 @@ def _ensure_dims(info, mdir, img_urls=None, log=None):
             if str(k) not in have:
                 info.setdefault("props", []).append((k, v))
         log("中关村补参：%d 条（合计 %d 条）" % (len(zp), len(info.get("props") or [])))
+    elif mdir and not _parse_dims(pei_core.prop_dict(info.get("props") or [])):
+        _neg_set(mdir, "zol_dims")
+        log("中关村也没有尺寸参数（已记住，7 天内不再重复找）")
     return info, img_urls
 
 
@@ -2301,6 +2416,13 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None):
     else:
         capn = ""
     size_pills = ["%s × %s mm" % (dims[0], dims[1]), "深 %s mm" % dims[2]] if dims else []
+    if not size_pills:
+        # 灶具式两段尺寸（2026-10-29 用户实锤 JZT-QHA7BE9 官网有 台面730*420/挖孔650*350
+        # 却被报「缺尺寸」）：没有三段式外形尺寸时，拿台面/挖孔真数据当尺寸药丸，绝不空卡
+        for _sk, _lab in (("台面尺寸", "台面"), ("挖孔尺寸", "挖孔"), ("开孔尺寸", "挖孔")):
+            _sv = str(pd.get(_sk) or "").strip()
+            if _sv:
+                size_pills.append("%s %s" % (_lab, re.sub(r"[^0-9*×.]", "", _sv).replace("*", " × ") + (" mm" if re.search(r"\d", _sv) else "")))
     sp = [str(x).strip() for x in pei_core.sellpoints(info) if str(x).strip()]
     if not sp:
         sp = [str(x).strip() for x in (info.get("selling") or []) if str(x).strip()]
@@ -2371,6 +2493,132 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None):
     return cfg, titles, points, aftersale
 
 
+def _load_pub_info(model):
+    """pubwork 素材库 info（props/brand/url），对账重出用；取不到返回 None。"""
+    try:
+        import pubwork as _pw
+        return _pw.load_info(model)
+    except Exception:
+        return None
+
+
+def _spot_out_dir(model):
+    """聚光四件套产物目录（peiwork/<型号>/AI6张_聚光），norm 与 _safe 两种命名都试。"""
+    try:
+        import pubwork as _pw
+        root = _pw.sroot()
+        for nm in dict.fromkeys([norm_model(model) or model, _pw._safe(model)]):
+            d = os.path.join(root, nm, "AI6张_聚光")
+            if os.path.isdir(d):
+                return d
+        return d
+    except Exception:
+        return ""
+
+
+def _qa_blue(model, info, mdir, cfg, points, prod, log):
+    """蓝底四张 AI 复检（2026-10-29 用户令「蓝底也要接上」）：与聚光同一套
+    pei_core.qa_render 视觉质检（商汤优先→GLM 兜底，无 key 静默跳过不挡出货）。
+    压字/截断/出画等确定性布局问题用保守档（字号各缩一档）重渲该张一次；
+    风格/破图等需人工的只记日志。只复检一轮，不循环烧额度。"""
+    try:
+        import pei_core
+        key = None
+        try:
+            import pubwork as _pw
+            key = _pw._ai_key()
+        except Exception:
+            key = None
+        key = key or pei_core._sn_key()
+        if not key:
+            log("AI 复检跳过：未配置视觉 key")
+            return
+        p1 = os.path.join(mdir, "img_1.jpg")
+        p2 = os.path.join(mdir, "img_2.jpg")
+        p3 = os.path.join(mdir, "img_3.jpg")
+        p4 = os.path.join(mdir, "img_4.jpg")
+        paths = [p for p in (p1, p2, p3, p4) if os.path.isfile(p)]
+        if len(paths) < 4:
+            return
+        res = pei_core.qa_render(key, paths, info)
+        if res is None:
+            log("AI 复检不可用（视觉模型无应答），跳过")
+            return
+        if not res:
+            log("AI 复检通过：4 张成片无问题")
+            return
+        log("AI 复检发现 %d 处问题：%s" % (
+            len(res), "；".join("%s(%s)" % (x.get("issue"), x.get("severity")) for x in res)))
+        FIX = {"text_overlap", "text_clip", "product_clip"}
+        for x in res:
+            slot = x.get("slot")
+            code = x.get("code") or ""
+            if code not in FIX or not (1 <= slot <= 4):
+                log("  需人工确认：%s（%s）" % (x.get("issue"), x.get("severity")))
+                continue
+            log("  自动修复第 %d 张（%s，保守档重渲）" % (slot, code))
+            if slot == 1:
+                _render_img1(cfg, Image.open(prod), p1, safe=True)
+            elif slot == 2:
+                _render_img2(cfg, Image.open(prod), p2, safe=True)
+            elif slot == 3:
+                _render_img3(cfg, points, p3, safe=True)
+            elif slot == 4:
+                _render_img4(cfg, p4, prod, safe=True)
+    except Exception as e:
+        log("AI 复检异常（不影响成片）：%r" % (e,))
+
+
+def sync_blue4_size(model, info, log=None):
+    """蓝底 img_4 时间线对账：官方尺寸图比蓝底成品后到（聚光/ZOL 链路抓到的）时，
+    蓝底参数图还是手绘旧版——按 mtime 自动重出（XQS100-BZ60E/CXW-258-C2910 实锤：
+    「官网有的必须用官网的」必须贯穿两套成品，重跑一遍不该靠用户撞）。幂等：
+    无成品/无官方图/官方图不比成品新，一律不动。"""
+    log = log or (lambda s: None)
+    try:
+        kd = model_dir(model)
+        si = os.path.join(kd, "sizeimg.jpg")
+        b4 = os.path.join(kd, "img_4.jpg")
+        prod = os.path.join(kd, "product.png")
+        if not (os.path.isfile(si) and os.path.isfile(b4) and os.path.isfile(prod)):
+            return
+        if os.path.getmtime(si) <= os.path.getmtime(b4) + 2:
+            return
+        info = info if (info and (info.get("props") or [])) else _load_pub_info(model)
+        if not (info and (info.get("props") or [])):
+            return
+        ai_dims = _ai_read_size_nums(si, log)
+        cfg = _build_cfg(info, mdir=kd, ai_dims=ai_dims)
+        _render_img4(cfg, b4, prod)
+        log("官方尺寸图后到，蓝底参数图已自动重出（img_4 换官方图版）")
+    except Exception as e:
+        log("蓝底参数图对账失败：%r" % (e,))
+
+
+def sync_spot_size(model, info, log=None):
+    """聚光尺寸图时间线对账：蓝底后抓到官方尺寸图时，聚光四件套可能早已按手绘
+    落盘（XQS100-BZ60E/EB100Z35Pro2 实锤）——mtime 判定自动重出第 4 张。
+    img_size 模块默认配色即聚光风（_spot_bg 程序绘制不依赖 AI 背景），单图直出无差。"""
+    log = log or (lambda s: None)
+    try:
+        kd = model_dir(model)
+        si = os.path.join(kd, "sizeimg.jpg")
+        out = _spot_out_dir(model)
+        dst = os.path.join(out, "5_尺寸图.jpg") if out else ""
+        if not (dst and os.path.isfile(dst) and os.path.isfile(si)):
+            return
+        if os.path.getmtime(si) <= os.path.getmtime(dst) + 2:
+            return
+        info = info if (info and (info.get("props") or [])) else _load_pub_info(model)
+        import pei_ai9
+        pei_ai9.P["brand"] = (info or {}).get("brand") or pei_ai9.P.get("brand") or ""
+        pei_ai9.P["model"] = (info or {}).get("model") or model
+        pei_ai9.img_size(info, None, out)
+        log("官方尺寸图后到，聚光尺寸图已自动重出（5_尺寸图 换官方图版）")
+    except Exception as e:
+        log("聚光尺寸图对账失败：%r" % (e,))
+
+
 def generate(model, force=0, log=None):
     log = log or (lambda s: None)
     if not os.path.isfile(F_REG):
@@ -2390,6 +2638,9 @@ def generate(model, force=0, log=None):
             with io.open(cache, encoding="utf-8") as f:
                 res = json.load(f)
             res["cached"] = True
+            # 缓存命中也要对账：官方尺寸图可能后到（聚光先跑手绘落盘实锤），
+            # 不重渲染蓝底（set.json 参数快照一致），只把聚光第 4 张按需重出
+            sync_spot_size(model, None, log)
             return res
         except Exception:
             pass
@@ -2438,6 +2689,12 @@ def generate(model, force=0, log=None):
     _render_img2(cfg, Image.open(prod), os.path.join(mdir, "img_2.jpg"))
     _render_img3(cfg, points, os.path.join(mdir, "img_3.jpg"))
     _render_img4(cfg, os.path.join(mdir, "img_4.jpg"), prod)
+    # AI 复检成片（2026-10-29 用户令「蓝底也要接上」）：与聚光同一套质检，
+    # 压字/截断/出画自动保守档重渲；复检完再做聚光时间线对账
+    _qa_blue(model, info, mdir, cfg, points, prod, log)
+    # 时间线对账：本次拿到的官方尺寸图可能比聚光四件套新（聚光先跑手绘落盘实锤）——
+    # 自动重出聚光第 4 张，两套成品永远用官网图（2026-10-29 用户令）
+    sync_spot_size(model, info, log)
     res = {"ok": True, "cached": False, "model": cfg["model"], "name": cfg["series"] + " " + cfg["model"],
            "titles": titles, "points": points, "aftersale": aftersale,
            "params": dict(cfg["params_rows"]), "src": cfg["url"],
