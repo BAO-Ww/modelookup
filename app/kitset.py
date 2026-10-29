@@ -1285,6 +1285,158 @@ def _try_save_sizeimg(u, sizeimg, log, prod_path=None, ai_budget=None):
     return False
 
 
+def _zol_hunt_sizeimg(model, want_dims, sizeimg, log, prod_path=None):
+    """中关村图集找现成尺寸图（2026-10-29 用户令「中关村有图怎么还自己画」）。
+    详情页图集第一页的 var picList 里存着全部图片清单（hash/classId3/源尺寸/名称），
+    CDN 支持 _宽x高 任意变体（实测），按源尺寸直拉原图。
+    防张冠李戴锁（用户截图实锤：H28E 的图集里混着 H20D1 的参数长图）：
+    候选过线框/AI 认定后，AI 读图上印的宽/高/深，必须跟本机真实参数全对上（±2mm）
+    才收；读不出数字/对不上/本机没有真实尺寸可对 → 一律不要，宁可手绘（数字保真）。
+    详情页长截图（高/宽>1.4）裁上半段（产品尺寸区）再验，顺带读数更清晰。"""
+    if not want_dims:
+        return False
+    import time as _t
+    try:
+        # ① 定位 ZOL 详情页（直搜 → 必应中转，与 _zol_data 同路数）
+        pages = []
+        try:
+            html = _http_text("https://detail.zol.com.cn/index.php?c=SearchList&keyword=" +
+                              urllib.parse.quote(model))
+            pages = re.findall(r'href="(https://detail\.zol\.com\.cn/[^"]+?/[^"]+?\.shtml)"', html or "")
+        except Exception:
+            pages = []
+        if not pages:
+            for bu in ("https://www.bing.com/search?" + urllib.parse.urlencode(
+                            {"q": "site:detail.zol.com.cn " + model, "format": "rss"}),
+                       "https://cn.bing.com/search?" + urllib.parse.urlencode(
+                            {"q": "site:detail.zol.com.cn " + model, "format": "rss"})):
+                try:
+                    pages = re.findall(r"<link>(https://detail\.zol\.com\.cn/[^<]+?\.shtml)</link>",
+                                       _http_text(bu) or "")
+                except Exception:
+                    pages = []
+                if pages:
+                    break
+                _t.sleep(1)
+        pages = [p for p in dict.fromkeys(pages) if "/param." not in p and "picture_index" not in p][:1]
+        gal = None
+        for page in pages:
+            try:
+                h2 = _http_text(page, "https://www.bing.com/")
+                m = re.search(r'href="(/picture_index_\d+/index[^"]+?\.shtml)"', h2 or "")
+                if m:
+                    gal = "https://detail.zol.com.cn" + m.group(1)
+                    break
+            except Exception:
+                continue
+        if not gal:
+            if log:
+                log("中关村图集没入口，尺寸图走手绘")
+            return False
+        # ② 图集第一页 → picList 全清单
+        gh = _http_text(gal, page if pages else "https://detail.zol.com.cn/")
+        # 结尾锚点别绑死「后面必须跟 sourcesPicSrcUrl」——不同版式中间隔的东西不一样
+        ml = re.search(r"var\s+picList\s*=\s*(\[.*?\])\s*;", gh or "", re.S)
+        if not ml:
+            if log:
+                log("中关村图集清单没解析到，尺寸图走手绘")
+            return False
+        try:
+            lst = json.loads(ml.group(1))
+        except Exception:
+            if log:
+                log("中关村图集清单坏 JSON，尺寸图走手绘")
+            return False
+        # ③ 候选排序：名字带 尺寸/安装 的置顶 → 详情页长截图（源图高/宽>1.4，尺寸区在上半）
+        # 按位置从后往前（实锤这类长图都排在图集尾部）
+        def _cand_key(it):
+            si = (it.get("sizeInfo") or {}).get("source") or ["0", "0"]
+            try:
+                w0, h0 = int(si[0]), int(si[1])
+            except Exception:
+                w0, h0 = 0, 0
+            tall = 1 if (w0 and h0 / max(1, w0) > 1.4) else 0
+            named = 0 if ("尺寸" in str(it.get("name", "")) or "安装" in str(it.get("name", ""))) else 1
+            return (named, -tall, -int(it.get("picPos") or 0))
+        cands = [it for it in lst
+                 if it.get("hash") and (it.get("sizeInfo") or {}).get("source")]
+        cands.sort(key=_cand_key)
+        ai_budget = [3]
+        tried = 0
+        for it in cands:
+            if tried >= 4:
+                break
+            si = (it.get("sizeInfo") or {}).get("source") or ["0", "0"]
+            try:
+                w0, h0 = int(si[0]), int(si[1])
+            except Exception:
+                continue
+            if min(w0, h0) < 300:
+                continue
+            pid = str(it.get("picId") or "")
+            if len(pid) < 6:
+                continue
+            raw_url = "https://2d.zol-img.com.cn/product/%s_%dx%d/%s/%s.%s" % (
+                pid[:3], w0, h0, pid[-3:], it.get("hash"), it.get("extName") or "jpg")
+            tried += 1
+            try:
+                raw = fetch(raw_url, extra_headers={"Referer": "https://detail.zol.com.cn/"},
+                            binary=True, timeout=25)
+            except Exception:
+                continue
+            if not raw or len(raw) < 3000:
+                continue
+            try:
+                im = Image.open(io.BytesIO(raw))
+                im.load()
+            except Exception:
+                continue
+            if min(im.size) < 250:
+                continue
+            tall = im.height / max(1, im.width) > 1.4
+            if tall:
+                # 详情页长截图：产品尺寸区约在 9%~45%（再往下就是产品参数标题），
+                # 裁 7%~50%，两头都不蹭邻节的图和标题
+                im = im.crop((0, int(im.height * 0.07), im.width, int(im.height * 0.50)))
+                if min(im.size) < 250:
+                    continue
+            if prod_path and os.path.isfile(prod_path):
+                try:
+                    if _same_img(im, Image.open(prod_path)):
+                        continue
+                except Exception:
+                    pass
+            if not (_looks_like_sizeimg(im) or (ai_budget[0] > 0 and _ai_is_sizeimg(im, log))):
+                continue
+            if ai_budget[0] > 0 and not _looks_like_sizeimg(im):
+                ai_budget[0] -= 1
+            _flat_white(im).save(sizeimg, quality=92)
+            nums = _ai_read_size_nums(sizeimg, log)
+            if nums and all(abs(a - b) <= 2 for a, b in zip(nums, tuple(want_dims))):
+                if log:
+                    log("中关村图集命中尺寸图（图%s=参数%s）：%s" % (
+                        list(nums), list(tuple(want_dims)), it.get("name") or it.get("hash")))
+                return True
+            try:
+                os.remove(sizeimg)
+            except OSError:
+                pass
+            if log:
+                log("中关村候选对不上号（图%s vs 参数%s），弃 %s" % (
+                    list(nums) if nums else "读不出", list(tuple(want_dims)),
+                    it.get("name") or it.get("hash")))
+        if log:
+            log("中关村图集没有能对上号的尺寸图，走手绘")
+        return False
+    except Exception as e:
+        try:
+            if log:
+                log("中关村图集找尺寸图失败（%r），走手绘" % e)
+        except Exception:
+            pass
+        return False
+
+
 def _rescue_prod(im, log):
     """本地超分救图（demo 人工 AI 流程的离线版）：短边不足 1080px 的机图
     LANCZOS 拉到 1080 + 温和锐化（2026-10-26 调参：原 radius=2/percent=80 在
@@ -1322,7 +1474,7 @@ def _same_img(a, b, thr=0.6):
         return False
 
 
-def _pick_prod(model, img_urls, mdir, log, page_url=None, kind=""):
+def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=None):
     """机图：①软件图库（payload imgs / 欣盛 ximg，与卡片同源）②抓取链候选做
     「边框同色+泛洪抠底」选抠出主体最大且落地的。官网尺寸线框图顺带识别存
     sizeimg.jpg 给 img4。横幅/场景图/拼图/悬浮创意图自动淘汰。"""
@@ -1528,6 +1680,15 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind=""):
         _hunt_sizeimg_page(page_url, sizeimg, log,
                            skip_urls=(picked_url,) if picked_url else (),
                            prod_path=picked if have_prod and os.path.isfile(picked) else None)
+    if not have_size and want_dims:
+        # 官网也没有 → 中关村图集兜底（2026-10-29 用户令「中关村有图怎么还自己画」）：
+        # 真图优先，AI 读图上数字跟本机真实参数全对上号才收，对不上宁走手绘防张冠李戴
+        try:
+            if _zol_hunt_sizeimg(model, want_dims, sizeimg, log,
+                                 prod_path=picked if have_prod and os.path.isfile(picked) else None):
+                have_size = True
+        except Exception:
+            pass
     return picked
 
 
@@ -2247,11 +2408,17 @@ def generate(model, force=0, log=None):
     # 官网有图有参时上面那道兜底不触发，但官网参数表可能就是没有外形尺寸键
     # （XQG100-H28E 实锤）——中关村参数页补一次（详见 _ensure_dims）。
     info, img_urls = _ensure_dims(info, mdir, img_urls, log)
+    # 本机真实尺寸（中关村图集尺寸图的对号基准）：_ensure_dims 后 props 里该有的都有了
+    try:
+        _want = _parse_dims(dict(info.get("props") or []))
+    except Exception:
+        _want = None
     prod = _pick_prod(model, img_urls, mdir, log, page_url=(info or {}).get("url") or None,
-                      kind=(info or {}).get("kind") or (info or {}).get("cat") or "")
+                      kind=(info or {}).get("kind") or (info or {}).get("cat") or "",
+                      want_dims=_want)
     if not prod and zimgs:
         log("中关村图单独再试一轮…")
-        prod = _pick_prod(model, zimgs, mdir, log)
+        prod = _pick_prod(model, zimgs, mdir, log, want_dims=_want)
     if not prod:
         # 最后兜底：卡片缩略图（小图，清晰度有限但好过失败）
         lib2 = _library_img(model, min_side=0)
