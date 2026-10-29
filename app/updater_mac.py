@@ -60,12 +60,20 @@ def _app_install_bg(log):
                                      + urllib.parse.quote(tag) + "&plat=mac")
         req.add_header("X-Token", tok)
         req.add_header("User-Agent", _CLOUD_UA)
+        # 更新下载挂节点（2026-10-29 用户令）：settings.json 配了 update_proxy 就走它。
+        try:
+            from paths import update_proxy as _upd_proxy
+            _upx = _upd_proxy()
+        except Exception:
+            _upx = None
+        if _upx:
+            log("自更新(Mac)：下载走代理 %s" % _upx)
         work = os.path.join(tempfile.gettempdir(), "modelookup_update")
         shutil.rmtree(work, ignore_errors=True)
         os.makedirs(work, exist_ok=True)
         zipf = os.path.join(work, "ModelLookup-mac.zip")
         got, total = 0, 0
-        with urlopen_ssl(req, timeout=900) as r:
+        with urlopen_ssl(req, timeout=900, proxy=_upx) as r:
             total = int(r.headers.get("Content-Length") or 0)
             with io.open(zipf, "wb") as f:
                 while True:

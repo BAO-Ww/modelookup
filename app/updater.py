@@ -125,10 +125,19 @@ def _app_install_bg(log):
         req = urllib.request.Request(CLOUD_HOST + "/appdl?tag=" + urllib.parse.quote(tag))
         req.add_header("X-Token", tok)
         req.add_header("User-Agent", _CLOUD_UA)
+        # 更新下载挂节点（2026-10-29 用户令）：settings.json 配了 update_proxy 就走它，
+        # 实测直连 0.10MB/s → 走节点 0.55MB/s。没配置保持直连，老机器零变化。
+        try:
+            from paths import update_proxy as _upd_proxy
+            _upx = _upd_proxy()
+        except Exception:
+            _upx = None
+        if _upx:
+            log("自更新：下载走代理 %s" % _upx)
         dest = os.path.join(os.environ.get("TEMP") or wp(""),
                             "ModelLookup-Setup-%s.exe" % (ver or APP_VERSION))
         got, total = 0, 0
-        with urlopen_ssl(req, timeout=900) as r:
+        with urlopen_ssl(req, timeout=900, proxy=_upx) as r:
             total = int(r.headers.get("Content-Length") or 0)
             with io.open(dest, "wb") as f:
                 while True:

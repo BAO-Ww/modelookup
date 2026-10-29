@@ -78,6 +78,15 @@ def set_data_root(p):
     return p
 
 
+def update_proxy():
+    """更新下载代理（2026-10-29 用户令「把我给你的节点链接挂上去」）：
+    settings.json 里的 update_proxy（如 http://127.0.0.1:7891），
+    自更新下载 /appdl 时走它（实测直连 0.10MB/s → 走节点 0.55MB/s）。
+    没设置 = 直连（原行为）。"""
+    v = str((_settings() or {}).get("update_proxy") or "").strip()
+    return v or None
+
+
 def reveal(p):
     """在文件管理器里打开目录（2026-10-25 跨平台）：Win=资源管理器 / macOS=Finder。
     替代 os.startfile（Windows 专属，Mac 上 AttributeError）。"""
