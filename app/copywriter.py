@@ -41,7 +41,11 @@ def _load_glm_key():
         pass
     return _BUILTIN_GLM_KEY
 API_KEY = _load_glm_key()
-GLM_MODEL = "glm-4-flash"
+# 2026-10-29 用户令「那个好用不花钱就用那个」：glm-4-flash → glm-4.5-flash（免费新旗舰，
+# 实测同 key 直接可用）。4.5 系默认带深度思考（reasoning_content 先烧 max_tokens 再出正文，
+# 小 max_tokens 会只吐思考空正文），写文案场景统一 thinking disabled 直出。
+GLM_MODEL = "glm-4.5-flash"
+THINK_OFF = {"type": "disabled"}
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
@@ -375,7 +379,7 @@ def _chat(prompt):
     if not API_KEY:
         raise RuntimeError("未配置 GLM key（软件数据目录放 glm_key.txt，或环境变量 ML_GLM_KEY）")
     body = json.dumps({"model": GLM_MODEL, "messages": [{"role": "user", "content": prompt}],
-                       "temperature": 0.7}).encode("utf-8")
+                       "temperature": 0.7, "thinking": THINK_OFF}).encode("utf-8")
     req = urllib.request.Request(API_URL, data=body, headers={
         "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY})
     with urlopen_ssl(req, timeout=60) as r:

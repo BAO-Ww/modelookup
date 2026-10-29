@@ -136,18 +136,16 @@ def _app_install_bg(log):
             log("自更新：下载走代理 %s" % _upx)
         dest = os.path.join(os.environ.get("TEMP") or wp(""),
                             "ModelLookup-Setup-%s.exe" % (ver or APP_VERSION))
-        got, total = 0, 0
-        with urlopen_ssl(req, timeout=900, proxy=_upx) as r:
-            total = int(r.headers.get("Content-Length") or 0)
-            with io.open(dest, "wb") as f:
-                while True:
-                    chunk = r.read(262144)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    got += len(chunk)
-                    if total:
-                        state.set_state("running", "正在下载新版本 v%s… %d%%" % (ver, got * 100 // total))
+        # 并发分块下载（2026-10-29 用户令）：源支持分段（worker 透传 Range 后）就 8 路并发
+        # 约 5 倍速；不支持自动退单流，SHA-256 校验兜底完整性。
+        from net import dl_parallel as _dlp
+
+        def _pg(got, total):
+            if total:
+                state.set_state("running", "正在下载新版本 v%s… %d%%" % (ver, got * 100 // total))
+
+        got, total = _dlp(req.get_full_url(), dict(req.headers), dest,
+                          proxy=_upx, progress=_pg, log=log)
         if got < 1048576:
             state.set_state("error", "安装包下载不完整（%d 字节），重试一次" % got)
             return

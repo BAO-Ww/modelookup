@@ -678,6 +678,163 @@ def _zol_data_once(model, brand, log):
     return imgs, props
 
 
+# 全网搜参兜底的参数键白名单：只收真参数，防把营销文案/新闻标题扯进参数表
+_WEB_PARAM_KEYS = (
+    "热负荷", "热效率", "灶眼", "灶头", "火力", "面板", "气源", "燃气",
+    "额定", "尺寸", "外形", "净重", "毛重", "容量", "能效", "功率", "电压",
+    "频率", "水压", "噪音", "风量", "风压", "控温", "温度", "材质", "内筒",
+    "洗涤", "脱水", "制冷", "制热", "循环风量", "能效等级", "洗净比", "排水",
+)
+
+
+def _pairs_from_text(txt, out):
+    """从纯文本行里抠「参数名:值」对（白名单键+防 URL 噪声），去重追加进 out。
+    _web_params（网页正文）和 _glm_params（AI 联网搜参回答）共用同一套过滤口径。"""
+    for line in (txt or "").splitlines():
+        line = re.sub(r"^[\s*`\-•\d.、)]+", "", line.strip())   # 剥 markdown 粗体/列表符/序号
+        m = re.match(r"^([\u4e00-\u9fa5A-Za-z0-9（）()／/]{2,14})[：:]\s*(\S{1,40})$", line)
+        if not m:
+            continue
+        k, v = m.group(1).strip(), m.group(2).strip("；;，,。 ")
+        if not v or len(v) > 30:
+            continue
+        if not any(w in k for w in _WEB_PARAM_KEYS):
+            continue
+        if any(w in v.lower() for w in ("http", "www.", ".com", ".cn")):
+            continue
+        if (k, v) not in out:
+            out.append((k, v))
+
+
+def _web_params(model, log=None):
+    """全网搜参兜底（2026-10-29 渠道机 JZT-GGC021XABG(12T) 实锤：官网没页、
+    欣盛库设计上就没参数字段、中关村没收录、参数图识别无米下锅——四路全空成废卡）。
+    最后一路：必应搜型号，抓前几条结果页，从正文抠「参数名：值」对。
+    键名白名单过滤；页面必须真的提到型号主段（防搜到同名别的产品）。"""
+    frag = ""
+    for m in re.finditer(r"[A-Za-z0-9]{6,}", model):
+        if len(m.group(0)) > len(frag):
+            frag = m.group(0)
+    if not frag:
+        return []
+    pages = []
+    for host in ("https://www.bing.com", "https://cn.bing.com"):
+        try:
+            u = host + "/search?" + urllib.parse.urlencode({"q": model + " 参数", "format": "rss"})
+            xml = _http_text(u)
+            pages = [p for p in re.findall(r"<link>(https?://[^<]+)</link>", xml)
+                     if "zol.com" not in p][:4]     # 中关村那路 _zol_data 自己管
+        except Exception:
+            pages = []
+        if pages:
+            break
+    out = []
+    for purl in pages[:4]:
+        try:
+            h = _http_text(purl)
+        except Exception:
+            continue
+        if not h or frag not in h:
+            continue
+        txt = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", " ", h)
+        txt = re.sub(r"<[^>]+>", "\n", txt)
+        txt = txt.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+        _pairs_from_text(txt, out)
+        if len(out) >= 18:
+            break
+    if log and out:
+        log("全网搜参（%s）补到 %d 条参数" % (frag, len(out)))
+    return out[:18]
+
+
+def _glm_params(model, log=None):
+    """GLM-4.5-Flash 联网搜参（2026-10-29 用户令「把 GLM 加上让它去找」）：必应 RSS
+    都搜不到时的最后一层。glm-4.5-flash 免费，挂智谱 web_search 工具让它真上网搜。
+    防编锁（2026-10-29 实锤必须上）：对全网没数据的型号它会一本正经编参数——
+    渠道灶 JZT-GGC021XABG 三遍三样（钢化玻璃/不锈钢面板、2级/1级、还编出灶具
+    「容量4.2L」），search_std 和 search_pro 都编。所以要求每条参数带来源 URL，
+    代码抓 URL 验证「型号主段真出现在该页」才收——编的链接必过不了验证，自动全拒。
+    验证不过=空手回=和没挂这层一样，绝不比现状差。"""
+    frag = ""
+    for m in re.finditer(r"[A-Za-z0-9]{6,}", model):
+        if len(m.group(0)) > len(frag):
+            frag = m.group(0)
+    if not frag:
+        return []
+    try:
+        import copywriter as _cw
+        _key = (_cw._load_glm_key() or "").strip()
+    except Exception:
+        _key = ""
+    if not _key:
+        return []
+    body = {
+        "model": "glm-4.5-flash",
+        "messages": [{"role": "user", "content":
+            "联网搜索家电型号「%s」的详细技术参数（额定功率/热负荷/容量/外形尺寸/能效/材质等）。"
+            "输出要求：每行一条，格式「参数名:值 来源:网址」，最多12条，网址必须是你这次"
+            "搜索结果里真实存在的网页链接；只认与该型号完整字面完全一致的页面，同系列近似"
+            "型号（只差一两位字母数字）的页面一律不要；拿不出真实来源网址的参数一条都不要"
+            "输出；什么都搜不到就只回复：无" % model}],
+        "tools": [{"type": "web_search",
+                   "web_search": {"enable": True, "search_engine": "search_std"}}],
+        # 注意：这里必须保留默认思考（不传 thinking disabled）——实测关思考它搜一轮就
+        # 懒得再试直接回「无」，开着思考才会反复换关键词搜到真数据（XQB100-BS618 实锤）
+        "max_tokens": 3000,
+    }
+    try:
+        req = urllib.request.Request(
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "Authorization": "Bearer " + _key})
+        with urlopen_ssl(req, timeout=90) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        txt = ((d.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    except Exception as e:
+        # 思考+联网偶尔超 120s（实锤两回），超时/失败都空手回——这层是锦上添花不是命门
+        if log:
+            log("GLM 联网搜参调用失败（%s），跳过" % e)
+        return []
+    # 解析「参数名:值 来源:URL」，按 URL 分组，只收验证过的来源
+    by_url = {}
+    for line in txt.splitlines():
+        line = line.strip()
+        if "http" not in line.lower():
+            continue
+        mu = re.search(r"(https?://[^\s，,；;）()】\]]+", line, re.I)
+        if not mu:
+            continue
+        upart = mu.group(1).rstrip(".,;、")
+        mk = re.match(r"^([\u4e00-\u9fa5A-Za-z0-9（）()／/]{2,14})[：:]\s*(.+?)(?:\s+来源|\s*【|\s*\()", line)
+        if not mk:
+            continue
+        k, v = mk.group(1).strip(), mk.group(2).strip("；;，,。 ")
+        if not v or len(v) > 30 or not any(w in k for w in _WEB_PARAM_KEYS):
+            continue
+        if any(w in v.lower() for w in ("http", "www.", ".com", ".cn")):
+            continue
+        by_url.setdefault(upart, []).append((k, v))
+    out = []
+    for upart, kvs in list(by_url.items())[:3]:      # 最多验 3 个来源，控耗时
+        try:
+            h = _http_text(upart)
+        except Exception:
+            h = ""
+        if not h or frag not in h:
+            if log:
+                log("GLM 搜参来源验证不过，丢弃 %d 条（%s）" % (len(kvs), upart[:60]))
+            continue
+        for kv in kvs:
+            if kv not in out:
+                out.append(kv)
+        if len(out) >= 12:
+            break
+    if log:
+        log("GLM 联网搜参（%s）：%s" % (model, ("来源验证过 %d 条" % len(out)) if out else "没搜到可验证的"))
+    return out[:12]
+
+
 def _gather_info(model, log):
     """pubwork 爬虫 → 官网三站 → 欣盛，三路凑 props/brand/title/price/url。
     返回 (info, data imgs_urls)；info 至少含 model/brand/title/props。"""
@@ -731,6 +888,24 @@ def _gather_info(model, log):
                 if ks and vs and ks not in _have:
                     info["props"].append((ks, vs))
                     _have.add(ks)
+    # 全网搜参兜底（2026-10-29 用户令）：pubwork/官网/欣盛/中关村全空时（渠道机实锤），
+    # 必应搜型号从结果页正文抠参数。已有键不覆盖；凑不满 5 条才算「参数残缺」才触发。
+    if len(info.get("props") or []) < 5:
+        try:
+            for k, v in _web_params(model, log):
+                if str(k).strip() not in {str(x).strip() for x, _ in (info.get("props") or [])}:
+                    info.setdefault("props", []).append((str(k), str(v)))
+        except Exception:
+            pass
+        # GLM 联网搜参（2026-10-29 用户令「把 GLM 加上让它去找」）：必应也空才动用，
+        # glm-4.5-flash 挂 web_search 真上网搜，免费。同样只补缺键、绝不覆盖已有参数。
+        if len(info.get("props") or []) < 5:
+            try:
+                for k, v in _glm_params(model, log):
+                    if str(k).strip() not in {str(x).strip() for x, _ in (info.get("props") or [])}:
+                        info.setdefault("props", []).append((str(k), str(v)))
+            except Exception:
+                pass
     if not (info.get("title") or ""):
         for src in (data, xs):
             if src and src.get("pname"):

@@ -72,19 +72,17 @@ def _app_install_bg(log):
         shutil.rmtree(work, ignore_errors=True)
         os.makedirs(work, exist_ok=True)
         zipf = os.path.join(work, "ModelLookup-mac.zip")
-        got, total = 0, 0
-        with urlopen_ssl(req, timeout=900, proxy=_upx) as r:
-            total = int(r.headers.get("Content-Length") or 0)
-            with io.open(zipf, "wb") as f:
-                while True:
-                    chunk = r.read(262144)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    got += len(chunk)
-                    if total:
-                        state.set_state("running",
-                                        "正在下载新版本 v%s… %d%%" % (ver, got * 100 // total))
+        # 并发分块下载（2026-10-29 用户令，与 Windows 端同款）：8 路并发约 5 倍速，
+        # 源不支持分段自动退单流，SHA-256 校验兜底完整性。
+        from net import dl_parallel as _dlp
+
+        def _pg(got, total):
+            if total:
+                state.set_state("running",
+                                "正在下载新版本 v%s… %d%%" % (ver, got * 100 // total))
+
+        got, total = _dlp(req.get_full_url(), dict(req.headers), zipf,
+                          proxy=_upx, progress=_pg, log=log)
         if got < 1048576:
             state.set_state("error", "更新包下载不完整（%d 字节），重试一次" % got)
             return
