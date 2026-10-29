@@ -601,7 +601,20 @@ def _http_text(url, referer=None):
 
 def _zol_data(model, brand, log):
     """中关村在线兜底（下架/冷门型号官网欣盛都无图无参时用）。返回 (图片URL列表, 参数kv列表)。
-    直连搜索会被反爬挡（返回空页），所以走两路：直搜 → 必应中转搜 detail.zol.com.cn 详情页。"""
+    直连搜索会被反爬挡（返回空页），所以走两路：直搜 → 必应中转搜 detail.zol.com.cn 详情页。
+    搜索/详情页都有瞬时反爬抖动（2026-10-29 实锤：同一型号上一把 0/0、下一把 13 条参数），
+    空手时歇 2 秒再试一次。"""
+    import time as _t
+    for attempt in (0, 1):
+        imgs, props = _zol_data_once(model, brand, log if attempt == 0 else None)
+        if imgs or props:
+            return imgs, props
+        if attempt == 0:
+            _t.sleep(2)
+    return [], []
+
+
+def _zol_data_once(model, brand, log):
     pages = []
     try:
         q = urllib.parse.quote(("%s%s" % (brand or "", model)).strip())
@@ -613,14 +626,24 @@ def _zol_data(model, brand, log):
     except Exception:
         pass
     if not pages:
+        # 必应 RSS 抽风式限流（2026-10-29 实锤：同一查询一把有结果一把空频道）——
+        # www/cn 两个入口 + count=30 变体连试，谁出结果用谁
         try:
-            u = "https://www.bing.com/search?" + urllib.parse.urlencode(
-                {"q": "site:detail.zol.com.cn " + model, "format": "rss"})
-            xml = _http_text(u)
-            pages = re.findall(r"<link>(https://detail\.zol\.com\.cn/[^<]+?\.shtml)</link>", xml)
+            import time as _t2
+            base_q = "site:detail.zol.com.cn " + model
+            for bu in ("https://www.bing.com/search?" + urllib.parse.urlencode({"q": base_q, "format": "rss"}),
+                       "https://cn.bing.com/search?" + urllib.parse.urlencode({"q": base_q, "format": "rss"}),
+                       "https://www.bing.com/search?" + urllib.parse.urlencode({"q": base_q, "format": "rss", "count": "30"})):
+                xml = _http_text(bu)
+                pages += re.findall(r"<link>(https://detail\.zol\.com\.cn/[^<]+?\.shtml)</link>", xml or "")
+                if pages:
+                    break
+                _t2.sleep(1)
         except Exception:
             pass
     pages = [p for p in dict.fromkeys(pages) if "/param." not in p][:2]
+    if log:
+        log("中关村候选详情页 %d 个" % len(pages))
     imgs, props = [], []
     for page in pages:
         try:
@@ -629,15 +652,23 @@ def _zol_data(model, brand, log):
                 u = re.sub(r"_\d+x\d+/", "_500x375/", m.group(1))   # 升到 500px 大图
                 if u not in imgs and not re.search(r"logo|icon|banner|watermark", u, re.I):
                     imgs.append(u)
-            # 参数子页：<p title="值"><span>键：</span>值</p>
+            # 参数子页：ZOL 两种结构都要吃——
+            #   旧版 <p title="…"><span>键：</span>值</p>；
+            #   现行表格 <th><span id="newPmName_N">键</span></th>
+            #              <td><span id="newPmVal_N">值</span><em>纠错</em></td>
+            # （2026-10-29 实锤：旧正则跟表格结构完全不匹配，ZOL 参数从来就没解析出来过）
             m = re.search(r'href="(/[^"]*?/param\.shtml)"', html2)
             if m:
                 purl = "https://detail.zol.com.cn" + m.group(1)
                 phtml = _http_text(purl, page)
-                for km, vm in re.findall(r'<p title="[^"]*"><span>\s*([^<：]+?)：?\s*</span>\s*([^<]{1,80}?)\s*</p>', phtml):
-                    k, v = km.strip(), vm.strip()
-                    if k and v and v != "-" and (k, v) not in props:
-                        props.append((k, v))
+                phtml = re.sub(r"<em[^>]*>.*?</em>", " ", phtml, flags=re.S)   # 去「纠错」
+                for rx in (r'<p title="[^"]*"><span>\s*([^<：]+?)：?\s*</span>\s*([^<]{1,80}?)\s*</p>',
+                           r'<th[^>]*>\s*<span[^>]*>\s*([^<：]{1,30}?)：?\s*</span>\s*</th>\s*'
+                           r'<td[^>]*>\s*<span[^>]*>([^<]{1,80}?)\s*</span>'):
+                    for km, vm in re.findall(rx, phtml):
+                        k, v = km.strip(), vm.strip()
+                        if k and v and v != "-" and (k, v) not in props:
+                            props.append((k, v))
             if imgs or props:
                 break
         except Exception:
@@ -1126,18 +1157,13 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind=""):
     have_size = os.path.isfile(sizeimg)
     if os.path.isfile(picked) and have_size:
         return picked
-    # ① 软件图库优先（与卡片同源的审过图）
-    have_prod = False
-    lib = _library_img(model)
-    if lib:
-        _rescue_prod(lib, log).save(picked)
-        have_prod = True
-        if log:
-            log("机图用软件图库（与卡片同款）")
-    # ①.5 AI 选图（2026-10-28 用户令「蓝底没有AI选图嘛，没有的话也给他加上去」）：
+    # ① AI 选图先行（2026-10-29 用户令「蓝底也跟聚光一样会选好的图」）：
     # 复用聚光/发布图同款视觉选图（pei_core.zhipu_pick_images，缓存 _ai_pick_v4.json
-    # 与聚光共享——同一台机器两边不重复烧视觉额度），取 front（正面整机）抠底；
-    # AI 不可用/候选不足/没认出 → 落回下面的启发式，行为与旧版完全一致。
+    # 与聚光共享——同一台机器两边不重复烧视觉额度），取 front（正面整机）抠底。
+    # 顺序教训（CWB12-27BKU1 实锤）：原来「软件图库」排在 AI 前面，图库里的开门
+    # 内部照直接当选，AI 根本轮不到——聚光用官网关门整机照、蓝底却拿开门图。
+    # 现在 AI 先挑（有缓存零成本），挑不中/AI 不可用/候选不足 → 退图库，再退启发式。
+    have_prod = False
     if not have_prod:
         try:
             import pubwork as _pw
@@ -1150,12 +1176,21 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind=""):
                     if _pick and _pick.get("front"):
                         _fp = os.path.join(_src, _pick["front"])
                         if os.path.isfile(_fp):
-                            _rescue_prod(_fp, log).save(picked)
+                            _rescue_prod(Image.open(_fp), log).save(picked)
                             have_prod = True
                             if log:
                                 log("机图用 AI 选图（front=%s，与聚光同源）" % _pick["front"])
-        except Exception:
-            pass
+        except Exception as _e:
+            if log:
+                log("AI 选图跳过：%r" % (_e,))
+    # ② 软件图库兜底（与卡片同源的审过图；AI 没给出 front 时才用）
+    if not have_prod:
+        lib = _library_img(model)
+        if lib:
+            _rescue_prod(lib, log).save(picked)
+            have_prod = True
+            if log:
+                log("机图用软件图库（与卡片同款）")
     # ② 候选源：写文案已生成的官方图（copy/<型号>/img_*.jpg）优先入队，再接抓取链 URL。
     # 没机图就选机图；有机图只找官网尺寸线框图
     srcs = []
@@ -1372,6 +1407,36 @@ def _parse_dims(pd):
         ns = sorted(nums, reverse=True)
         return ns[1], ns[0], ns[2]      # 兜底：宽=次大, 高=最大, 深=最小
     return None
+
+
+def _ensure_dims(info, mdir, img_urls=None, log=None):
+    """尺寸补漏（2026-10-29 用户令）：参数里没外形尺寸、又没有官方尺寸图时，
+    去中关村参数页把「外形尺寸」等缺键并进 props（已有键绝不覆盖）。
+    官网有图有参时主兜底不触发，但官网参数表可能就是没尺寸键（XQG100-H28E 实锤：
+    ZOL 详情页 index2180682 有外形尺寸，官网没有）。蓝底 generate 与聚光 img_size 共用。
+    返回 (info, img_urls)。有官方尺寸图时不补——图上数字才权威（ES60H-Q3 图文矛盾实锤）。"""
+    log = log or (lambda s: None)
+    model = (info.get("model") or "").strip()
+    pd0 = pei_core.prop_dict(info.get("props") or [])
+    have_si = bool(mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg")))
+    if have_si or _parse_dims(pd0) or _KNOWN_DIMS.get(model) \
+            or _KNOWN_DIMS.get(norm_model(model) or ""):
+        return info, img_urls
+    log("参数里没外形尺寸，去中关村补…")
+    try:
+        zi, zp = _zol_data(model, (info.get("brand") or ""), log)
+    except Exception as e:
+        log("中关村补参失败：%r" % (e,))
+        return info, img_urls
+    if zi and not img_urls:
+        img_urls = zi
+    if zp:
+        have = {str(k) for k, _v in (info.get("props") or [])}
+        for k, v in zp:
+            if str(k) not in have:
+                info.setdefault("props", []).append((k, v))
+        log("中关村补参：%d 条（合计 %d 条）" % (len(zp), len(info.get("props") or [])))
+    return info, img_urls
 
 
 def _kit_titles(brand, model, pd, info, sp):
@@ -2003,6 +2068,10 @@ def generate(model, force=0, log=None):
             img_urls = zimgs
         if zprops and not (info.get("props") or []):
             info["props"] = zprops
+    # 尺寸补漏（2026-10-29 用户令「一个机器怎么可能没有尺寸」+「中关村的也可以找找数据」）：
+    # 官网有图有参时上面那道兜底不触发，但官网参数表可能就是没有外形尺寸键
+    # （XQG100-H28E 实锤）——中关村参数页补一次（详见 _ensure_dims）。
+    info, img_urls = _ensure_dims(info, mdir, img_urls, log)
     prod = _pick_prod(model, img_urls, mdir, log, page_url=(info or {}).get("url") or None,
                       kind=(info or {}).get("kind") or (info or {}).get("cat") or "")
     if not prod and zimgs:

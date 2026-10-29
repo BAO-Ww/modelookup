@@ -808,6 +808,10 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
                 ai_dims = kitset._ai_read_size_nums(_si, lambda s: None)
             except Exception:
                 ai_dims = None
+        # 尺寸补漏（2026-10-29 用户令）：没官方尺寸图/AI 没读出数字时，
+        # 让 kitset 去中关村补外形尺寸参数再组 cfg（蓝底/聚光同一来源）
+        if not ai_dims:
+            info, _ = kitset._ensure_dims(info, kdir, None, lambda s: None)
         cfg, _, _, _ = kitset._build_cfg(info, mdir=kdir, ai_dims=ai_dims)
         si = cfg.get("sizeimg")
         pills = cfg.get("size_pills") or []
