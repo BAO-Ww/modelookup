@@ -430,8 +430,22 @@ def gen_style(model, style, sell_price=None, version="N"):
     try:
         info = load_info(model) or work(model, prog=_job_prog)
         import pei_ai9
-        src = info["dir"]
-        out = os.path.join(src, STYLE_DIRS.get(style, style))
+        if style == "spot":
+            # 聚光独立体系（2026-10-29 用户令「聚光路径跟着蓝底来，不跟写文案一起」）：
+            # 数据源+成品全在 kitset/<型号>/（抓取图进 官网\ 子目录，成品 AI6张_聚光\）。
+            # 缺料时把写文案已抓的一次性硬链搬入（ensure_data），都没有才借上面 work()
+            # 抓一次——搬完聚光只依赖 kitset，写文案目录删了也不影响聚光。
+            import kitset as _ks
+            _ks.ensure_data(model, log=lambda s: _logf()(s))
+            _kinfo = _ks.load_kinfo(model) or info
+            info = dict(_kinfo)
+            info["dir"] = _ks.model_dir(model)
+            src = os.path.join(info["dir"], "官网")
+            os.makedirs(src, exist_ok=True)
+            out = _ks.spot_dir(model)
+        else:
+            src = info["dir"]
+            out = os.path.join(src, STYLE_DIRS.get(style, style))
         paths = pei_ai9.generate(info, src, out, version=version, sell_price=sell_price,
                                  api_key=_ai_key(), progress=_job_prog, style=style,
                                  slots=SLOTS6, overview=False)
@@ -631,7 +645,17 @@ def qa_auto(model):
     if res is None:
         raise RuntimeError("视觉模型暂不可用，无法自检+自动优化")
     info = load_info(model)
-    r = pei_ai9.auto_optimize(_ai_key(), info, info["dir"], out, style, res,
+    if style == "spot":
+        # 聚光独立体系：自动优化重渲的图源/成品都在 kitset（2026-10-29 用户令）
+        import kitset as _ks
+        _ks.ensure_data(model)
+        _kinfo = _ks.load_kinfo(model) or info
+        info = dict(_kinfo)
+        info["dir"] = _ks.model_dir(model)
+        src = os.path.join(info["dir"], "官网")
+    else:
+        src = info["dir"]
+    r = pei_ai9.auto_optimize(_ai_key(), info, src, out, style, res,
                               rounds=2, progress=_job_prog)
     new = pei_core.qa_render(_ai_key(), paths, info)
     return {"ok": True, "issues": (new if new is not None else res), "optimized": r}
