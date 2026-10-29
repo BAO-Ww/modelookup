@@ -343,7 +343,7 @@ class ApiPostMixin:
                 if u.path == "/api/pubgen":
                     # 套图生成走后台线程（AI 背景要十几秒），前端轮询 /api/pubjob
                     if pubwork.job_state()["running"]:
-                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑"}, ensure_ascii=False))
+                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
                         return
                     style = str(d.get("style") or "studio")
                     if style not in pubwork.STYLE_DIRS:
@@ -355,7 +355,7 @@ class ApiPostMixin:
                     return
                 if u.path == "/api/pubhero":
                     if pubwork.job_state()["running"]:
-                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑"}, ensure_ascii=False))
+                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
                         return
                     threading.Thread(target=pubwork.gen_hero,
                                      args=(model, price, ver), daemon=True).start()
@@ -389,7 +389,7 @@ class ApiPostMixin:
                 elif u.path == "/api/pubxy":
                     # 一键发布闲鱼：playwright 半自动，阻塞在后台线程（用户在浏览器点发布）
                     if pubwork.job_state()["running"]:
-                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑"}, ensure_ascii=False))
+                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
                         return
                     threading.Thread(target=pubwork.pub_xy,
                                      args=(model, ver), daemon=True).start()

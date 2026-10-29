@@ -143,6 +143,23 @@ def job_state():
         return dict(JOB)
 
 
+def busy_msg():
+    """撞锁提示用（2026-10-29 用户令「要知道哪个在跑」）：把在跑任务的
+    型号/干什么/进度拼成人话，弹窗直接显示，不再只回死话「已有任务在跑」。"""
+    j = job_state()
+    if not j.get("running"):
+        return "其他任务"
+    bits = []
+    if j.get("model"):
+        bits.append(str(j["model"]))
+    if j.get("what"):
+        bits.append(str(j["what"]))
+    s = "的".join(bits) if bits else "后台任务"
+    if j.get("pct"):
+        s += "（%d%%）" % int(j["pct"])
+    return s
+
+
 def _logf():
     try:
         import state

@@ -387,7 +387,7 @@ class ApiGetMixin:
                     "job": pubwork.job_state()}, ensure_ascii=False))
                 return
             if pubwork.job_state()["running"]:
-                self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑"}, ensure_ascii=False))
+                self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
                 return
             pubwork._job_begin(model, "抓素材")
             def _w():
