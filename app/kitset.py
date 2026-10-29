@@ -856,7 +856,8 @@ def _gather_info(model, log):
     info = None
     try:
         import pubwork
-        info = pubwork.load_info(model)
+        # kitset 权威副本优先（2026-10-29 聚光独立体系）：蓝底上次抓的真参数在自己家
+        info = load_kinfo(model) or pubwork.load_info(model)
         if not info or not (info.get("props") or []):
             info = pubwork.work(model, prog=lambda p, m: (log(m) if log else None))
     except Exception as e:
@@ -985,6 +986,17 @@ def _gather_info(model, log):
                 _pw._save_info(_disk)
                 if log:
                     log("参数落盘：%d 条（原 %d 条）" % (len(info["props"]), _disk_n))
+            # kitset 权威副本（2026-10-29 聚光独立体系）：蓝底抓的真参数落自己家，
+            # 聚光读这份——写文案目录就算删了也不影响蓝底/聚光
+            try:
+                _kc = dict(_disk or info)
+                _kc["props"] = info["props"]
+                _kc["dir"] = model_dir(model)
+                os.makedirs(_kc["dir"], exist_ok=True)
+                with io.open(os.path.join(_kc["dir"], "info.json"), "w", encoding="utf-8") as f:
+                    json.dump(_kc, f, ensure_ascii=False, indent=1)
+            except Exception:
+                pass
         except Exception:
             pass
     return info, imgs
@@ -1625,10 +1637,15 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
         try:
             import pubwork as _pw
             pdir = os.path.join(_pw.sroot(), nm2)
+            # kitset 自己家的抓取图优先（2026-10-29 聚光独立体系：ensure_data 硬链的
+            # 官网\ 副本就在 kitset/<型号>/官网/——写文案目录就算删了蓝底照样有图源）
+            _kown = (glob.glob(os.path.join(kit_root(), nm2, "官网", "*.png")) +
+                     glob.glob(os.path.join(kit_root(), nm2, "官网", "*.jpg")))
             _pc = (glob.glob(os.path.join(pdir, "*.png")) +
                    glob.glob(os.path.join(pdir, "*.jpg")) +
                    glob.glob(os.path.join(pdir, "官网", "*.png")) +
                    glob.glob(os.path.join(pdir, "官网", "*.jpg")))
+            _pc = _kown + [p for p in _pc if p not in set(_kown)]
             _pc.sort(key=lambda p: -os.path.getsize(p))
             srcs += [("file", p) for p in _pc[:24]]
         except Exception:
@@ -2502,16 +2519,105 @@ def _load_pub_info(model):
         return None
 
 
-def _spot_out_dir(model):
-    """聚光四件套产物目录（peiwork/<型号>/AI6张_聚光），norm 与 _safe 两种命名都试。"""
+def load_kinfo(model):
+    """kitset 权威参数副本（kitset/<型号>/info.json，2026-10-29 聚光独立体系）。
+    蓝底抓的真参数落这份，聚光读这份——不依赖写文案目录。取不到返回 None。"""
+    try:
+        p = os.path.join(model_dir(model), "info.json")
+        if os.path.isfile(p):
+            with io.open(p, encoding="utf-8") as f:
+                info = json.load(f)
+            if isinstance(info, dict):
+                info["dir"] = model_dir(model)
+                return info
+    except Exception:
+        pass
+    return None
+
+
+def _link_or_copy(src, dst):
+    """硬链接（同盘零空间，源删除数据不丢）；跨盘/权限失败降级拷贝。幂等。"""
+    if not os.path.isfile(src) or os.path.isfile(dst):
+        return os.path.isfile(dst)
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+    except Exception:
+        pass
+    try:
+        os.link(src, dst)
+        return True
+    except Exception:
+        try:
+            import shutil
+            shutil.copy2(src, dst)
+            return os.path.isfile(dst)
+        except Exception:
+            return False
+
+
+def ensure_data(model, log=None):
+    """聚光独立体系数据保障（2026-10-29 用户令「聚光路径跟着蓝底来，不跟写文案一起」）：
+    kitset/<型号>/ 缺参数/抓取图/AI缓存/旧聚光成品时，从写文案目录 peiwork/<型号>/
+    一次性搬入（硬链接，写文案侧一字不动；此后聚光只依赖 kitset）。
+    幂等，可反复调；搬不进也不阻塞——聚光后续有自己的抓取兜底。"""
+    log = log or (lambda s: None)
+    n = 0
     try:
         import pubwork as _pw
-        root = _pw.sroot()
+        kd = model_dir(model)
+        os.makedirs(kd, exist_ok=True)
+        pdirs = []
         for nm in dict.fromkeys([norm_model(model) or model, _pw._safe(model)]):
-            d = os.path.join(root, nm, "AI6张_聚光")
+            pd = os.path.join(_pw.sroot(), nm)
+            if os.path.isdir(pd) and os.path.abspath(pd) != os.path.abspath(kd):
+                pdirs.append(pd)
+        for pd in pdirs:
+            # ① 参数 + AI 缓存（info.json 一份进根，一份硬链进 官网\——同 inode 内容永远同步）
+            _link_or_copy(os.path.join(pd, "info.json"), os.path.join(kd, "info.json")) and \
+                _link_or_copy(os.path.join(pd, "info.json"), os.path.join(kd, "官网", "info.json"))
+            for fn in ("_ai_pick_v4.json", "_ai_pick.json", "_ai_read_v2.json"):
+                if _link_or_copy(os.path.join(pd, fn), os.path.join(kd, "官网", fn)):
+                    n += 1
+            # ② 抓取图：peiwork 根 + 官网/ 子目录 → kitset/<型号>/官网/
+            for sub in ("", "官网"):
+                sd = os.path.join(pd, sub) if sub else pd
+                for p in sorted(glob.glob(os.path.join(sd, "*.png")) +
+                                glob.glob(os.path.join(sd, "*.jpg"))):
+                    if os.path.isfile(p) and _link_or_copy(p, os.path.join(kd, "官网", os.path.basename(p))):
+                        n += 1
+            # ③ AI 背景（聚光 src_dir=官网\，BG_DIR 跟 src_dir）
+            bg = os.path.join(pd, "AI背景")
+            if os.path.isdir(bg):
+                for p in glob.glob(os.path.join(bg, "*")):
+                    if os.path.isfile(p) and _link_or_copy(p, os.path.join(kd, "官网", "AI背景", os.path.basename(p))):
+                        n += 1
+            # ④ 旧聚光成品一次性入伙（迁移存量，不重跑）
+            sp = os.path.join(pd, "AI6张_聚光")
+            if os.path.isdir(sp):
+                for p in glob.glob(os.path.join(sp, "*")):
+                    if os.path.isfile(p) and _link_or_copy(p, os.path.join(kd, "AI6张_聚光", os.path.basename(p))):
+                        n += 1
+        if n:
+            log("聚光数据入伙：%d 个文件 → kitset\\%s（硬链接，写文案目录不动）" % (n, os.path.basename(kd)))
+    except Exception as e:
+        log("聚光数据搬入失败（不阻塞，后面还有抓取兜底）：%r" % (e,))
+    return n
+
+
+def spot_dir(model):
+    """聚光四件套产物目录 = kitset/<型号>/AI6张_聚光（2026-10-29 起跟蓝底同家）。"""
+    return os.path.join(model_dir(model), "AI6张_聚光")
+
+
+def _spot_out_dir(model):
+    """聚光四件套产物目录（kitset/<型号>/AI6张_聚光），norm 与 _safe 两种命名都试。
+    2026-10-29 迁移：旧 peiwork/<型号>/AI6张_聚光 由 ensure_data 硬链入伙后这里只认 kitset。"""
+    try:
+        for nm in dict.fromkeys([norm_model(model) or model, model]):
+            d = os.path.join(kit_root(), nm, "AI6张_聚光")
             if os.path.isdir(d):
                 return d
-        return d
+        return os.path.join(model_dir(model), "AI6张_聚光")
     except Exception:
         return ""
 
