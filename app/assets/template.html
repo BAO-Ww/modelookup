@@ -505,15 +505,8 @@ footer a:hover{text-decoration:underline}
           <span class="lbl" id="subreclbl">子用户发布</span>
           <select id="subrecsel" style="width:100%;margin-top:6px;padding:8px 10px;border:1px solid #d7dce6;border-radius:9px;font-size:13px;background:#fff;outline:0;color:#333;cursor:pointer"></select>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;margin-top:10px;min-width:0">
-          <span class="lbl" style="font-size:11.5px;color:#7b8494;white-space:nowrap;flex:none" title="按该型号最低清理价（美的系按拿货价）筛选">清理价</span>
-          <div class="pricerow">
-            <input class="pricebar-in" id="pmin" type="number" min="0" step="1" inputmode="decimal" placeholder="最低">
-            <span class="tilde">~</span>
-            <input class="pricebar-in" id="pmax" type="number" min="0" step="1" inputmode="decimal" placeholder="最高">
-            <button class="pc" id="pclear" hidden>清除</button>
-          </div>
-        </div>
+        <!-- 清理价区间筛选 2026-10-29 用户令挪进主区吸顶条 #ptbar（价格类型后面）；
+             侧栏太窄输入值看不全，吸顶条宽度管够 -->
       </div>
       <div class="updbar" id="updbar" hidden style="display:none">
         <!-- 四个操作按钮已移到窗口顶部菜单栏（帮助前）；这里只留隐藏按钮给菜单触发用。
@@ -569,7 +562,18 @@ footer a:hover{text-decoration:underline}
         <button class="chip" data-flag="hide" title="隐藏你已标记发布的型号">未发布</button>
         <button class="chip" data-flag="pub" title="看自己的发布记录（顶栏可筛正品/样机、没库存、亏钱；各账号各看各的）">已发布</button>
       </div>
-      <div class="hint" id="hint"></div>
+      <!-- 统计行（2026-10-29 用户定稿）：筛选统计 + 清理价区间同一行；清理价 16:03 从侧栏挪出，
+           16:17 再从 chips 行挪到这行（用户红框指定位置） -->
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-width:0">
+      <div class="hint" id="hint" style="flex:none;max-width:100%"></div>
+      <div style="display:flex;align-items:center;gap:6px;flex:none">
+        <span class="tlbl" title="按该型号最低清理价（美的系按拿货价）筛选">清理价</span>
+        <input class="pricebar-in" id="pmin" type="number" min="0" step="1" inputmode="decimal" placeholder="最低">
+        <span style="color:var(--ink3);font-size:12px;flex:none">~</span>
+        <input class="pricebar-in" id="pmax" type="number" min="0" step="1" inputmode="decimal" placeholder="最高">
+        <button class="pc" id="pclear" hidden>清除</button>
+      </div>
+      </div>
       </div>
       <div class="boot" id="boot" hidden><div class="spin"></div><p>正在读取数据…</p></div>
       <div class="list" id="list"></div>

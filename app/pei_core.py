@@ -1321,9 +1321,12 @@ def zhipu_test(api_key):
         req = urllib.request.Request(
             "https://open.bigmodel.cn/api/paas/v4/chat/completions",
             data=json.dumps({
-                "model": "glm-4-flash",
+                # 2026-10-29 升级 glm-4.5-flash（免费）；连通性探测必须关思考——
+                # 4.5 系默认先烧 reasoning，max_tokens=4 会空正文误报连不上
+                "model": "glm-4.5-flash",
                 "messages": [{"role": "user", "content": "ping"}],
-                "max_tokens": 4,
+                "max_tokens": 32,
+                "thinking": {"type": "disabled"},
             }).encode("utf-8"),
             headers={"Content-Type": "application/json",
                      "Authorization": "Bearer " + str(api_key).strip()})
@@ -1387,9 +1390,10 @@ def _zhipu_sellpoints(api_key, info, n=3, long=False):
         req = urllib.request.Request(
             "https://open.bigmodel.cn/api/paas/v4/chat/completions",
             data=json.dumps({
-                "model": "glm-4-flash",
+                "model": "glm-4.5-flash",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.8,
+                "thinking": {"type": "disabled"},
             }, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
@@ -1863,9 +1867,10 @@ def zhipu_ai9_copy(api_key, info, version="N"):
         req = urllib.request.Request(
             "https://open.bigmodel.cn/api/paas/v4/chat/completions",
             data=json.dumps({
-                "model": "glm-4-flash",
+                "model": "glm-4.5-flash",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.9,
+                "thinking": {"type": "disabled"},
             }, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
@@ -2019,9 +2024,10 @@ def zhipu_make_sellpoints(api_key, info):
         req = urllib.request.Request(
             "https://open.bigmodel.cn/api/paas/v4/chat/completions",
             data=json.dumps({
-                "model": "glm-4-flash",
+                "model": "glm-4.5-flash",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.85,
+                "thinking": {"type": "disabled"},
             }, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",

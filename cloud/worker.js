@@ -1396,6 +1396,12 @@ async function route(request, env, path, ctx) {
     if (!r.ok) return { __fail: "GitHub 查询失败 HTTP " + r.status + "（检查 GH_TOKEN 配置）" };
     try { return await r.json(); } catch (e) { return { __fail: "GitHub 返回了异常数据（坏 JSON）" }; }
   }
+  // 边缘缓存键（2026-10-29 用户令「下载提速」）：按 tag+plat 存，发新版自动换键，
+  // 绝无旧包残留。.invalid 顶级域永远不解析，纯当 key 用。
+  function appdlCacheKey(tag, plat) {
+    return new Request("https://ml-appdl-cache.modelookup.invalid/" +
+      String(tag || "") + "/" + String(plat || "").toLowerCase());
+  }
   function setupAsset(rel, plat) {
     // 2026-10-11 Mac 端：?plat=mac 匹配 ModelLookup-mac-*.zip；不带 plat 仍走 exe（老客户端零影响）
     if (plat === "mac") {
@@ -1420,6 +1426,31 @@ async function route(request, env, path, ctx) {
     // 流式校验——更新链上任一环被篡改，装包前就能拦下。旧资产没有 digest 字段时不带。
     const dg = (a && typeof a.digest === "string" && a.digest.indexOf("sha256:") === 0)
       ? a.digest.slice(7) : "";
+    // 边缘缓存预热（2026-10-29）：发新版后第一个 /appcheck 就后台拉全量包回填 CF 边缘，
+    // 用户下载时直接吃热缓存——CF→GitHub 这条腿快（几十秒），慢的是用户→CF 跨境腿。
+    // 预热失败静默（缓存冷着走透传，零影响）；每个 tag+plat 只暖一次（KV 记账）。
+    try {
+      if (a && ctx && ctx.waitUntil && env.KV) {
+        const wt = rel.tag_name + "/" + String(url.searchParams.get("plat") || "").toLowerCase();
+        if ((await env.KV.get("appdl_warm")) !== wt) {
+          const _warmKey = appdlCacheKey(rel.tag_name, url.searchParams.get("plat"));
+          ctx.waitUntil((async () => {
+            try {
+              const wr = await fetch(a.url, { headers: {
+                "Authorization": "Bearer " + (env.GH_TOKEN || ""),
+                "User-Agent": "modelookup-worker", "Accept": "application/octet-stream" } });
+              if (wr.ok && wr.body && wr.headers.get("content-length")) {
+                await caches.default.put(_warmKey, new Response(wr.body, { status: 200, headers: {
+                  "Content-Type": "application/octet-stream",
+                  "Content-Length": wr.headers.get("content-length"),
+                  "Cache-Control": "public, max-age=2592000" } }));
+                await env.KV.put("appdl_warm", wt);
+              }
+            } catch (e) {}
+          })());
+        }
+      }
+    } catch (e) {}
     return J({ ok: true, tag: rel.tag_name, ver: String(rel.tag_name).replace(/^v/i, ""),
                name: a ? a.name : "", size: a ? a.size : 0, sha256: dg || undefined });
   }
@@ -1429,14 +1460,53 @@ async function route(request, env, path, ctx) {
     if (!rel.tag_name) return jerr("GitHub 查询失败", 502);
     const a = setupAsset(rel, url.searchParams.get("plat") || "");
     if (!a) return jerr("Release 里没有安装包", 404);
-    const dr = await fetch(a.url, { headers: {          // API asset URL + octet-stream = 原始下载
+    // 边缘缓存（2026-10-29 用户令「下载提速」）：预热见 /appcheck，全量请求顺手回填见下。
+    // 命中 → 直接从 CF 边缘机房出流量，GitHub 跨境慢腿消失；未命中 → 照旧透传。
+    // 安全细节：客户端并发分块要求 Range 必回 206——Cache API match 带 Range 会切片回 206，
+    // 但万一缓存侧没切片（回 200），绝不能拿去糊 Range 客户端（会写错块），这种情况走透传。
+    const _rng = request.headers.get("range");
+    try {
+      const _ck = appdlCacheKey(rel.tag_name, url.searchParams.get("plat"));
+      if (_rng) _ck.headers.set("range", _rng);
+      const hit = await caches.default.match(_ck);
+      if (hit && (hit.status === 206 || !_rng)) {
+        const h = new Headers(hit.headers);
+        h.set("Content-Type", "application/octet-stream");
+        h.set("Content-Disposition", 'attachment; filename="' + a.name + '"');
+        h.set("Accept-Ranges", "bytes");
+        h.set("X-Cache", "HIT");
+        return new Response(hit.body, { status: hit.status, headers: h });
+      }
+    } catch (e) {}
+    const dh = {          // API asset URL + octet-stream = 原始下载
       "Authorization": "Bearer " + (env.GH_TOKEN || ""),
-      "User-Agent": "modelookup-worker", "Accept": "application/octet-stream" } });
+      "User-Agent": "modelookup-worker", "Accept": "application/octet-stream" };
+    if (_rng) dh["Range"] = _rng;
+    const dr = await fetch(a.url, { headers: dh });
     if (!dr.ok || !dr.body) return jerr("安装包下载失败（GitHub 侧）", 502);
+    let _body = dr.body, _st = dr.status;
+    // 全量 200 顺手回填缓存（206 不能进 Cache API；老客户端单流全量下载也能焐热缓存）。
+    // tee 双分支：一支给用户下，一支 waitUntil 灌缓存，互不拖慢。
+    if (dr.status === 200 && !_rng) {
+      try {
+        const _cl = dr.headers.get("content-length");
+        if (_cl) {
+          const [b1, b2] = dr.body.tee();
+          const _put = caches.default.put(appdlCacheKey(rel.tag_name, url.searchParams.get("plat")),
+            new Response(b1, { status: 200, headers: {
+              "Content-Type": "application/octet-stream", "Content-Length": _cl,
+              "Cache-Control": "public, max-age=2592000" } }));
+          if (ctx && ctx.waitUntil) ctx.waitUntil(_put.catch(() => {}));
+          _body = b2;
+        }
+      } catch (e) {}
+    }
     const h = { "Content-Type": "application/octet-stream",
-                "Content-Disposition": 'attachment; filename="' + a.name + '"' };
+                "Content-Disposition": 'attachment; filename="' + a.name + '"',
+                "Accept-Ranges": "bytes" };
     if (dr.headers.get("content-length")) h["Content-Length"] = dr.headers.get("content-length");
-    return new Response(dr.body, { headers: h });       // 流式转发，不占 worker 内存
+    if (dr.headers.get("content-range")) h["Content-Range"] = dr.headers.get("content-range");
+    return new Response(_body, { status: _st, headers: h });  // 206 分段/200 全量都按源状态回
   }
 
   // ---------- 云端更新中转（2026-10-09 v2.8 全云端口径）----------
