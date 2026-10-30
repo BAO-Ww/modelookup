@@ -2791,15 +2791,30 @@ def generate(model, force=0, log=None):
         mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg"))) else None
     cfg, titles, points, aftersale = _build_cfg(info, mdir=mdir, ai_dims=_ai_dims)
     log("渲染四张 1080×1080…")
+
+    def _p(s):
+        # 细粒度进度（2026-10-30 用户令「生成中要看到底在哪一步」）：粗阶段走 log→prog，
+        # 渲染/复检这类一条 log 盖一大段的在这里逐张报
+        try:
+            import jobman
+            jobman.prog("kitset:" + model, s)
+        except Exception:
+            pass
+    _p("渲染 1/4 主图…")
     _render_img1(cfg, Image.open(prod), os.path.join(mdir, "img_1.jpg"))
+    _p("渲染 2/4 参数图…")
     _render_img2(cfg, Image.open(prod), os.path.join(mdir, "img_2.jpg"))
+    _p("渲染 3/4 卖点图…")
     _render_img3(cfg, points, os.path.join(mdir, "img_3.jpg"))
+    _p("渲染 4/4 尺寸图…")
     _render_img4(cfg, os.path.join(mdir, "img_4.jpg"), prod)
     # AI 复检成片（2026-10-29 用户令「蓝底也要接上」）：与聚光同一套质检，
     # 压字/截断/出画自动保守档重渲；复检完再做聚光时间线对账
+    _p("AI 复检成片…")
     _qa_blue(model, info, mdir, cfg, points, prod, log)
     # 时间线对账：本次拿到的官方尺寸图可能比聚光四件套新（聚光先跑手绘落盘实锤）——
     # 自动重出聚光第 4 张，两套成品永远用官网图（2026-10-29 用户令）
+    _p("聚光尺寸图对账…")
     sync_spot_size(model, info, log)
     res = {"ok": True, "cached": False, "model": cfg["model"], "name": cfg["series"] + " " + cfg["model"],
            "titles": titles, "points": points, "aftersale": aftersale,
