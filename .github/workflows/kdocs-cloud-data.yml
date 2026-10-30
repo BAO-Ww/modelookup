@@ -11,14 +11,22 @@ on:
       note:
         description: "备注（可选）"
         required: false
-  schedule:
-    - cron: "40 0-15 * * *"   # 2026-10-15 用户拍板照旧：UTC 0-15 点每小时（:40）= 北京时间 8:40–23:40 每小时一次；0点-8点不跑
+      mode:
+        description: "local=本机runner（默认）/ cloud=GitHub云runner兜底"
+        required: false
+        default: "local"
+  # schedule 已撤（2026-10-30 方案B）：GitHub 自带定时高峰丢班（整点拥挤时整班丢弃不补），
+  # 派班搬到 CF Worker Cron（modelookup-auth 的 scheduled，四条 cron 与本表同源）。
+  # 转回 GitHub 定时：① python _cf_cron_set.py 把 CRONS 换成 [] 清空云端 cron
+  #                   ② 恢复下面这行 schedule：
+  # - cron: "40 0-15 * * *"   # UTC 0-15 点每小时（:40）= 北京时间 8:40–23:40 每小时；0点-8点不跑
 
 permissions:
   contents: read
 
 jobs:
   pull-kdocs:
+    if: inputs.mode != 'cloud'
     runs-on: [self-hosted, windows]   # 2026-10-17 额度墙：本机自建 runner（不吃 Actions 分钟）
     env:
       PYTHONUTF8: '1'
@@ -60,3 +68,34 @@ jobs:
             ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
           Get-ChildItem "C:\actions-runner\_work\_temp" -ErrorAction SilentlyContinue |
             ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+
+  # ---- 云端兜底（2026-10-30 用户令「本机抓取不了了就走 GitHub 抓取，优先走本机」）----
+  # CF Worker Cron 兜底派班时发现本机 runner 离线 → dispatch mode=cloud 落到这里：
+  # GitHub 云 runner 跑同一套抓取脚本（凭据走 repo secrets），数据照常上云。
+  pull-kdocs-cloud:
+    if: inputs.mode == 'cloud'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Playwright + Chromium + openpyxl
+        run: |
+          python -m pip install playwright==1.48.0 openpyxl
+          python -m playwright install --with-deps chromium
+      - name: Pull KDocs tables and upload
+        env:
+          CLOUD_TOKEN: ${{ secrets.CLOUD_TOKEN }}
+          KX_SECRET: ${{ secrets.KX_SECRET }}
+        run: |
+          for i in 1 2 3; do
+            python .github/scripts/kdocs_cloud_pull.py && exit 0
+            echo "== 第 $i 次失败，60 秒后重试 =="
+            sleep 60
+          done
+          exit 1
