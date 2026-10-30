@@ -481,8 +481,16 @@ class ApiGetMixin:
                     (".." in p) or ("/" in p) or ("\\" in p) for p in parts):
                 self._send(403, b"forbidden", "text/plain; charset=utf-8")
                 return
-            fp = os.path.join(pubwork.sroot(), *parts)
-            root = os.path.abspath(pubwork.sroot())
+            if len(parts) >= 2 and parts[1] == pubwork.SPOT_SUB:
+                # 聚光四件套成品在 kitset/<型号>/（2026-10-30 修：原来只认 peiwork 根
+                # → 图明明生成了，页面 /pubimg 全 404，左边一直「还没有图」）
+                import kitset
+                base = kitset.model_dir(parts[0])
+                parts = parts[1:]
+            else:
+                base = pubwork.sroot()
+            fp = os.path.join(base, *parts)
+            root = os.path.abspath(base)
             if not os.path.abspath(fp).startswith(root) or not os.path.isfile(fp):
                 self._send(404, b"not found", "text/plain; charset=utf-8")
                 return

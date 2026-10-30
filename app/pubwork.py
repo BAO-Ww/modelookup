@@ -395,16 +395,21 @@ def _last_get(model):
         return dict(_LAST.get(_safe(model)) or {})
 
 
-def _auto_qa_spot(model, info, src, out, style, paths):
+def _auto_qa_spot(model, info, src, out, style, paths, prog=None):
     """聚光四件套生成完自动 AI 复检（2026-10-29 用户令「做好的四张让AI过一遍」）。
     商汤免费额度优先；无 key/视觉不可用静默跳过不挡出货。
-    压字/出画/截断等确定性布局问题自动微调重渲（复用 qa_render + auto_optimize）。"""
+    压字/出画/截断等确定性布局问题自动微调重渲（复用 qa_render + auto_optimize）。
+
+    2026-10-30 用户实锤「聚光的图一直出不来」：复检原本跑在生成线程里、还占着进度条，
+    四张图早落盘了前端却一直「生成中 92%」等到复检跑完（1~3 分钟）。现在复检走独立
+    后台线程、prog 传 None = 不碰 JOB 进度（图先亮出来，修好的再静默替换）。"""
     import pei_core
+    _prog = prog or (lambda p, m: None)
     key = _ai_key() or pei_core._sn_key()
     if not key:
         _logf()("AI 复检跳过：未配置视觉 key")
         return
-    _job_prog(92, "AI 复检成片 ...")
+    _prog(92, "AI 复检成片 ...")
     res = pei_core.qa_render(key, paths, info)
     if res is None:
         _logf()("AI 复检不可用（视觉模型无应答），跳过")
@@ -416,7 +421,7 @@ def _auto_qa_spot(model, info, src, out, style, paths):
         len(res), "；".join("%s(%s)" % (x["issue"], x["severity"]) for x in res)))
     import pei_ai9
     r = pei_ai9.auto_optimize(key, info, src, out, style, res, rounds=2,
-                              progress=_job_prog, log=lambda s: _logf()(s))
+                              progress=_prog, log=lambda s: _logf()(s))
     if r.get("fixed"):
         _logf()("AI 自动修复槽位 %s，重渲完成" % r["fixed"])
     for x in (r.get("remaining") or []):
@@ -427,6 +432,8 @@ def gen_style(model, style, sell_price=None, version="N"):
     """生成一套 6 张精修（后台线程跑，JOB 汇报进度）"""
     name = STYLE_NAMES.get(style, style)
     _job_begin(model, "发布图 · " + name)
+    info = src = out = None          # 复检线程要用，先占位（异常分支里也不能 NameError）
+    paths = []
     try:
         info = load_info(model) or work(model, prog=_job_prog)
         import pei_ai9
@@ -450,17 +457,29 @@ def gen_style(model, style, sell_price=None, version="N"):
                                  api_key=_ai_key(), progress=_job_prog, style=style,
                                  slots=SLOTS6, overview=False)
         _last_set(model, paths, out, style)
-        if style == "spot":
-            # 聚光四件套出完自动让 AI 过一遍（复检失败绝不影响已生成的图）
-            try:
-                _auto_qa_spot(model, info, src, out, style, paths)
-            except Exception as e:
-                _logf()("AI 复检异常（不影响成片）：%s" % e)
         _logf()("发布图·%s 生成完成：%d 张 -> %s" % (name, len(paths), out))
+        # 2026-10-30 用户实锤「图一直出不来」：先收尾让前端立刻亮图，复检挪后台线程。
+        # 复检最慢 1~3 分钟，压在收尾前就会看到「100% 卡住 + 左边还没有图」。
         _job_end(True)
     except Exception as e:
         _logf()("发布图·%s 生成失败：%s" % (name, e))
         _job_end(False, str(e))
+        return
+    if style == "spot" and paths:
+        # 聚光四件套出完后台让 AI 过一遍（不占进度条；修过的图静默替换，复检失败绝不影响已生成图）
+        def _qa_bg():
+            try:
+                if job_state().get("running"):
+                    _logf()("AI 复检跳过：已有新任务在跑，避免覆盖新成片")
+                    return
+                _auto_qa_spot(model, info, src, out, style, paths)
+                _logf()("AI 复检结束（若修过图，重开这套即可看到）")
+            except Exception as e:
+                _logf()("AI 复检异常（不影响成片）：%s" % e)
+        try:
+            threading.Thread(target=_qa_bg, daemon=True).start()
+        except Exception as e:
+            _logf()("AI 复检线程起不来（不影响成片）：%s" % e)
 
 
 def gen_hero(model, sell_price=None, version="N"):
@@ -550,11 +569,19 @@ def lib(model):
     seeded = _seed_from_copy(model)
     d = mdir(model)
     groups = []
+    # 2026-10-30：聚光读侧改走 kitset 后，老型号的历史聚光图还躺在旧 peiwork 根——
+    # kitset 这边没图就先补一次本地硬链搬家（ensure_data 纯本地、幂等、不联网不重跑）。
+    try:
+        import kitset as _ks
+        if not _img_files(_ks.spot_dir(model)):
+            _ks.ensure_data(model, log=lambda s: _logf()(s))
+    except Exception as e:
+        _logf()("聚光老图搬入失败（不影响其它）：%s" % e)
     for sub in ("AI6张", "AI6张_聚光", "AI6张_亮白", "AI6张_纯白", "AI6张_实景", "发布图"):
         label = {"AI6张": "发布图 · 深灰影棚", "AI6张_聚光": "发布图 · 暗角聚光",
                  "AI6张_亮白": "发布图 · 亮白影棚", "AI6张_纯白": "发布图 · 纯白",
                  "AI6张_实景": "发布图 · 实景合成", "发布图": "保存精选 / 促销首图"}.get(sub, sub)
-        fs = _img_files(os.path.join(d, sub))
+        fs = _img_files(dir_of(model, sub))   # 聚光走 kitset（2026-10-30），其余走 peiwork
         if fs:
             groups.append({"label": label, "sub": sub,
                            "files": ["%s/%s" % (sub, f) for f in fs]})
@@ -746,7 +773,22 @@ def pub_xy(model, version="N"):
         _job_end(False, str(e))
 
 
+SPOT_SUB = "AI6张_聚光"
+
+
+def dir_of(model, sub=""):
+    """型号内子目录解析（2026-10-30 修「聚光的图一直出不来」实锤）。
+
+    聚光四件套 2026-10-29 已从 peiwork 迁到 kitset/<型号>/AI6张_聚光（写入端 = kitset.spot_dir），
+    但读侧三处（打开文件夹 / 取图 / 列库）还挂在旧 peiwork 根 → 点开文件夹是空的、页面显示没图。
+    这里统一收口：聚光一律走 kitset，其余风格照旧走素材根 peiwork。"""
+    sub = (sub or "").replace("/", os.sep).strip(os.sep)
+    if sub and sub.split(os.sep)[0] == SPOT_SUB:
+        import kitset
+        return os.path.join(kitset.model_dir(model), sub)
+    return os.path.join(mdir(model), sub) if sub else mdir(model)
+
+
 def open_dir(model, sub=""):
-    d = os.path.join(mdir(model), sub.replace("/", os.sep)) if sub else mdir(model)
-    reveal(d)
+    reveal(dir_of(model, sub))
     return {"ok": True}
