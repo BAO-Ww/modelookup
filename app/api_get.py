@@ -114,7 +114,8 @@ class ApiGetMixin:
                 def _do():
                     try:
                         res = kitset.generate(model, force,
-                                              log=lambda s: state.LOG.append("[蓝底] " + s))
+                                              log=lambda s: (state.LOG.append("[蓝底] " + s),
+                                                             jobman.prog("kitset:" + model, s)))
                         res["dir"] = kitset.model_dir(model)
                         return res
                     except Exception as e:

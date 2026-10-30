@@ -9,7 +9,19 @@ import threading
 _JOBS = {}
 _LOCK = threading.Lock()
 
-_EMPTY = {"running": False, "done": False, "ok": None, "res": None, "err": ""}
+_EMPTY = {"running": False, "done": False, "ok": None, "res": None, "err": "", "prog": ""}
+
+
+def prog(key, text):
+    """任务线程内打点当前步骤（2026-10-30 用户令「生成中要看到底在哪一步」）：
+    前端轮询 /api/jobget 时随 state 带出；key 不存在（同步调用等）静默忽略。"""
+    try:
+        with _LOCK:
+            j = _JOBS.get(key)
+            if j is not None:
+                j["prog"] = str(text)
+    except Exception:
+        pass
 
 
 def submit(key, fn, *args, **kw):
@@ -18,7 +30,7 @@ def submit(key, fn, *args, **kw):
         j = _JOBS.get(key)
         if j and j.get("running"):
             return False
-        _JOBS[key] = {"running": True, "done": False, "ok": None, "res": None, "err": ""}
+        _JOBS[key] = {"running": True, "done": False, "ok": None, "res": None, "err": "", "prog": ""}
     log = kw.pop("_log", None)
 
     def _run():

@@ -503,19 +503,21 @@ footer a:hover{text-decoration:underline}
            号筛选/管理/数据仍只在自看时亮（2026-10-23 定稿不变） -->
       <div class="fgroup" id="xybox" hidden>
         <div class="fhead"><span class="flbl">闲鱼号</span></div>
-        <div id="xyboxbanner" hidden style="display:none;font-size:12.5px;font-weight:700;color:var(--ink);line-height:1.55;word-break:break-all;margin:1px 0 7px"></div>
-        <div id="xyseg" style="display:none;align-items:center;gap:7px;flex-wrap:wrap">
+        <div id="xyboxbanner" hidden style="display:none;font-size:12.5px;font-weight:500;color:#475467;line-height:1.55;word-break:break-all;margin:1px 0 7px"></div>
+        <div id="xyseg" style="display:none;flex-direction:column;align-items:stretch;gap:6px">
           <select id="xysel" title="只看标记到这个闲鱼号名下的型号（全部=不按号筛）"
-                  style="flex:1 1 100px;min-width:0;max-width:170px;padding:5px 8px;border:1px solid #d7dce6;border-radius:8px;font-size:12.5px;background:#fff;outline:0;color:#333">
+                  style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #d7dce6;border-radius:8px;font-size:12.5px;background:#fff;outline:0;color:#333">
             <option value="">全部</option>
           </select>
-          <!-- 状态栏「管理」键（2026-10-14）：不用进发布弹窗，这里直达「管理我的闲鱼号」 -->
-          <button id="xymgrbtn" title="管理我的闲鱼号：改名（同步所有发布记录）/ 修复旧号名 / 一键全部取消标记发布"
-                  style="padding:4px 10px;border:1px solid #c6d8ff;border-radius:8px;font-size:12px;background:#eaf1ff;color:#2e6be6;cursor:pointer;font-weight:600;white-space:nowrap;flex:none">管理</button>
-          <!-- 闲鱼宝贝数据（2026-10-17 用户定稿）：只留数据入口（后台入口 15:47 删），主区内嵌显示不开小窗；
-               权限键 xysj（账号管理里勾），显隐在 applyPermBar 管 -->
-          <button id="xysjbtn" hidden title="在主区里打开闲鱼宝贝数据（数据管家，内嵌显示；再点一次收起）"
-                  style="padding:4px 10px;border:1px solid #c6d8ff;border-radius:8px;font-size:12px;background:#eaf1ff;color:#2e6be6;cursor:pointer;font-weight:600;white-space:nowrap;flex:none">数据</button>
+          <div style="display:flex;gap:6px">
+            <!-- 状态栏「管理」键（2026-10-14）：不用进发布弹窗，这里直达「管理我的闲鱼号」 -->
+            <button id="xymgrbtn" title="管理我的闲鱼号：改名（同步所有发布记录）/ 修复旧号名 / 一键全部取消标记发布"
+                    style="flex:1;padding:4px 10px;border:1px solid #c6d8ff;border-radius:8px;font-size:12px;background:#eaf1ff;color:#2e6be6;cursor:pointer;font-weight:600;white-space:nowrap">管理</button>
+            <!-- 闲鱼宝贝数据（2026-10-17 用户定稿）：只留数据入口（后台入口 15:47 删），主区内嵌显示不开小窗；
+                 权限键 xysj（账号管理里勾），显隐在 applyPermBar 管 -->
+            <button id="xysjbtn" hidden title="在主区里打开闲鱼宝贝数据（数据管家，内嵌显示；再点一次收起）"
+                    style="flex:1;padding:4px 10px;border:1px solid #c6d8ff;border-radius:8px;font-size:12px;background:#eaf1ff;color:#2e6be6;cursor:pointer;font-weight:600;white-space:nowrap">数据</button>
+          </div>
         </div>
       </div>
       <div class="fgroup" id="tools">
@@ -568,18 +570,18 @@ footer a:hover{text-decoration:underline}
         <button class="chip" data-flag="send" title="只列出能发往外区（全国）的型号——可发全国/报备/询问可发、发货写「全国，含运费」的都算">发全国</button>
         <button class="chip" data-flag="hide" title="隐藏你已标记发布的型号">未发布</button>
         <button class="chip" data-flag="pub" title="看自己的发布记录（顶栏可筛正品/样机、没库存、亏钱；各账号各看各的）">已发布</button>
-      </div>
-      <!-- 统计行（2026-10-29 用户定稿）：筛选统计 + 清理价区间同一行；清理价 16:03 从侧栏挪出，
-           16:17 再从 chips 行挪到这行（用户红框指定位置） -->
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-width:0">
-      <div class="hint" id="hint" style="flex:none;max-width:100%"></div>
-      <div style="display:flex;align-items:center;gap:6px;flex:none">
-        <span class="tlbl" title="按全部拿货价筛：价格含税/滞销/样机（美的系含慧买卖/给二批/取整）任何一个价超出 最低~最高 都不显示；零售指导价不算">清理价</span>
+        <span class="tsep"></span>
+        <!-- 价格区间筛选（2026-10-30 用户令：「清理价」改名「价格」，从统计行挪到已发布后面）：
+             按全部拿货价筛，任何一个价超出 最低~最高 都不显示 -->
+        <span class="tlbl" title="按全部拿货价筛：价格含税/滞销/样机（美的系含慧买卖/给二批/取整）任何一个价超出 最低~最高 都不显示；零售指导价不算">价格</span>
         <input class="pricebar-in" id="pmin" type="number" min="0" step="1" inputmode="decimal" placeholder="最低">
         <span style="color:var(--ink3);font-size:12px;flex:none">~</span>
         <input class="pricebar-in" id="pmax" type="number" min="0" step="1" inputmode="decimal" placeholder="最高">
         <button class="pc" id="pclear" hidden>清除</button>
       </div>
+      <!-- 统计行（2026-10-29 用户定稿）：筛选统计；价格区间 19:16 挪进上行（用户红框指定） -->
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-width:0">
+      <div class="hint" id="hint" style="flex:none;max-width:100%"></div>
       </div>
       </div>
       <div class="boot" id="boot" hidden><div class="spin"></div><p>正在读取数据…</p></div>
@@ -2284,8 +2286,8 @@ function subBannerHTML(){
     });
     return n;
   }
-  return '<b>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（'
-       + (selXy ? esc(selXy) + ' ' : '') + _countSet() + ' 个型号' + (selXy ? ' / 共 ' + Object.keys(SUBVIEW.set).length + ' 个' : '') + '）</b>';
+  return '<span>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（'
+       + (selXy ? esc(selXy) + ' ' : '') + _countSet() + ' 个型号' + (selXy ? ' / 共 ' + Object.keys(SUBVIEW.set).length + ' 个' : '') + '）</span>';
 }
 function subHeaderHTML(){
   function _chip(k, label){
@@ -4510,7 +4512,7 @@ function pollJob(key, onDone, onErr, tick){
     fetch('/api/jobget?key=' + encodeURIComponent(key))
       .then(function(r){ return r.json(); })
       .then(function(j){
-        if (tick) tick(Math.round((Date.now() - t0) / 1000));
+        if (tick) tick(Math.round((Date.now() - t0) / 1000), j);
         if (!j) return;
         if (j.phase === 'done'){ clearInterval(timer); onDone(j.res || {}); }
         else if (j.phase === 'failed'){ clearInterval(timer); onErr(new Error((j.res && j.res.msg) || j.err || '任务失败')); }
@@ -4623,8 +4625,20 @@ function openKitView(k){
         }, function(err){
           wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#b42318;font-size:14px">生成失败：' + esc(String(err.message || err)) + '</div>';
           wrap.querySelector('#kv_msg').textContent = '';
-        }, function(sec){
-          wrap.querySelector('#kv_msg').textContent = '生成中…已 ' + sec + ' 秒（首次 1-2 分钟）';
+        }, function(sec, j){
+          /* 当前步骤实时显示（2026-10-30 用户令「只看计时没啥用」）：后端各阶段 prog 打点，
+             顶栏短句 + 正文大字（成品渲染后正文被 render() 覆盖，不再打扰） */
+          var p = (j && j.prog) || '准备中…';
+          wrap.querySelector('#kv_msg').textContent = '生成中·' + p + '（已 ' + sec + ' 秒）';
+          if (!D){
+            wrap.querySelector('#kv_body').innerHTML =
+              '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#5b6472;font-size:15px;gap:10px">'
+              + '<div style="display:flex;align-items:center;gap:10px"><span style="width:18px;height:18px;border:2.5px solid #d8dce3;border-top-color:#4f46e5;border-radius:50%;display:inline-block;animation:sp .8s linear infinite"></span>'
+              + '<b style="font-size:16px;color:#2a2d33;font-weight:600">' + esc(p) + '</b></div>'
+              + '<div style="font-size:12.5px;color:#8a929e">已 ' + sec + ' 秒 · 首次跑这个型号要 1-2 分钟，生成过一次秒开</div>'
+              + '<div style="font-size:12px;color:#aab0b8">爬参数 → 官网/欣盛机图 → 选主图 → 渲染四张 → AI 复检</div>'
+              + '</div>';
+          }
         });
       })
       .catch(function(err){
