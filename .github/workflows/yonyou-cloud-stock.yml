@@ -11,30 +11,38 @@ on:
       note:
         description: "备注（可选）"
         required: false
-  schedule:   # 2026-10-15 用户定稿时刻表：北京 10:30/13:00/15:00/16:00-23:00（半小时轮）；0:00-10:00 不跑
-    - cron: "30 2 * * *"     # 北京 10:30
-    - cron: "0 5 * * *"      # 北京 13:00
-    - cron: "0 7 * * *"      # 北京 15:00
-    - cron: "0 8 * * *"      # 北京 16:00
-    - cron: "30 8 * * *"     # 北京 16:30
-    - cron: "0 9 * * *"      # 北京 17:00
-    - cron: "0 10 * * *"     # 北京 18:00
-    - cron: "30 10 * * *"    # 北京 18:30
-    - cron: "0 11 * * *"     # 北京 19:00
-    - cron: "30 11 * * *"    # 北京 19:30
-    - cron: "0 12 * * *"     # 北京 20:00
-    - cron: "30 12 * * *"    # 北京 20:30
-    - cron: "0 13 * * *"     # 北京 21:00
-    - cron: "30 13 * * *"    # 北京 21:30
-    - cron: "0 14 * * *"     # 北京 22:00
-    - cron: "30 14 * * *"    # 北京 22:30
-    - cron: "0 15 * * *"     # 北京 23:00
+      mode:
+        description: "local=本机runner（默认）/ cloud=GitHub云runner兜底"
+        required: false
+        default: "local"
+  # schedule 已撤（2026-10-30 方案B）：GitHub 自带定时高峰丢班，派班搬到 CF Worker Cron
+  # （modelookup-auth 的 scheduled）。注意 CF 表比本表多一班北京 23:30（与本机触发器同表）。
+  # 转回 GitHub 定时：① python _cf_cron_set.py 把 CRONS 换成 [] 清空云端 cron
+  #                   ② 恢复下面这段 schedule：
+  # - cron: "30 2 * * *"     # 北京 10:30
+  # - cron: "0 5 * * *"      # 北京 13:00
+  # - cron: "0 7 * * *"      # 北京 15:00
+  # - cron: "0 8 * * *"      # 北京 16:00
+  # - cron: "30 8 * * *"     # 北京 16:30
+  # - cron: "0 9 * * *"      # 北京 17:00
+  # - cron: "0 10 * * *"     # 北京 18:00
+  # - cron: "30 10 * * *"    # 北京 18:30
+  # - cron: "0 11 * * *"     # 北京 19:00
+  # - cron: "30 11 * * *"    # 北京 19:30
+  # - cron: "0 12 * * *"     # 北京 20:00
+  # - cron: "30 12 * * *"    # 北京 20:30
+  # - cron: "0 13 * * *"     # 北京 21:00
+  # - cron: "30 13 * * *"    # 北京 21:30
+  # - cron: "0 14 * * *"     # 北京 22:00
+  # - cron: "30 14 * * *"    # 北京 22:30
+  # - cron: "0 15 * * *"     # 北京 23:00
 
 permissions:
   contents: read
 
 jobs:
   pull-stock:
+    if: inputs.mode != 'cloud'
     runs-on: [self-hosted, windows]   # 2026-10-17 额度墙：本机自建 runner（不吃 Actions 分钟）
     env:
       PYTHONUTF8: '1'
@@ -76,3 +84,35 @@ jobs:
             ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
           Get-ChildItem "C:\actions-runner\_work\_temp" -ErrorAction SilentlyContinue |
             ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+
+  # ---- 云端兜底（2026-10-30 用户令「本机抓取不了了就走 GitHub 抓取，优先走本机」）----
+  # CF Worker Cron 兜底派班时发现本机 runner 离线 → dispatch mode=cloud 落到这里：
+  # GitHub 云 runner 跑同一套抓取脚本（凭据走 repo secrets），数据照常上云。
+  pull-stock-cloud:
+    if: inputs.mode == 'cloud'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Playwright + Chromium + openpyxl
+        run: |
+          python -m pip install playwright==1.48.0 openpyxl==3.1.5
+          python -m playwright install --with-deps chromium
+      - name: Pull Yonyou stock and upload
+        env:
+          YY_USER: ${{ secrets.YY_USER }}
+          YY_PASS: ${{ secrets.YY_PASS }}
+          CLOUD_TOKEN: ${{ secrets.CLOUD_TOKEN }}
+        run: |
+          for i in 1 2 3; do
+            python .github/scripts/yy_cloud_pull.py && exit 0
+            echo "== 第 $i 次失败，60 秒后重试 =="
+            sleep 60
+          done
+          exit 1
