@@ -566,13 +566,21 @@ function ptypeOf(it){
   if (!pt && lz &&  sj) return 'l_s';   /* 滞销+样机（2026-10-13 补齐） */
   return '';
 }
-function lowPrice(it){
-  var a = isNum(it.lpz) && it.lpz>0 ? it.lpz : (it.lpz==='送' ? 0 : null),
-      b = isNum(it.spz) && it.spz>0 ? it.spz : (it.spz==='送' ? 0 : null);
-  if (a!=null && b!=null) return Math.min(a,b);
-  var v = (a!=null ? a : b);
-  if (v!=null) return v;
-  return isNum(it.mh) ? it.mh : null;
+/* 该型号全部「拿货侧」价格（2026-10-30 用户定稿，与电脑端 takePrices 同步）：
+   价格含税 / 滞销清理价 / 样机清理价（多货源含税价也算）；美的/容声系按 慧买卖/给二批/取整；
+   零售指导价不算。「送」= 0 元；0/空 = 没填不当真 */
+function takePrices(it){
+  var P = [];
+  function _add(v){
+    if (v==='送'){ P.push(0); return; }
+    if (isNum(v) && v>0) P.push(v);
+  }
+  _add(it.pt);
+  if (it.srcs && it.srcs.length>1) it.srcs.forEach(function(sc){ _add(sc.pt); });
+  _add(it.lpz);
+  _add(it.spz);
+  _add(it.mh); _add(it.m2); _add(it.mr);
+  return P;
 }
 
 /* ============ 检索 / 筛选 ============ */
@@ -595,10 +603,13 @@ function pass(it){
   /* 抽屉「状态」：没库存 = 已发布且用友清零；亏钱 = 按当前口径净挣为负 */
   if (fNo && PUBWARN_LOST.indexOf(it.c) < 0) return false;
   if (fLoss && LOSS_KEYS.indexOf(it.c) < 0) return false;
+  /* 清理价区间（2026-10-30 用户定稿，与电脑端同步）：任何一个拿货价超出 最低~最高 都不显示 */
   if (pminV!=null || pmaxV!=null){
-    var bp = lowPrice(it); if (bp==null) return false;
-    if (pminV!=null && bp < pminV) return false;
-    if (pmaxV!=null && bp > pmaxV) return false;
+    var P = takePrices(it); if (!P.length) return false;
+    for (var _pi=0;_pi<P.length;_pi++){
+      if (pminV!=null && P[_pi] < pminV) return false;
+      if (pmaxV!=null && P[_pi] > pmaxV) return false;
+    }
   }
   return true;
 }
