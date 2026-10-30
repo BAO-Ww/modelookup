@@ -63,3 +63,16 @@ jobs:
             Start-Sleep -Seconds 60
           }
           if (-not $ok) { exit 1 }
+
+      # 自建 runner 每跑一班写一对 _diag 诊断日志，只进不出（2026-10-30 实测 280MB/661 个）。
+      # 每次抓取清一次：删 3 天前的旧日志（留最近 3 天够排障）+ 清空 runner 临时目录。
+      # _work\_tool 里的预置 Python 是 yml 写死的工具链，绝不能动。失败也照清（always）。
+      - name: Cleanup runner residue
+        if: always()
+        shell: powershell
+        run: |
+          Get-ChildItem "C:\actions-runner\_diag" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-3) } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+          Get-ChildItem "C:\actions-runner\_work\_temp" -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
