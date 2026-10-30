@@ -427,6 +427,95 @@ async function verifyPw(user, p) {
   return h === ph;
 }
 
+// ---------- CF Cron 兜底派班（2026-10-30 方案B'：本机优先，云端兜底）----------
+// 本机触发器（ModelLookupDataTrigger）是主力；CF cron 每班【延后 10 分钟】醒做兜底：
+//   ① 查该 workflow 最近 run：创建时间 ≥ 班点（= 醒点-10min）→ 本机/手动已按过，跳过不双按
+//   ② 本班没有 run = 本机触发走不了 → runner 在线派本机抓；明确离线（电脑关机）
+//      → dispatch mode=cloud 派 GitHub 云 runner 抓（yml 里 pull-*-cloud job）
+// 四条 cron 与本机 _trigger_data.py 同表再 +10 分钟（CF cron 走 UTC，北京 = UTC+8）：
+//   kd  "50 0-15 * * *"    班点北京 8:40–23:40 每小时 → 兜底 :50（金山价格）
+//   yy  "40 2 * * *"       班点北京 10:30 → 兜底 10:40（用友库存）
+//   yy  "10 5,7 * * *"     班点北京 13:00 / 15:00 → 兜底 :10
+//   yy  "10,40 8-15 * * *" 班点北京 16:00–23:30 半时轮 → 兜底 :10/:40
+// 日志写 KV cronlog（最近40条），/cistatus 带回软件更新面板。
+const CRON_WF_MAP = {
+  "50 0-15 * * *": "kdocs-cloud-data.yml",
+  "40 2 * * *": "yonyou-cloud-stock.yml",
+  "10 5,7 * * *": "yonyou-cloud-stock.yml",
+  "10,40 8-15 * * *": "yonyou-cloud-stock.yml"
+};
+
+async function cronRunnerOnline(env) {
+  try {
+    const r = await fetch("https://api.github.com/repos/BAO-Ww/modelookup/actions/runners?per_page=20",
+      { headers: { "Authorization": "Bearer " + (env.GH_TOKEN || ""),
+                   "User-Agent": "modelookup-worker", "Accept": "application/vnd.github+json" } });
+    if (!r.ok) return null;                        // 查不动（权限/抖动）→ 不拦班，照派
+    const d = await r.json();
+    return (d.runners || []).some(x => x.status === "online");
+  } catch (e) { return null; }
+}
+
+async function cronDispatch(env, wf, cloud) {
+  try {
+    const r = await fetch(
+      "https://api.github.com/repos/BAO-Ww/modelookup/actions/workflows/" + wf + "/dispatches",
+      { method: "POST",
+        headers: { "Authorization": "Bearer " + (env.GH_TOKEN || ""),
+                   "User-Agent": "modelookup-worker", "Accept": "application/vnd.github+json",
+                   "Content-Type": "application/json" },
+        body: JSON.stringify(cloud ? { ref: "main", inputs: { mode: "cloud" } }
+                                   : { ref: "main" }) });
+    return r.status === 204;
+  } catch (e) { return false; }
+}
+
+async function cronLog(env, line) {
+  try {
+    let lg = [];
+    try { lg = JSON.parse((await env.KV.get("cronlog")) || "[]"); } catch (e) {}
+    lg.push(line);
+    while (lg.length > 40) lg.shift();
+    await env.KV.put("cronlog", JSON.stringify(lg));
+  } catch (e) {}
+}
+
+async function cronTick(controller, env) {
+  const bj = new Date(Date.now() + 8 * 3600000);   // 北京墙钟（UTC+8 平移后取 ISO 字段）
+  const tag = bj.toISOString().slice(5, 16).replace("T", " ");
+  const wf = CRON_WF_MAP[controller.cron];
+  if (!wf) { await cronLog(env, tag + " 未识别的班次 " + controller.cron); return; }
+  // 兜底判定：查最近一次 run，创建时间 ≥ 班点（now-10min）= 本机已按过 → 跳过（含手动「全部更新」）
+  let lastAt = 0, lastEv = "";
+  try {
+    const r = await fetch(
+      "https://api.github.com/repos/BAO-Ww/modelookup/actions/workflows/" + wf + "/runs?per_page=1",
+      { headers: { "Authorization": "Bearer " + (env.GH_TOKEN || ""),
+                   "User-Agent": "modelookup-worker", "Accept": "application/vnd.github+json" } });
+    if (r.ok) {
+      const run = ((await r.json()).workflow_runs || [])[0];
+      if (run) { lastAt = new Date(run.created_at).getTime(); lastEv = run.event || ""; }
+    }
+  } catch (e) {}
+  const cutoff = Date.now() - 12 * 60000;          // 班点-2min（2026-10-30 实测本机钟快 ~75s，
+                                                   // kdocs@17:40 的 run 落在班点前 18s——窗口放宽到 12min 才兜得住）
+  if (lastAt >= cutoff) {
+    await cronLog(env, tag + " " + wf + " 本班已有run(" + (lastEv || "?") + ")，本机优先跳过");
+    return;
+  }
+  const online = await cronRunnerOnline(env);
+  if (online === false) {
+    // 本机 runner 明确离线（电脑关机）→ 派 GitHub 云 runner 抓（2026-10-30 用户令
+    // 「抓取的动作本机抓取不了了就走 GitHub 抓取，优先走我本机的」）
+    const ok = await cronDispatch(env, wf, true);
+    await cronLog(env, tag + " " + wf + " 本机离线→云runner兜底" + (ok ? "已派" : "派发失败"));
+    return;
+  }
+  const ok = await cronDispatch(env, wf, false);   // 在线/状态未知 → 派本机（本机优先）
+  await cronLog(env, tag + " " + wf + " 本机兜底" + (ok ? "已派" : "派发失败") +
+                (online === null ? "（runner状态未知照派本机）" : ""));
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
@@ -447,6 +536,12 @@ export default {
       return await withLock(() => route(request, env, path, ctx));
     }
     catch (e) { return jerr("服务异常：" + e.message, 500); }
+  },
+
+  // CF Cron 兜底入口（2026-10-30 方案B'）：本机优先，班点+10min 才醒做兜底
+  async scheduled(controller, env, ctx) {
+    try { await cronTick(controller, env); }
+    catch (e) { try { await cronLog(env, "cron 异常：" + (e.message || e)); } catch (e2) {} }
   }
 };
 
@@ -1562,7 +1657,9 @@ async function route(request, env, path, ctx) {
     const yy = await ghLastRun(CI_WF.yy);
     const kd = await ghLastRun(CI_WF.kd);
     if (!yy || !kd) return jerr("GitHub 查询失败（检查 GH_TOKEN）", 502);
-    return J({ ok: true, yy, kd });
+    let _cronlg = [];
+    try { _cronlg = JSON.parse((await env.KV.get("cronlog")) || "[]"); } catch (e) {}
+    return J({ ok: true, yy, kd, cron: _cronlg });   // cron：CF 派班日志（最近40条，方案B）
   }
 
   return jerr("接口不存在", 404);

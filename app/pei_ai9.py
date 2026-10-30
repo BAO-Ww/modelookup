@@ -603,6 +603,20 @@ def _spot_param_items():
     return out
 
 
+def _spot_title():
+    """聚光首图标题 = 软件条目标题（info.title）去掉型号段（2026-10-30 用户令
+    「我要你加的是软件里面条目对应的这个」）。标题里没有型号就整句直接用；
+    取不到/去完为空 → 退回 品牌+品类/机型+容量 组合（旧逻辑兜底）。
+    实测 H28E：info.title=「海尔滚筒洗衣机10公斤XQG100-H28E」（型号紧跟无空格）→
+    去完 =「海尔滚筒洗衣机10公斤」。"""
+    _m = (P.get('model') or '').strip()
+    _t = str(P.get('title') or '').strip()
+    if _m and _m.lower() in _t.lower():
+        _i = _t.lower().find(_m.lower())
+        _t = (_t[:_i] + ' ' + _t[_i + len(_m):]).strip()
+    return _t or (P['brand'] + (P['cat'] or P['kind'] or '') + (P.get('cap') or '')).strip() or _m
+
+
 def img1(front, out):                 # 首图：干净版——不放大数字/价格块，机器放大占满
     cv = prep_bg("a").convert("RGBA")
     dr = ImageDraw.Draw(cv)
@@ -617,18 +631,27 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
         cv.alpha_composite(pf, (px, py))
         dr = ImageDraw.Draw(cv)
         _brand_minimal(dr)
-        _t1 = (P['brand'] + (P['cat'] or P['kind'] or '') + (P.get('cap') or '')).strip() or P['model']
-        _s1 = 74
-        while _s1 > 40 and dr.textlength(_t1, font=font(_s1, True)) > W * 0.75:
+        _t1 = _spot_title()
+        _s1 = 96
+        while _s1 > 40 and dr.textlength(_t1, font=font(_s1, True)) > W * 0.86:
             _s1 -= 2
-        dr.text((W // 2, 462), _t1, font=font(_s1, True), fill="#ffffff",
-                anchor="mm", stroke_width=6, stroke_fill=(10, 12, 17, 210))
+        dr.text((W // 2, 452), _t1, font=font(_s1, True), fill="#ffffff",
+                anchor="mm", stroke_width=8, stroke_fill=(10, 12, 17, 210))
+        # 型号胶囊（2026-10-30 样张 v2 用户定稿「用这个」）：字号/宽/高全部跟着型号文字走，
+        # 超长型号整颗缩号防顶出画面（常规 XQG100-H28E≈54号，超长 BCD-522… 17 位自动缩到放得下）
         _mt = P['model']
-        _tw_ = dr.textlength(_mt, font=font(31))
-        _pw, _ph, _py = int(_tw_) + 92, 71, 533
+        _cb = 54
+        _tw_ = dr.textlength(_mt, font=font(_cb))
+        _pw = int(_tw_) + int(_cb * 2.5)          # 左右内边距跟着字号走
+        while _pw > W * 0.92 and _cb > 30:
+            _cb -= 2
+            _tw_ = dr.textlength(_mt, font=font(_cb))
+            _pw = int(_tw_) + int(_cb * 2.5)
+        _ph = int(_cb * 2.1)                      # 高也跟字号走
+        _py = 546
         _px = W // 2 - _pw // 2
         dr.rounded_rectangle([_px, _py, _px + _pw, _py + _ph], _ph // 2, fill=(255, 199, 0, 255))
-        T(dr, (W // 2, _py + _ph // 2 + 2), _mt, 31, "#ffffff", "mm")
+        T(dr, (W // 2, _py + _ph // 2 + 2), _mt, _cb, "#ffffff", "mm")
         return save(cv, out / "1_首图.jpg")
     # 顶栏：成色 + 全国联保
     dim(cv, (0, 0, W, 52), SCRIM_COL, SCRIM_A)
@@ -1613,8 +1636,10 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
             except Exception:
                 ai_copy = None
     P = build_text(info, version, sell_price, ai_copy)
+    P["title"] = str(info.get("title") or "").strip()   # 软件条目标题（聚光首图标题用，2026-10-30）
     if GEN_STYLE == "spot":
-        # 聚光首图中部标题要「品牌+品类+容量」（2026-10-28 用户令，如 海尔波轮洗衣机10公斤）
+        # 聚光首图中部标题：优先软件条目标题去型号段（2026-10-30 用户令），
+        # 取不到才退回「品牌+品类+容量」组合（如 海尔滚筒洗衣机10公斤）
         try:
             P["cap"] = ((core.capacity_str(info) or "")).replace("kg", "公斤") if core is not None else ""
         except Exception:
