@@ -30,7 +30,7 @@ const PERM_KEYS = [
   "nat",         // 发往（可发区域）
   "code",        // 物料编码行
   "subsidy",     // 补贴栏（69码/售价）
-  "xianyu",      // 闲鱼行（ID / 闲鱼价 / 利润）
+  // 2026-10-30 移除 "xianyu"：电脑端/手机端都没有对应开关，云端存得进但永远勾不上（死键）
   "calc",        // 闲鱼定价计算器 + 标记已发布 + 复制
   "p_mh",        // 拿货价·慧买卖（美的系，也是计算器成本下拉项）
   "p_m2",        // 给二批价（美的系）
@@ -38,8 +38,8 @@ const PERM_KEYS = [
   "supplier",    // 发货 / 货源（隆阳电器）
   // 价格格逐格权限（2026-10 五次改版：管理号一格一格决定给不给看）
   "p_pt",        // 价格含税（也是计算器成本下拉项）
-  "p_np",        // 滞销价格（也是计算器成本下拉项）
-  "p_ny",        // 样机价格（也是计算器成本下拉项）
+  // 2026-10-30 移除 "p_np"(滞销价格) / "p_ny"(样机价格)：2026-10-10 用户拍板这两项价格不再显示，
+  // 电脑端/手机端都没有开关，留在 worker 里只会让键集对不上（34 vs 31）
   "p_lpz",       // 滞销清理价（也是计算器成本下拉项）
   "p_spz",       // 样机清理价（也是计算器成本下拉项）
   "p_lp",        // 零售指导价
@@ -65,7 +65,7 @@ const PERM_KEYS = [
 // 旧权限键 → 新键映射（v2.5 之前的 perm 只存 guide/clear_price 两个粗键）
 const PERM_MIGRATE = {
   guide:       ["p_pt", "p_lp", "p_mp", "p_jd"],
-  clear_price: ["p_np", "p_ny", "p_lpz", "p_spz", "p_lb", "p_sb", "p_qty"],
+  clear_price: ["p_lpz", "p_spz", "p_lb", "p_sb", "p_qty"],
   meidi_cost:  ["p_mh", "p_m2", "p_mr"],
 };
 function migratePerm(perm) {
