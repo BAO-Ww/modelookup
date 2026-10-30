@@ -4782,7 +4782,8 @@ function openSpotView(k){
           pollPub(function(jb){
             genning = false;
             if (jb.ok){
-              msg('生成完成'); loadLib();
+              /* 2026-10-30：四张落盘即收尾（图立刻显示），AI 复检转后台静默跑，不再挡画面 */
+              msg('生成完成 · AI 后台复检中'); loadLib();
               /* 生成完自动打开图片文件夹（2026-10-28 用户令） */
               fetch('/api/pubopen', {method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({model: k, sub: 'AI6张_聚光'})});
