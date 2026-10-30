@@ -1404,7 +1404,8 @@ function takePrices(it){
 }
 
 /* ================= 闲鱼定价计算器 =================
-   成本下拉逐项受权限控制（p_lpz/p_spz/p_np/p_ny/p_pt）—— 管理号决定子账号能拿哪个价当成本 */
+   成本下拉逐项受权限控制（p_lpz/p_spz/p_pt/p_mh/p_m2/p_mr）—— 管理号决定子账号能拿哪个价当成本
+   注：p_np/p_ny（滞销价格/样机价格）2026-10-10 起已撤出界面，worker 侧键 2026-10-30 同步删除 */
 function costOptions(it){
   var o = [];
   // 美的 / 容声那张表是另一套报价：没有清理价，只有拿货价 / 给二批 / 取整
@@ -3326,8 +3327,8 @@ function idleHTML(){
 function priceHint(){
   var a = parseFloat(pminEl.value), b = parseFloat(pmaxEl.value);
   if (isFinite(a) && isFinite(b)) return '清理价 ¥' + a + ' ~ ¥' + b;
-  if (isFinite(a)) return '清理价 ≥ ¥' + a;
-  if (isFinite(b)) return '清理价 ≤ ¥' + b;
+  if (isFinite(a)) return '价格 ≥ ¥' + a;
+  if (isFinite(b)) return '价格 ≤ ¥' + b;
   return '';
 }
 
