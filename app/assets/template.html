@@ -291,6 +291,15 @@ main{padding:22px 0 60px}
   display:inline-block;font-size:11px;font-weight:700;color:#0f7a45;background:var(--ok-l);
   border:1px solid #c9e8d6;border-radius:6px;padding:2px 8px;margin-top:2px;
 }
+/* 可卖角标（2026-10-31）：跟「已发布」标签并排，绿=能卖 / 黄=缺一头 / 灰=三无 */
+.sellbadge{
+  display:inline-block;font-size:10.5px;font-weight:700;vertical-align:middle;
+  padding:1px 6px;border-radius:5px;line-height:1.6;margin-top:2px;letter-spacing:.3px;
+}
+.sellbadge.s-ok{color:#0f7a45;background:#e8f6ee;border:1px solid #b9e2cb}
+.sellbadge.s-no-price{color:#8a5a00;background:#fdf3e2;border:1px solid #f0d8a8}
+.sellbadge.s-no-stock{color:#8a5a00;background:#fdf3e2;border:1px solid #f0d8a8}
+.sellbadge.s-none{color:#6b7280;background:#f1f2f4;border:1px solid #dcdee2}
 /* 发布卡片小字「闲鱼定价 ¥x · 发布于 x-x x:x」：管理号默认显示（头部「定价/时间」可关），
    子账号默认不给，管理号在「账号管理」勾 pubmeta 才显示（2026-10-09） */
 .pubmeta{
@@ -384,6 +393,19 @@ a.markbtn.web:hover{border-color:var(--brand);background:#dde9ff}
   margin-top:12px;background:#f7faff;border:1px solid #dfe9fb;border-radius:10px;padding:9px 12px;
 }
 .calc .cl{font-size:12px;color:var(--ink3);flex:none}
+/* 反推定价（2026-10-31 用户定稿）：我要挣 → 算标价 */
+.calc .cgoal{display:flex;align-items:center;gap:6px;flex:none;padding-left:10px;border-left:1px dashed #cbd8ee}
+.calc .cgoal input{width:78px}
+.calc .cgoal .guna{font-size:12px;border:1px solid var(--line);border-radius:7px;padding:5px 3px;background:#fff;color:#1b2431;outline:0;font-family:inherit}
+.calc .gcalc{display:inline-block;background:#2e6be6;color:#fff;border-radius:7px;padding:5px 11px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.calc .gcalc:hover{background:#1b53c8}
+.calc .gpanel{flex-basis:100%;font-size:12.5px;color:#4b5563;line-height:1.95;padding-top:2px}
+.calc .gpanel .ginfo b{color:#1b2431}
+.calc .gpick{display:inline-block;margin:0 6px 0 0;padding:2px 11px;border:1px solid #b9cdf3;border-radius:999px;background:#eef4ff;color:#1b4fbf;font-weight:700;cursor:pointer;font-variant-numeric:tabular-nums}
+.calc .gpick:hover{background:#2e6be6;color:#fff;border-color:#2e6be6}
+.calc .gok{color:#15803d;font-weight:600}
+.calc .gwr{color:#b42318;font-weight:600}
+.calc .gbad{color:#b42318}
 .calc input{
   width:128px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:14px;
   font-variant-numeric:tabular-nums;outline:0;font-family:inherit;background:#fff;
@@ -465,6 +487,49 @@ footer a:hover{text-decoration:underline}
 .pill.s69{background:#fff8ec;color:#a16207;border-color:#f6e3bd}
 .pill.sub{background:#fff3f3;color:#c2410c;border-color:#fbd9cf}
 .pill.mono{font-variant-numeric:tabular-nums}
+/* ---------- 2026-10-31 增强层（用户令「剩下的全改」） ---------- */
+mark.hlm{background:#fff3bf;color:inherit;padding:0 1px;border-radius:3px}
+.extags{margin-top:3px}
+.extag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;background:#eef4ff;color:#2e6be6;
+  border:1px solid #d5e2ff;margin:2px 3px 0 0;cursor:pointer;line-height:1.6}
+.extag b{font-weight:400;margin-left:3px;color:#8aa4d8}
+.extag:hover{background:#fdecec;border-color:#f5c2c2;color:#b42318}
+.extag:hover b{color:#b42318}
+.exbar{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;padding-top:7px;border-top:1px dashed var(--line2)}
+.exmini{font-size:11.5px;line-height:1.5;padding:2px 8px;border:1px solid var(--line);border-radius:99px;
+  background:#fff;color:var(--ink2);cursor:pointer;font-family:inherit}
+.exmini:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-l)}
+.exrow{margin-top:3px}
+.sideall2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+.sidebtn{padding:7px 8px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink2);
+  font-size:12px;cursor:pointer;text-align:left;font-family:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sidebtn:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-l)}
+#exmask{position:fixed;inset:0;background:rgba(17,24,39,.45);z-index:9998;display:flex;align-items:center;justify-content:center;padding:22px}
+.exmodal{width:min(560px,94vw);max-height:86vh;display:flex;flex-direction:column;background:#fff;border-radius:14px;
+  box-shadow:0 20px 60px rgba(0,0,0,.28);overflow:hidden}
+.exmodal.wide{width:min(960px,96vw)}
+.exmh{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.exmh b{flex:1;font-size:15px}
+.exmb{padding:14px 16px 18px;overflow:auto;font-size:13px;line-height:1.65;color:var(--ink)}
+.exmb table{width:100%;border-collapse:collapse;font-size:12.5px}
+.exmb th,.exmb td{border-bottom:1px solid var(--line2);padding:5px 6px;text-align:left;vertical-align:top}
+.exmb th{color:var(--ink3);font-weight:600;background:#fafbfd}
+.exmb .ok{color:#0f7a45}.exmb .bad{color:#b42318}
+.exgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px}
+.exgrid a{display:block;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fafbfd;text-decoration:none}
+.exgrid img{width:100%;height:146px;object-fit:contain;background:#f2f5fa;display:block}
+.exgrid span{display:block;font-size:11px;color:var(--ink3);padding:3px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.exgrid a.on{border-color:var(--brand);box-shadow:0 0 0 2px rgba(46,107,230,.16)}
+.exgrid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:760px){.exgrid2{grid-template-columns:1fr}}
+.extblwrap{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.extblbar{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12.5px;color:var(--ink2);
+  background:#fafbfd;border-bottom:1px solid var(--line)}
+.extbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.extbl th,.extbl td{border-bottom:1px solid var(--line2);padding:7px 9px;text-align:left;white-space:nowrap}
+.extbl th{background:#f7f9fc;color:var(--ink2);font-weight:600;position:sticky;top:0}
+.extbl tbody tr:hover{background:#f6f9ff;cursor:pointer}
+.extbl .ok{color:#0f7a45;font-weight:600}
 </style>
 </head>
 <body>
@@ -538,6 +603,14 @@ footer a:hover{text-decoration:underline}
         <button class="chip" id="appupd" title="检查并安装新版本：下载后在软件里直接静默覆盖安装，不用自己去下">⬆ 软件更新</button>
         <button class="chip" id="expimg" title="把你自己补的图导出成一个 json 文件（发给我，下次重建直接烤进页面）">导出我补的图</button>
         <button class="chip" id="impimg" title="导入之前导出的 补图.json">导入补图</button>
+        <button class="chip" id="extwall">图片墙</button>
+        <button class="chip" id="extchg">变更日志</button>
+        <button class="chip" id="extjobs">后台任务</button>
+        <button class="chip" id="extsus">嫌疑价</button>
+        <button class="chip" id="exttbl">表格视图</button>
+        <button class="chip" id="extver">更新日志</button>
+        <button class="chip" id="extwater">水印</button>
+
       </div>
       <input type="file" id="imgfile" accept="image/*" style="display:none">
       <input type="file" id="jsonfile" accept=".json,application/json" style="display:none">
@@ -545,6 +618,15 @@ footer a:hover{text-decoration:underline}
         <span class="upnote" id="updmsg"></span>
         <div class="sidecount" id="meta"></div>
         <button class="sideall" id="allbtn" title="一键全量：金山表格（型号/价格/补贴）→ 用友实时库存，一条龙跑完">全部更新</button>
+        <!-- 2026-10-31 新增工具入口（用户令「剩下全改」）：图片墙 / 后台任务 / 嫌疑价 / 变更日志 / 表格 / 更新日志 -->
+        <div class="sideall2">
+          <button class="sidebtn" id="wallbtn" title="一窗看全部图：蓝底 + 聚光所有成片，点开看大图">🖼 图片墙</button>
+          <button class="sidebtn" id="jobsbtn" title="后台任务：出图/文案排队和实时进度，关窗也不影响">⏳ 任务</button>
+          <button class="sidebtn" id="susbtn" title="价格嫌疑清单：低于成本七成 / 比指导价还高 / 跳变超 30%">⚠ 嫌疑价</button>
+          <button class="sidebtn" id="chgbtn" title="今天干了啥 + 云端写入配额 + 备份包 / 诊断包">📋 变更日志</button>
+          <button class="sidebtn" id="tblbtn" title="表格视图：一屏看几十台，点表头排序（Ctrl+G）">▤ 表格视图</button>
+          <button class="sidebtn" id="verbtn" title="这一版改了什么">📝 更新日志</button>
+        </div>
       </div>
     </aside>
 
@@ -554,6 +636,10 @@ footer a:hover{text-decoration:underline}
       <div class="yyalert" id="yyalert" hidden></div>
       <div class="yyalert" id="dataalert" hidden></div>
       <div class="yyalert lossalert" id="lossalert" hidden></div>
+      <!-- 图片库状态（2026-10-31）：路径失效红条 / 占用超阈值黄条，点一下直开存储设置 -->
+      <div class="yyalert" id="imgbasealert" hidden></div>
+      <!-- 数据变动提醒（2026-10-31）：价格任何变动 / 库存突变，点型号直接搜出来看 -->
+      <div class="yyalert" id="exalert" hidden></div>
       <!-- 吸顶条（2026-10-30 四改）：价格类型 + 四个开关；闲鱼号组挪侧栏 #xybox（用户令「挪到左边栏新增个格子」） -->
       <div class="stickhead" id="stickhead">
       <div class="topbar" id="ptbar">
@@ -1500,11 +1586,75 @@ function calcHTML(it){
        ? '<label class="cfr" title="发深圳/东莞/惠州以外（广州、省内其他城市、全国）要加 100 运费，勾上就在利润里扣掉；只发深莞惠可以取消勾选">'
          + '<input type="checkbox" class="cfrbox"' + (_nat ? ' checked' : '') + '> 发外地 −100运费</label>'
        : '')
+    + '<span class="cgoal" title="输入想挣多少 → 反推需要标多少价（只填价格，不自动提交）">'
+    + '<span class="cl">我要挣</span>'
+    + '<input type="number" class="gnum" min="0" step="1" inputmode="numeric" placeholder="500">'
+    + '<select class="guna"><option value="y">元</option><option value="p">%</option></select>'
+    + '<a class="gcalc" role="button">算标价</a>'
+    + '</span>'
+    + '<span class="gpanel" hidden></span>'
     + '<span class="ci">平台费1.6% <b class="p-fee">—</b></span>'
     + '<span class="ci">挣 <b class="p-out">—</b></span>'
     + _beHTML
     + '</div>';
 }
+/* ============ 反推定价（2026-10-31 用户定稿） ============
+   输入「我要挣多少」→ 反推需要标多少价。
+   · 元 = 实挣金额；% = 毛利率（按标价算，跟生意口径一致）
+   · 砍价余地：设置里默认 0%，填 5 表示「标价先多留 5%，买家砍到 95% 仍挣得到目标」
+   · 只把建议价填进定价框，绝不自动提交云端 */
+function goalMarginPct(){
+  var v = parseFloat(localStorage.getItem('ml_goal_margin') || '0');
+  if (!isFinite(v) || v < 0) v = 0;
+  return Math.min(v, 30) / 100;
+}
+function goalPrice(box){
+  var pn = box.querySelector('.gpanel');
+  function tip(t, cls){
+    if (pn){ pn.hidden = false; pn.innerHTML = '<span class="' + (cls || 'gbad') + '">' + t + '</span>'; }
+  }
+  var sel = box.querySelector('.costsel');
+  var cost = sel ? parseFloat(sel.value) : NaN;
+  if (!isFinite(cost) || cost <= 0){ tip('这个型号没有成本价，算不了——成本下拉里选一个有价的货源'); return; }
+  var gin = box.querySelector('.gnum');
+  var gv = parseFloat(gin && gin.value);
+  if (!isFinite(gv) || gv <= 0){ tip('先填「我要挣多少」，再点算标价'); return; }
+  var unit = (box.querySelector('.guna') || {}).value || 'y';
+  var bn = (parseFloat(box.getAttribute('data-bnlb')) || 0) + (parseFloat(box.getAttribute('data-bnsb')) || 0);
+  var cfr = box.querySelector('.cfrbox');
+  var freight = (cfr && cfr.checked) ? 100 : 0;
+  var need;
+  if (unit === 'y'){
+    need = (gv + cost - bn + freight) / (1 - FEE);
+  } else {
+    var m = gv / 100;
+    if (m >= 1 - FEE - 0.01){ tip('毛利率填太大了（还要留 1.6% 平台费）'); return; }
+    need = (cost - bn + freight) / (1 - FEE - m);
+  }
+  var mp = goalMarginPct();
+  var list = mp > 0 ? need / (1 - mp) : need;
+  var base = Math.ceil(list);
+  /* 候选价固定给三个（2026-10-31：原来 100/50/10 三档常撞成两个）：
+     从「49/99 结尾」那一档起步，每次 +50 —— 2149 / 2199 / 2249 这种，闲鱼最常见 */
+  var c0 = Math.ceil((base + 1) / 50) * 50 - 1;
+  var cands = [c0, c0 + 50, c0 + 100];
+  var it = itemOf(box.dataset.key);
+  var guard = '';
+  if (it && isNum(it.lp) && it.lp > 0 && cands[0] < it.lp * 0.95){
+    guard = ' <b class="gwr">低于指导价 ' + money(it.lp) + '，注意破价</b>';
+  }
+  var h = '<span class="ginfo">成本 ' + money(cost)
+    + (bn ? ' · 含奖励 ' + money(bn) : '')
+    + (freight ? ' · 已扣运费 100' : '')
+    + (mp > 0 ? ' · 已留砍价余地 ' + (mp * 100).toFixed(0) + '%' : '')
+    + ' → 该标 <b>' + money(base) + '</b> 起，选一个填入：</span>';
+  h += cands.map(function(v){
+    return '<a class="gpick" data-p="' + v + '" role="button">' + money(v) + '</a>';
+  }).join('');
+  h += guard;
+  if (pn){ pn.hidden = false; pn.innerHTML = h; }
+}
+
 function calcUpdate(box){
   var inp = box.querySelector('input[type=number]');
   var sel = box.querySelector('.costsel');
@@ -1864,6 +2014,14 @@ function afterAuth(){
   }
   // 字体大小（2026-10-10）：菜单「显示(S) → 字体大小」点开独立小窗。
   // 每个用户每台电脑自己设置（跟账号无关、不上云），管理号和子账号都有这个菜单
+  /* 定价设置（2026-10-31 用户定稿）：砍价余地默认 0%，走菜单「设置 → 定价设置」点开 */
+  if (!document.getElementById('prbtn')){
+    var pb = document.createElement('button');
+    pb.className = 'chip'; pb.id = 'prbtn'; pb.hidden = true;
+    pb.textContent = '💲 定价设置';
+    pb.addEventListener('click', openPricePanel);
+    bar.appendChild(pb);
+  }
   if (!document.getElementById('fontbtn')){
     var fb = document.createElement('button');
     fb.className = 'chip'; fb.id = 'fontbtn'; fb.hidden = true;
@@ -2016,6 +2174,44 @@ function openSelfDisplay(){
 }
 /* 字体大小独立小窗（2026-10-10，菜单「显示(S) → 字体大小」打开）：
    每个用户每台电脑自己设置——跟账号无关、不上云，管理号管不着；点了立即生效，重启记住 */
+function openPricePanel(){
+  var old = document.getElementById('prpanel'); if (old) old.remove();
+  var cur = parseFloat(localStorage.getItem('ml_goal_margin') || '0');
+  if (!isFinite(cur) || cur < 0) cur = 0;
+  var m = document.createElement('div');
+  m.id = 'prpanel';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(17,24,39,.45);z-index:9999;display:flex;align-items:center;justify-content:center';
+  m.innerHTML = '<div style="width:430px;background:#fff;border-radius:14px;padding:20px 22px 16px;box-shadow:0 18px 48px rgba(0,0,0,.28);font-size:13.5px;color:#1b2431">'
+    + '<div style="font-size:16.5px;font-weight:700;margin-bottom:6px">定价设置</div>'
+    + '<div style="color:#6b7280;font-size:12.5px;line-height:1.6;margin-bottom:16px">只影响卡片上「我要挣 → 算标价」的反推结果，不改动任何已有定价。</div>'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
+    +   '<span style="font-weight:600">砍价余地</span>'
+    +   '<input id="prmargin" type="number" min="0" max="30" step="1" value="' + cur + '" style="width:78px;border:1px solid #d7dde8;border-radius:8px;padding:6px 9px;font-size:14px;outline:0;font-family:inherit">'
+    +   '<span style="color:#6b7280">%</span>'
+    +   '<span style="color:#98a2b3;font-size:12px">默认 0 = 不留余地，精确挣到目标</span>'
+    + '</div>'
+    + '<div style="color:#98a2b3;font-size:12px;line-height:1.65;margin-bottom:18px">填 5 表示：标价先多留 5%，买家砍到 95% 你还挣得到目标利润。</div>'
+    + '<div style="text-align:right">'
+    +   '<a id="prsave" role="button" style="display:inline-block;background:#2e6be6;color:#fff;border-radius:9px;padding:8px 20px;font-weight:600;cursor:pointer">保存</a>'
+    +   '<a id="prcancel" role="button" style="display:inline-block;margin-left:12px;color:#6b7280;padding:8px 4px;cursor:pointer">取消</a>'
+    + '</div>'
+    + '</div>';
+  document.body.appendChild(m);
+  m.querySelector('#prcancel').addEventListener('click', function(){ m.remove(); });
+  m.addEventListener('click', function(e){ if (e.target === m) m.remove(); });
+  m.querySelector('#prsave').addEventListener('click', function(){
+    var v = parseFloat(m.querySelector('#prmargin').value);
+    if (!isFinite(v) || v < 0) v = 0;
+    if (v > 30) v = 30;
+    localStorage.setItem('ml_goal_margin', String(v));
+    m.remove();
+    var boxes = document.querySelectorAll('.calc');
+    for (var i = 0; i < boxes.length; i++){
+      var gp = boxes[i].querySelector('.gpanel');
+      if (gp && !gp.hidden) goalPrice(boxes[i]);
+    }
+  });
+}
 function openFontPanel(){
   var old = document.getElementById('adminmask'); if (old) old.remove();   // 复用 adminmask（居中/遮罩样式同款，同时只开一个窗）
   var m = document.createElement('div'); m.id = 'adminmask';
@@ -2065,13 +2261,22 @@ function openStorPanel(){
     + '<div style="font-size:11.5px;color:#98a0ae;margin-top:10px">搬迁期间别关软件、别跑图片生成任务；搬完立即生效，重启也记住。</div></div>';
   document.body.appendChild(m);
   function msg(t, c){ var e = m.querySelector('#stormsg'); e.textContent = t || ''; e.style.color = c || '#15803d'; }
+  /* 当前路径 + 占用/剩余/可写状态（2026-10-31：图片库占用提示） */
+  function storLine(j){
+    var GB = 1073741824;
+    var gb = function(b){ return (b != null && b >= 0) ? (b / GB).toFixed(1) + ' GB' : '—'; };
+    var st = j.exists ? (j.writable ? '可正常写入' : '<span style="color:#b42318">不可写入</span>')
+                      : '<span style="color:#b42318">目录不存在</span>';
+    return '当前：<b>' + esc(j.base) + '</b>'
+      + (j.override ? '<br><span style="color:#8a93a3">自定义位置（恢复默认 = ' + esc(j.default) + '）</span>'
+                    : '<br><span style="color:#8a93a3">默认位置（跟软件安装目录走）</span>')
+      + '<br><span style="color:#8a93a3">占用 <b>' + gb(j.used) + '</b> · 所在盘剩余 <b>' + gb(j.free) + '</b> · ' + st + '</span>';
+  }
   fetch('/api/pubroot', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
     .then(function(r){ return r.json(); })
     .then(function(j){
       if (!(j && j.ok)) return;
-      m.querySelector('#storcur').innerHTML = '当前：<b>' + esc(j.base) + '</b>'
-        + (j.override ? '<br><span style="color:#8a93a3">自定义位置（恢复默认 = ' + esc(j.default) + '）</span>'
-                      : '<br><span style="color:#8a93a3">默认位置（跟软件安装目录走）</span>');
+      m.querySelector('#storcur').innerHTML = storLine(j);
       m.querySelector('#storpath').value = j.base || '';
     }).catch(function(){});
   m.querySelector('#storpick').addEventListener('click', function(){
@@ -2090,9 +2295,7 @@ function openStorPanel(){
       .then(function(j){
         if (j && j.ok){
           msg('✓ 已生效：' + j.base);
-          m.querySelector('#storcur').innerHTML = '当前：<b>' + esc(j.base) + '</b>'
-            + (j.override ? '<br><span style="color:#8a93a3">自定义位置</span>'
-                          : '<br><span style="color:#8a93a3">默认位置（跟软件安装目录走）</span>');
+          m.querySelector('#storcur').innerHTML = storLine(j);
           try { if (typeof pubLoadLib === 'function') pubLoadLib(); } catch(e){}
         } else {
           msg((j && j.msg) || '设置失败', '#b42318');
@@ -2110,6 +2313,47 @@ function openStorPanel(){
   m.querySelector('#storclose').addEventListener('click', function(){ m.remove(); });
   m.addEventListener('click', function(e){ if (e.target === m) m.remove(); });
 }
+/* 图片库状态检查（2026-10-31 用户令）：
+   ① 目录不存在 / 不可写 → 红条（图片存不进去、页面会显示空白，得让你知道为啥）
+   ② 占用 > 20GB 或所在盘剩余 < 10% → 黄条（当天只提一次，别天天烦）
+   点条子直开「图片存储位置」面板 */
+function imgBaseCheck(){
+  var el = document.getElementById('imgbasealert');
+  if (!el) return;
+  fetch('/api/pubroot', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if (!(j && j.ok)) return;
+      var GB = 1073741824;
+      var gb = function(b){ return (b != null && b >= 0) ? (b / GB).toFixed(1) + ' GB' : '—'; };
+      var bad = !j.exists || !j.writable;
+      var big = (j.used > 20 * GB) || (j.free != null && j.free >= 0 && j.free < 10 * GB);
+      if (bad){
+        el.className = 'yyalert';
+        el.style.cssText = 'background:#fdecea;border:1px solid #f5c2c0;color:#8a1f17';
+        el.innerHTML = '⚠ 图片库 <b>' + esc(j.base) + '</b> 当前' + (j.exists ? '不可写入' : '不存在')
+          + '（图片会存不进去、页面显示空白）· <a href="javascript:void 0" id="imgbasefix" style="color:#8a1f17;font-weight:700;text-decoration:underline">点此重新选位置</a>';
+        el.hidden = false;
+      } else if (big){
+        var d = new Date(), today = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+        if (localStorage.getItem('ml_imgbase_tip') === today) return;
+        localStorage.setItem('ml_imgbase_tip', today);
+        el.className = 'yyalert';
+        el.style.cssText = 'background:#fdf6e3;border:1px solid #f0dcae;color:#8a5a00';
+        el.innerHTML = '图片库已占 <b>' + gb(j.used) + '</b>，所在盘剩余 <b>' + gb(j.free) + '</b> · '
+          + '<a href="javascript:void 0" id="imgbasefix" style="color:#8a5a00;font-weight:700;text-decoration:underline">换到别的盘</a>'
+          + ' <a href="javascript:void 0" id="imgbasenolook" style="color:#a58b57;margin-left:6px">知道了</a>';
+        el.hidden = false;
+      } else {
+        el.hidden = true;
+      }
+      var fx = document.getElementById('imgbasefix');
+      if (fx) fx.addEventListener('click', function(){ openStorPanel(); });
+      var nx = document.getElementById('imgbasenolook');
+      if (nx) nx.addEventListener('click', function(){ el.hidden = true; });
+    }).catch(function(){});
+}
+setTimeout(function(){ try { imgBaseCheck(); } catch (e) {} }, 2500);
 function openAdmin(){
   var old = document.getElementById('adminmask'); if (old) old.remove();
   var m = document.createElement('div'); m.id = 'adminmask';
@@ -2682,6 +2926,34 @@ function canSendNationwide(it){
   return false;
 }
 
+/* 可卖状态（2026-10-31 用户令）：卡右上角角标，一眼看出能不能卖。
+   ok=有货有价 / no-price=有货没价 / no-stock=有价没货 / none=三无
+   库存口径跟卡片「清理数量」一致（用友实时优先，豁免名单按表里计划量，美的/容声表不走用友） */
+function sellStatusOf(it, live){
+  var hp;
+  if (it._md){
+    hp = (isNum(it.mh) && it.mh > 0) || (isNum(it.m2) && it.m2 > 0) || (isNum(it.mr) && it.mr > 0)
+      || (isNum(it.lp) && it.lp > 0) || (isNum(it.mp) && it.mp > 0);
+    return hp ? 'ok' : 'none';
+  }
+  var q = 0;
+  if (extStockFree(it)){
+    q = isNum(it.lq) ? +it.lq : (isNum(it.sq) ? +it.sq : 0);
+  } else if (live && isNum(live.a)){
+    q = Math.round(+live.a);
+  } else if (STOCKDATA && STOCKDATA.stock && Object.keys(STOCKDATA.stock).length){
+    q = 0;
+  } else {
+    q = isNum(it.lq) ? +it.lq : (isNum(it.sq) ? +it.sq : 0);
+  }
+  hp = (isNum(it.pt) && it.pt > 0) || (isNum(it.lpz) && it.lpz > 0) || it.lpz === '送'
+    || (isNum(it.spz) && it.spz > 0) || it.spz === '送';
+  if (q > 0 && hp) return 'ok';
+  if (q > 0) return 'no-price';
+  if (hp) return 'no-stock';
+  return 'none';
+}
+
 function renderItem(it){
   var nm = nameOf(it);
   var marked = !!MARKED[it.c];
@@ -2993,6 +3265,11 @@ function renderItem(it){
     if (_svx) pmHTML = '<span class="pubmeta">' + _svx + '</span>';
   }
 
+  /* 可卖角标（2026-10-31 用户令「卡上直接看出来能不能卖」）：
+     绿=有货有价（能卖）/ 黄=缺一头（有货无价 或 有价无货）/ 灰=三无 */
+  var _ss = sellStatusOf(it, live);
+  var _ssTxt = { ok: '有货有价', 'no-price': '有货无价', 'no-stock': '有价无货', none: '无货无价' }[_ss] || '';
+
   return '<article class="card' + (marked ? ' marked' : '') + (svRO ? ' svro' : '') + '" data-key="' + esc(it.c) + '">'
     + '<div class="chead" style="position:relative">'
     + (img ? '<img class="pimg" loading="lazy" src="' + img + '" alt="">'
@@ -3000,13 +3277,14 @@ function renderItem(it){
     + (img && _adm && pok('addimg') ? '<button class="kimgre" data-addimg="' + esc(it.c) + '" title="从本机换一张图（隐藏的图重新补图即恢复）">换图</button>' : '')
     + (_del ? '<button class="kimgdel" data-delimg="' + esc(it.c) + '" title="' + (_adm ? '隐藏这张图（所有人看不到；换图即恢复）' : '删掉我补的这张图') + '">×</button>' : '')
     + '<div class="chead-main"><div class="moline">'
-    + '<span class="mo" data-mocopy="' + esc(it.mo) + '" title="点一下复制纯型号" style="cursor:pointer">' + esc(it.mo) + '</span>'
+    + '<span class="mo" data-mocopy="' + esc(it.mo) + '" title="点一下复制纯型号" style="cursor:pointer">' + hl(it.mo) + '</span>'
     + '<span class="pub"' + ((marked || svInfo) ? '' : ' hidden') + '>已发布'
     + (xyPubHTML ? xyPubHTML
               : svInfo ? ' · ' + (svKind === 's' ? '样机' : '正品')
               : '')
     + '</span>'
     + pmHTML
+    + '<span class="sellbadge s-' + _ss + '" title="' + (it._md ? '美的/容声表：只看有没有报价（不走用友库存）' : '按用友实时库存 + 报价：绿=有货有价能卖 / 黄=缺一头 / 灰=三无') + '">' + _ssTxt + '</span>'
     + '<span class="acts">'
     + (!svRO && (!SUBVIEW || SUBVIEW.u === '0' || svInfo) ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + ((marked || svInfo) ? '取消发布' : '标记已发布') + '</button>' : '')
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
@@ -3026,7 +3304,8 @@ function renderItem(it){
        : it.k === 's' ? '<span class="tag s">样机清理</span>'
        : '<span class="tag np">全新机</span>')
     + '</div>'
-    + (nm ? '<div class="nm">' + esc(nm) + '</div>' : '')
+    + (nm ? '<div class="nm">' + hl(nm) + '</div>' : '')
+    + exTagsHTML(it.c)
     + '</div></div>'
     + (pok('calc') ? calcHTML(it) : '')
     + (pg.length ? '<div class="prices newp">' + pg.join('') + '</div>' : '')
@@ -3065,6 +3344,8 @@ function renderItem(it){
     + (pok('subsidy') && subHTML ? '<div class="row"><label>补贴</label><span class="vs">' + subHTML + '</span></div>' : '')
     /* 闲鱼行（ID/价/利润）整行下掉（2026-10-08 用户要求），导出比价图里仍保留 */
     + (pok('code') && it.code ? '<div class="row"><label>物料编码</label><span class="v mono">' + esc(it.code) + '</span></div>' : '')
+    /* 2026-10-31 增强条：标签/别名 · 价格历史 · 号价对比 · 参数对照 · 挑主图 · 文案版本 · 链接回填 */
+    + exBarHTML(it)
     + '</article>';
 }
 
@@ -3181,6 +3462,8 @@ function ptypeOf(it){
   return '';
 }
 function pass(it){
+  /* 商品浏览筛选类（品牌/品类/方式/价格类型/有货/全国/价格区间）：只在浏览生效。
+     2026-10-31 用户定稿：搜索=全盘搜索，这些不拦搜索——搜出来才算数。 */
   if (curBrand && brandOf(it) !== curBrand) return false;
   if (curCat && it._cg !== curCat) return false;
   if (curKind === 'z'){        // 正品：k 里既无 l 也无 s（含美的系，非清理机）
@@ -3202,6 +3485,12 @@ function pass(it){
   // 「只看能发外区」（2026-10-10 晚修正）：natk=1/2、发货写「全国」（含运费那 106 行 natk
   //  是空，之前全被误筛掉）、发货区域「可发全国加运费100」这一族都算能发全国
   if (flagSend && !canSendNationwide(it)) return false;
+  return passView(it) && pricePass(it);
+}
+/* 查看身份类过滤：隐藏已发布/只看已发布/闲鱼号/子用户视图（含其四个开关）。
+   2026-10-31 用户定稿「搜索=全盘搜索」后，这是搜索路径唯一还吃的过滤——
+   浏览筛选（品牌/品类/价格…）搜索时全部忽略，但查看范围（看谁的发布）不能跳出 */
+function passView(it){
   if (hideMarked && MARKED[it.c]) return false;
   if (flagPub && !MARKED[it.c]) return false;   // 只看已发布（跟 hide 互斥）
   if (selXy){                                    // 闲鱼号筛选：只看标记到该号名下的（2026-10-12 用户定稿）
@@ -3240,34 +3529,77 @@ function pass(it){
     if (SUBVIEW.fxid === 'has' && !_has) return false;
     if (SUBVIEW.fxid === 'no' && _has) return false;
   }
-  return pricePass(it);
+  return true;   // 价格区间归 pass() 管（浏览吃、搜索不吃——2026-10-31 全盘搜索定稿）
 }
 
 /* ================= 检索 ================= */
 /* 2026-10-10 用户定稿：不再设「前 500 条」上限——渲染是分批的，全量也没性能问题 */
+/* 单个词的打分（2026-10-31「一个搜索框搜一切」抽出）：返回 {sc, ix, tag}
+   tag = 命中来源（code 型号 / brand 品牌品类 / name 机器名 / note 备注 / xid 闲鱼号备注）
+   优先级就是分数：型号精确 6 > 型号核心 5/4 > 型号前缀 3 > 型号含 2 > 名称含 2
+   > 品牌/品类 1.5 > 其余备注字段 1 > 闲鱼号备注 1（最后兜，省得几千条都去拼串） */
+function _markTextOf(c){
+  var m = MARKED[c];
+  if (!m) return '';
+  var out = '';
+  if (m.xys){ for (var k in m.xys){ var e = m.xys[k] || {}; if (e.xid != null && String(e.xid) !== '') out += ' ' + e.xid; } }
+  if (m.xid != null && String(m.xid) !== '') out += ' ' + m.xid;
+  return out ? norm(out) : '';
+}
+function _hitOne(it, q, qc, qc2){
+  if (it._n === q) return { sc: 6, ix: -1, tag: 'code' };
+  if (qc && it.c === qc) return { sc: 5, ix: -1, tag: 'code' };
+  if (qc2 && it._c2 === qc2) return { sc: 4, ix: -1, tag: 'code' };
+  if (qc && it.c.indexOf(qc) === 0) return { sc: 3, ix: -1, tag: 'code' };
+  if (qc && it.c.indexOf(qc) > 0) return { sc: 2, ix: -1, tag: 'code' };
+  if (qc2 && it._c2 && it._c2.indexOf(qc2) === 0) return { sc: 2, ix: -1, tag: 'code' };
+  if (it._n.indexOf(q) >= 0) return { sc: 2, ix: -1, tag: 'name' };
+  if (it.b && norm(it.b).indexOf(q) >= 0) return { sc: 1.5, ix: -1, tag: 'brand' };
+  if (it._cg && norm(it._cg).indexOf(q) >= 0) return { sc: 1.5, ix: -1, tag: 'brand' };
+  if (it._h.indexOf(q) >= 0) return { sc: 1, ix: it._h.indexOf(q), tag: 'note' };
+  var mk = _markTextOf(it.c);
+  if (mk && mk.indexOf(q) >= 0) return { sc: 1, ix: -1, tag: 'xid' };
+  /* 2026-10-31 型号别名（客户嘴里叫法也算）：命中排最后，别跟真型号抢排序 */
+  var _al = (EX && EX.alias) ? EX.alias[it.c] : null;
+  if (_al){
+    for (var _ai = 0; _ai < _al.length; _ai++){
+      if (norm(_al[_ai]).indexOf(q) >= 0) return { sc: 1, ix: -1, tag: 'alias' };
+    }
+  }
+  return { sc: 0, ix: -1, tag: '' };
+}
 function search(qRaw){
-  var q = norm(qRaw);
-  if (!q) return null;
-  var qc = coreOf(qRaw), qc2 = coreOf2(qRaw);
-  var qCJK = /[\u4e00-\u9fff]/.test(q);
-  var hit = [], i, it, sc, ix;
+  var raw = String(qRaw == null ? '' : qRaw).trim();
+  if (!raw){ HL_WORDS = []; return null; }
+  /* 2026-10-31「一个搜索框搜一切」：空格分隔多词 = 且（"卡萨帝 洗衣机" 出品牌+品类同时命中的）；
+     最多 5 个词，防长串炸性能。字段覆盖 型号/机器名/品牌/品类/内部码/状态/备注/闲鱼号备注 */
+  var words = raw.split(/\s+/).filter(Boolean).slice(0, 5);
+  HL_WORDS = words.slice(0, 4);          /* 2026-10-31 搜索高亮：命中的词在卡片上标黄 */
+  var pre = [], wi;
+  for (wi = 0; wi < words.length; wi++){
+    pre.push({ q: norm(words[wi]), qc: coreOf(words[wi]), qc2: coreOf2(words[wi]) });
+  }
+  var qCJK = /[\u4e00-\u9fff]/.test(raw);
+  var hit = [], i, it, w, p, r, best, firstIx, okAll;
   for (i = 0; i < ALL.length; i++){
     it = ALL[i];
-    if (!pass(it)) continue;
-    sc = 0; ix = -1;
-    if (it._n === q) sc = 6;
-    else if (qc && it.c === qc) sc = 5;
-    else if (qc2 && it._c2 === qc2) sc = 4;
-    else if (qc && it.c.indexOf(qc) === 0) sc = 3;
-    else if (qc && it.c.indexOf(qc) > 0) sc = 2;
-    else if (qc2 && it._c2 && it._c2.indexOf(qc2) === 0) sc = 2;
-    else if (it._n.indexOf(q) >= 0) sc = 1;
-    else if (it._h.indexOf(q) >= 0){ sc = 1; ix = it._h.indexOf(q); }
-    if (sc > 0) hit.push({ sc: sc, it: it, ix: ix });
+    /* 2026-10-31 用户定稿：搜索=全盘搜索，不吃品牌/品类/方式/价格类型/价格区间/有货/全国
+       这些浏览筛选——筛选了洗衣机也能搜到冰柜。只保留查看身份类（看谁的发布/已发布/闲鱼号） */
+    if (!passView(it)) continue;
+    best = { sc: 0, ix: -1, tag: '' }; firstIx = -1; okAll = true;
+    for (w = 0; w < pre.length; w++){
+      p = pre[w];
+      r = _hitOne(it, p.q, p.qc, p.qc2);
+      if (!r.sc){ okAll = false; break; }
+      if (r.sc > best.sc) best = r;
+      if (r.tag === 'note' && firstIx < 0) firstIx = r.ix;
+    }
+    if (!okAll) continue;
+    hit.push({ sc: best.sc, it: it, ix: firstIx, tag: best.tag });
   }
   hit.sort(function(a,b){
     if (b.sc !== a.sc) return b.sc - a.sc;
-    if (qCJK && a.ix !== b.ix) return a.ix - b.ix;
+    if (qCJK && a.ix !== b.ix && a.ix >= 0 && b.ix >= 0) return a.ix - b.ix;
     return a.it.c.length - b.it.c.length || (a.it._n < b.it._n ? -1 : a.it._n > b.it._n ? 1 : 0);
   });
   return hit;
@@ -3452,6 +3784,10 @@ function run(){
   clrBtn.hidden = !q;
   readPrice();
   updateLossBanner();                  // 发布/改价/换口径后随手核对一遍
+  /* 2026-10-31 表格视图：开着时 run() 一律维持表格——不然后台异步（子用户下拉加载完/
+     变动提醒回来）随手一趟 run() 就把表格冲回卡片，看着像闪退。退出表格只有两条路：
+     点「回到卡片」或 Ctrl+G（都会先把 TBL 置空再 run）。 */
+  if (TBL){ exTableRender(); return; }
   listEl.innerHTML = '';
   moreEl.hidden = true;
   shown = 0;
@@ -3491,13 +3827,20 @@ function run(){
     listEl.innerHTML = emptyHTML(q || '当前筛选'); return; }
   var ph = priceHint(), bits;
   if (q){
-    var exact = 0, catm = 0;
+    /* 2026-10-31「搜一切」：提示条写清命中来源，让你知道为什么出来这些 */
+    var _tg = { code: 0, brand: 0, name: 0, note: 0, xid: 0 };
     for (var i = 0; i < res.length; i++){
-      if (res[i].sc >= 5) exact++;
-      if (res[i].sc === 1) catm++;
+      var _t = res[i].tag || 'code';
+      _tg[_t] = (_tg[_t] || 0) + 1;
     }
+    var _lab = [];
+    if (_tg.code) _lab.push('型号 <b>' + _tg.code + '</b>');
+    if (_tg.name) _lab.push('机器名 <b>' + _tg.name + '</b>');
+    if (_tg.brand) _lab.push('品牌品类 <b>' + _tg.brand + '</b>');
+    if (_tg.note) _lab.push('备注 <b>' + _tg.note + '</b>');
+    if (_tg.xid) _lab.push('闲鱼号备注 <b>' + _tg.xid + '</b>');
     bits = '找到 <b>' + res.length + '</b> 条'
-      + (exact ? '（精确型号 <b>' + exact + '</b> 条）' : (catm === res.length ? '（按品类/名称匹配）' : '（模糊匹配）'));
+      + (_lab.length ? '（' + _lab.join(' · ') + '）' : '');
   } else {
     bits = '筛选到 <b>' + res.length + '</b> 条';
   }
@@ -4353,7 +4696,15 @@ function openPickKind(k, recKey){
     try { localStorage.setItem('ml_lastxy', xy); } catch(e){}
     rememberXy(xy);                      // 新号自动记进自己的云端配置
     /* 2026-10-10 新规矩：标记发布这一刻才把定价落库 */
+    var _oldpv = PRICES[k];
     PRICES[k] = _pv;
+    /* 2026-10-31 改价历史留痕（同号改价 → 记 {原价, 新价}，输错能一键退回） */
+    if (isNum(_oldpv) && Math.abs(+_oldpv - +_pv) > 0.001){
+      exPost({ act: 'hist', m: k, xy: xy, o: +_oldpv, n: +_pv,
+               by: (AUTH && AUTH.u) || '' }).then(function(j){
+        if (j && j.ok) EX.hist[k] = j.hist;
+      });
+    }
     /* 同型号再标 = 又发了一条：老 xys 原样保留。2026-10-13 同号双口径——
        记录键 = 号名|口径，同号同口径复用原键（重标=改价）。
        2026-10-14 用户实锤「我正品改样机，你不能两个都给我保留了」：从胶囊点进来的
@@ -4632,6 +4983,10 @@ function openKitView(k){
       +   '<div style="padding:10px 16px;border-bottom:1px solid #f0f0ec;display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">配 图 · 一套 4 张</b><span style="font-size:11px;color:#9a9ea6">1080 × 1080 · 无价格</span></div>'
       +   '<div style="flex:1;display:flex;align-items:center;justify-content:center;background:#fff;min-height:0"><img id="kv_img" src="' + imgSrc(cur) + '?t=' + Date.now() + '" style="max-width:100%;max-height:100%;object-fit:contain;display:block"></div>'
       +   '<div style="display:grid;grid-template-columns:repeat(' + Math.min(items.length, 4) + ',1fr);gap:8px;padding:10px 14px" id="kv_switch"></div>'
+      +   '<div style="display:flex;gap:6px;padding:0 14px 10px;align-items:center;flex-wrap:wrap">'
+      +     '<button id="kv_one" title="只重出当前看的这一张，另外三张一个字都不动" style="border:1px solid #d9dde5;background:#fff;color:#43464c;border-radius:8px;padding:5px 11px;font-size:11.5px;cursor:pointer">重出这张</button>'
+      +     '<button id="kv_pick" title="从官网/欣盛/中关村抓回来的候选图里挑一张当主图" style="border:1px solid #d9dde5;background:#fff;color:#43464c;border-radius:8px;padding:5px 11px;font-size:11.5px;cursor:pointer">挑主图</button>'
+      +     '<span id="kv_blur" style="font-size:11px;color:#b45309;line-height:1.4"></span></div>'
       + '</div>'
       + '<div style="flex:1;display:flex;flex-direction:column;gap:12px;min-width:0;margin-left:16px;min-height:0">'
       +   '<div style="background:#fff;border-radius:14px;border:1px solid #e8e8e4;padding:12px 16px;flex:0 0 auto">'
@@ -4682,6 +5037,34 @@ function openKitView(k){
       navigator.clipboard.writeText((D.points || []).join('\n') + '\n\n' + (D.aftersale || ''));
       this.textContent = '已复制全套'; var b = this; setTimeout(function(){ b.textContent = '一 键 复 制 全 套'; }, 1500);
     };
+    /* 2026-10-31：只重出单张 / 挑主图 / 图糊预警（糊了就建议换主图重出） */
+    var _one = body.querySelector('#kv_one');
+    if (_one) _one.onclick = function(){
+      var btn = this; btn.disabled = true; btn.textContent = '重出中…';
+      fetch('/api/kitone?model=' + encodeURIComponent(k) + '&n=' + cur)
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (!j || !j.ok) throw new Error((j && j.msg) || '启动失败');
+          pollJob(j.key, function(res){
+            D.blur = (res && res.blur) || {};
+            btn.disabled = false; btn.textContent = '重出这张';
+            render();
+          }, function(e){
+            btn.disabled = false; btn.textContent = '重出这张';
+            alert('重出失败：' + (e.message || e));
+          });
+        }).catch(function(e){
+          btn.disabled = false; btn.textContent = '重出这张';
+          alert('重出失败：' + (e.message || e));
+        });
+    };
+    var _pk = body.querySelector('#kv_pick');
+    if (_pk) _pk.onclick = function(){ openCands(k); };
+    var _bl = body.querySelector('#kv_blur');
+    if (_bl && D.blur && Object.keys(D.blur).length){
+      _bl.textContent = '⚠ 图糊：' + Object.keys(D.blur).map(function(x){ return x.replace('img_', '第') + '张'; }).join('、')
+        + ' · 建议「挑主图」换一张清晰的再重出';
+    }
   }
   function load(force){
     wrap.querySelector('#kv_msg').textContent = '正在抓参数/机图并渲染…（首次约 1-2 分钟）';
@@ -4720,7 +5103,20 @@ function openKitView(k){
       .catch(function(err){
         /* Mac 上偶发 Load failed（本地服务刚起/瞬时抖动）：自动重试一次再认输 */
         if (tried++ < 1){ setTimeout(go, 1500); return; }
-        wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#b42318;font-size:14px">生成失败：' + esc(String(err.message || err)) + '</div>';
+        /* 2026-10-31「失败说清原因」：网络/图源/字体/权限/其他分开说，并给一颗重试 */
+        var _emsg = String((err && err.message) || err || '');
+        var _why = '其他原因';
+        if (/timeout|timed out|connection|Load failed|max retries/i.test(_emsg)) _why = '网络没通（接口超时/连不上）';
+        else if (/机图/.test(_emsg)) _why = '图源没货（官网/欣盛/中关村都没这台机器的图）';
+        else if (/字体/.test(_emsg)) _why = '缺字体文件（安装包不完整，重装一次）';
+        else if (/权限|permission|WinError 5/i.test(_emsg)) _why = '没写权限（图片库目录被占/只读）';
+        else if (/401|key|invalid|quota/i.test(_emsg)) _why = 'AI 接口 key 失效或额度用完';
+        wrap.querySelector('#kv_body').innerHTML = '<div style="padding:50px 20px;text-align:center;color:#b42318;font-size:14px;line-height:1.9">'
+          + '<div style="font-weight:600">生成失败 · ' + esc(_why) + '</div>'
+          + '<div style="color:#8a929e;font-size:12px;margin-top:6px;word-break:break-all">' + esc(_emsg) + '</div>'
+          + '<button id="kv_retry" style="margin-top:14px;border:1px solid #f0b9b3;background:#fff;color:#b42318;border-radius:9px;padding:7px 18px;font-size:13px;cursor:pointer">重试一次</button></div>';
+        var _rb = wrap.querySelector('#kv_retry');
+        if (_rb) _rb.onclick = function(){ load(force); };
         wrap.querySelector('#kv_msg').textContent = '';
       });
     })();
@@ -5830,7 +6226,8 @@ listEl.addEventListener('click', function(e){
       }
       updateLossBanner();                  // 取消发布后亏钱名单可能变短，横幅跟着收
     } else {
-      openPickKind(k);                     // 先问发布的是正品还是样机（库存提醒要用）
+      /* 2026-10-31 发布前三查：图齐不齐 / 有没有文案 / 填没填价 / 链接回填，缺了先提示，能照样发 */
+      exPrecheck(k, function(){ openPickKind(k); });
     }
     return;
   }
@@ -5930,6 +6327,38 @@ listEl.addEventListener('input', function(e){
      ②亏本清单「填保本价」。此前打字即写记录+上云而胶囊不动——「哪一刻算改了」
      说不清，正是「你动了我的价格」连环案的根源，废止。 */
 });
+/* ===== 反推定价点击委托（2026-10-31 用户定稿）=====
+   独立一条 click：只认「算标价」和候选价，不掺进卡片的 change 流程 */
+document.addEventListener('click', function(e){
+  var t = e.target;
+  if (!t || !t.closest) return;
+  var gc = t.closest('.gcalc');
+  if (gc){
+    var gb = gc.closest('.calc');
+    if (gb) goalPrice(gb);
+    return;
+  }
+  var pk = t.closest('.gpick');
+  if (!pk) return;
+  var pb = pk.closest('.calc');
+  if (!pb) return;
+  var pi = pb.querySelector('input[type=number]:not(.gnum)');
+  var pn = pb.querySelector('.gpanel');
+  if (pi && pi.readOnly){
+    if (pn){ pn.hidden = false; pn.innerHTML = '<span class="gbad">这张卡只读（看子用户发布），改不了价</span>'; }
+    return;
+  }
+  if (!pi) return;
+  pi.value = pk.getAttribute('data-p');
+  try { pi.dispatchEvent(new Event('input', { bubbles: true })); } catch(err){}
+  calcUpdate(pb);
+  if (pn){
+    pn.hidden = false;
+    pn.innerHTML = '<span class="gok">✓ 已填入 ' + money(+pk.getAttribute('data-p'))
+      + '，看完再点发布（没提交，随时可改）</span>';
+  }
+});
+
 listEl.addEventListener('change', function(e){
   /* 2026-10-14 定稿「改价两段式」后：定价框失焦什么都不做——框是草稿台，
      胶囊/记录只在弹窗确认（或保本价「填」）时动。没有定价框分支，
@@ -6378,16 +6807,40 @@ function toggleMore(box, btn){
 
 /* 侧栏底部一行：exe 版显示最近一次价格/库存更新时间（后台静默更新后自动跟着变）；
    单文件公布版没有本地服务，显示数据构建时间。 */
+/* 数据新鲜度（2026-10-31 用户令）：价格/库存时间超过 3 小时标橙 + 「偏旧」，
+   免得拉着旧数据按旧价卖（营业时间 8:40~23:40，3 小时足够判定）
+   接受 "YYYY-MM-DD HH:MM" 与 "HH:MM" 两种格式 */
+function _ageHours(s){
+  var t = String(s || '').trim();
+  if (!t) return -1;
+  var d = null;
+  var m = t.match(/(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+  if (m) d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+  else {
+    var m2 = t.match(/(\d{1,2}):(\d{2})/);
+    if (m2){
+      var now = new Date();
+      d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), +m2[1], +m2[2]);
+      if (d > now) d.setDate(d.getDate() - 1);
+    }
+  }
+  if (!d || isNaN(d.getTime())) return -1;
+  return (Date.now() - d.getTime()) / 3600000;
+}
+function _freshHTML(label, v){
+  if (!v) return '<span class="mt">' + label + '：—</span>';
+  var h = _ageHours(v), old = h > 3;
+  return '<span class="mt">' + label + '：<b' + (old ? ' style="color:#b45309"' : '') + '>' + esc(v) + '</b>'
+       + (old ? '<span style="color:#b45309"> 偏旧</span>' : '') + '</span>';
+}
 function metaHTML(){
   var n = ALL.length.toLocaleString('zh-CN');
   if (location.protocol === 'http:' && (UPSTATE.price_at || UPSTATE.stock_at)){
     /* 2026-10-09 用户定稿：三行 —— 型号个数 / 数据：时间 / 库存：时间，
        谁更新了显示谁的最近更新时间，没更新过的显示「—」 */
-    var pa = UPSTATE.price_at ? '<b>' + esc(UPSTATE.price_at) + '</b>' : '—';
-    var sa = UPSTATE.stock_at ? '<b>' + esc(UPSTATE.stock_at) + '</b>' : '—';
     return '型号 <b>' + n + '</b> 个'
-         + '<span class="mt">数据：' + pa + '</span>'
-         + '<span class="mt">库存：' + sa + '</span>';
+         + _freshHTML('数据', UPSTATE.price_at)
+         + _freshHTML('库存', UPSTATE.stock_at);
   }
   return '型号 <b>' + n + '</b> 个'
        + '<span class="mt">数据：<b>' + esc(META.built || '—') + '</b></span>'
@@ -6763,6 +7216,8 @@ function start(d){
     return;
   }
   initUI();
+  /* 2026-10-31 启动提速：增强层（标签/历史/提醒/候选）晚 0.9 秒再拉，首屏先把卡片吐出来 */
+  setTimeout(exBoot, 900);
   pubStockWarn();                      // 库存到了就核对一遍已发布的（哪种没货提醒下架）
   updateLossBanner();                  // 新表来了就核对一遍：有发布的要亏了就喊改价
 }
@@ -6786,6 +7241,786 @@ window.__ML = {
   initUI: initUI,
   takePrices: takePrices
 };
+/* ===== 2026-10-31 增强层（内部实现，见 _ext.js 同源） ===== */
+/* ==================== 2026-10-31 增强层（用户令「剩下的全改」） ====================
+   一块装完：别名/标签/改价历史与退回/价格与库存变动提醒/文案多版本/闲鱼链接回填/
+   变更日志与配额/图片墙/参数对照/号价对比/挑主图/任务队列/水印/更新日志/表格视图/
+   搜索高亮/打字候选/发布前三查/快捷键。
+   规矩：所有网络失败都不许拦住主流程（拿不到数据就当没有，界面照用）。 */
+var EX = { alias: {}, tags: {}, hist: {}, links: {}, water: {}, copies: {}, chg: [], quota: {} };
+var EX_ON = false, EX_SNAP_T = 0, HL_WORDS = [], TBL = null;
+
+function exJson(url, opt){
+  return fetch(url, opt).then(function(r){
+    return r.ok ? r.json() : { ok: false, msg: 'HTTP ' + r.status };
+  }).catch(function(e){ return { ok: false, msg: '本地接口没响应：' + e }; });
+}
+function exGet(sub, qs){ return exJson('/api/ex' + (sub ? '/' + sub : '') + (qs || '')); }
+function exPost(b){
+  return exJson('/api/ex', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                             body: JSON.stringify(b || {}) });
+}
+function exModal(title, body, wide){
+  var old = document.getElementById('exmask'); if (old) old.remove();
+  var m = document.createElement('div');
+  m.id = 'exmask';
+  m.innerHTML = '<div class="exmodal' + (wide ? ' wide' : '') + '">'
+    + '<div class="exmh"><b>' + esc(title) + '</b><button class="achip" id="exmx">关闭</button></div>'
+    + '<div class="exmb">' + body + '</div></div>';
+  document.body.appendChild(m);
+  m.querySelector('#exmx').addEventListener('click', function(){ m.remove(); });
+  m.addEventListener('click', function(e){ if (e.target === m) m.remove(); });
+  return m;
+}
+function exMoney(v){ return isNum(v) ? '¥' + money(v) : '—'; }
+function exTime(t){
+  if (!t) return '';
+  var d = new Date(+t * 1000), p = function(x){ return (x < 10 ? '0' : '') + x; };
+  return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function exItemOf(c){
+  for (var i = 0; i < ALL.length; i++){ if (ALL[i].c === c) return ALL[i]; }
+  return null;
+}
+function exMinPrice(it){
+  var P = takePrices(it);
+  return P.length ? Math.min.apply(null, P) : null;
+}
+function exQty(it){
+  var lv = stockOf(it.mo, nameOf(it), it.code);
+  if (lv && isNum(lv.a)) return Math.round(lv.a);
+  return isNum(it.lav) ? it.lav : 0;
+}
+
+/* ---------------- 高亮 ---------------- */
+function hl(s){
+  var t = String(s == null ? '' : s);
+  if (!HL_WORDS.length || !t) return esc(t);
+  var up = t.toUpperCase(), spans = [];
+  HL_WORDS.forEach(function(w){
+    var wu = String(w || '').toUpperCase();
+    if (wu.length < 1) return;
+    var i = 0;
+    while ((i = up.indexOf(wu, i)) >= 0){ spans.push([i, i + wu.length]); i += wu.length; }
+  });
+  if (!spans.length) return esc(t);
+  spans.sort(function(a, b){ return a[0] - b[0] || b[1] - a[1]; });
+  var out = '', pos = 0;
+  spans.forEach(function(sp){
+    if (sp[0] < pos) return;
+    out += esc(t.slice(pos, sp[0])) + '<mark class="hlm">' + esc(t.slice(sp[0], sp[1])) + '</mark>';
+    pos = sp[1];
+  });
+  return out + esc(t.slice(pos));
+}
+
+/* ---------------- 卡片上的标签 / 功能条 ---------------- */
+function exTagsHTML(c){
+  var tg = EX.tags[c] || [];
+  if (!tg.length) return '';
+  return '<div class="extags">' + tg.map(function(t){
+    return '<span class="extag" data-extagdel="' + esc(c) + '|' + esc(t) + '" title="点一下删掉这个标签">'
+      + esc(t) + '<b>×</b></span>';
+  }).join('') + '</div>';
+}
+function exBarHTML(it){
+  var c = it.c, lk = EX.links[c] || null;
+  var h = '';
+  if (lk && (lk.url || lk.xid)){
+    h += '<div class="row exrow"><label>闲鱼</label><span class="v">'
+      + (lk.url ? '<a href="' + esc(lk.url) + '" target="_blank" rel="noopener" style="color:#2e6be6">打开宝贝</a>' : '')
+      + (lk.xid ? ' <span class="mono">' + esc(lk.xid) + '</span>' : '')
+      + (lk.p ? ' <span class="mono">' + exMoney(lk.p) + '</span>' : '')
+      + ' <button class="exmini" data-exlink="' + esc(c) + '">改</button></span></div>';
+  }
+  h += '<div class="exbar">'
+    + '<button class="exmini" data-extag="' + esc(c) + '" title="给这台机器起别名、加自定义标签">🏷 标签/别名</button>'
+    + '<button class="exmini" data-exhist="' + esc(c) + '" title="这台机器改过几次价，改错了能一键退回">价格历史</button>'
+    + '<button class="exmini" data-excmp="' + esc(c) + '" title="多个闲鱼号各定的什么价，差多少">号价对比</button>'
+    + '<button class="exmini" data-exparam="' + esc(c) + '" title="官网抓到的原始参数、标题、卖点">参数对照</button>'
+    + '<button class="exmini" data-excands="' + esc(c) + '" title="出图前先挑一张主图，别让 AI 自己选">挑主图</button>'
+    + '<button class="exmini" data-exvers="' + esc(c) + '" title="存过的几版文案，随时换回来">文案版本</button>'
+    + (!lk || !lk.url ? '<button class="exmini" data-exlink="' + esc(c) + '" title="发布后把宝贝链接贴回来，以后一点就开">回填链接</button>' : '')
+    + '</div>';
+  return h;
+}
+
+/* ---------------- 标签 / 别名 ---------------- */
+function openTagPanel(c){
+  var it = exItemOf(c) || {};
+  var al = (EX.alias[c] || []).join('，');
+  var tg = (EX.tags[c] || []).join('，');
+  var m = exModal('标签 / 别名 · ' + c,
+    '<div style="color:#8a93a3;font-size:12.5px;margin-bottom:10px">别名也参与搜索：客户嘴里叫「小白瓶」也能搜到这台机器。标签是给你自己看的（最多 10 个）。</div>'
+    + '<div style="margin-bottom:12px"><div style="font-weight:600;margin-bottom:4px">别名（逗号分隔）</div>'
+    + '<input id="exalias" value="' + esc(al) + '" placeholder="例：小白瓶，客厅那台，TCL同款" style="width:100%;padding:8px 10px;border:1px solid #d7dce6;border-radius:9px;font-size:13px;outline:0"></div>'
+    + '<div style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">自定义标签（逗号分隔）</div>'
+    + '<input id="extagv" value="' + esc(tg) + '" placeholder="例：清仓，爆款，带票，缺配件" style="width:100%;padding:8px 10px;border:1px solid #d7dce6;border-radius:9px;font-size:13px;outline:0"></div>'
+    + '<div style="text-align:right"><a id="extagsave" role="button" style="display:inline-block;background:#2e6be6;color:#fff;border-radius:9px;padding:8px 20px;font-weight:600;cursor:pointer">保存</a></div>'
+    + (it.b ? '<div style="margin-top:14px;font-size:12px;color:#98a2b3">这台：' + esc(it.b) + ' ' + esc(it.n || '') + '</div>' : ''));
+  m.querySelector('#extagsave').addEventListener('click', function(){
+    var a = m.querySelector('#exalias').value, t = m.querySelector('#extagv').value;
+    var an = a.split(/[，,]/).map(function(x){ return x.trim(); }).filter(Boolean);
+    var tn = t.split(/[，,]/).map(function(x){ return x.trim(); }).filter(Boolean);
+    exPost({ act: 'alias', m: c, names: an }).then(function(j){
+      if (j && j.ok){ EX.alias[c] = an; if (!an.length) delete EX.alias[c]; }
+      var old = EX.tags[c] || [];
+      var jobs = [];
+      tn.forEach(function(x){ if (old.indexOf(x) < 0) jobs.push(exPost({ act: 'tag', m: c, tag: x })); });
+      old.forEach(function(x){ if (tn.indexOf(x) < 0) jobs.push(exPost({ act: 'untag', m: c, tag: x })); });
+      return Promise.all(jobs.length ? jobs : [Promise.resolve(1)]);
+    }).then(function(){
+      EX.tags[c] = tn;
+      EX.hist = EX.hist || {};
+      m.remove();
+      toastMsg('标签已保存');
+      run();
+    });
+  });
+}
+
+/* ---------------- 改价历史 / 一键退回 ---------------- */
+function openHistPanel(c){
+  var m = exModal('价格历史 · ' + c, '<div style="color:#98a2b3">读取中…</div>');
+  exGet('hist', '?model=' + encodeURIComponent(c)).then(function(j){
+    var lst = (j && j.list) || (j && j.hist) || [];
+    if (!lst.length){
+      m.querySelector('.exmb').innerHTML = '<div class="empty" style="padding:18px 0">还没有改价记录。'
+        + '<br><span style="color:#98a2b3;font-size:12.5px">从这个版本起，改一次记一条；输错价能一键退回。</span></div>';
+      return;
+    }
+    var html = '<table><tr><th>时间</th><th>闲鱼号</th><th>原价</th><th>改成</th><th>差额</th><th></th></tr>';
+    lst.forEach(function(h, i){
+      var d = (isNum(h.o) && isNum(h.n)) ? (h.n - h.o) : null;
+      html += '<tr' + (h.undone ? ' style="opacity:.45"' : '') + '>'
+        + '<td>' + exTime(h.t) + '</td><td>' + esc(h.xy || '默认') + '</td>'
+        + '<td>' + exMoney(h.o) + '</td><td><b>' + exMoney(h.n) + '</b></td>'
+        + '<td class="' + (d > 0 ? 'ok' : d < 0 ? 'bad' : '') + '">' + (d == null ? '—' : (d > 0 ? '+' : '') + money(d)) + '</td>'
+        + '<td>' + (h.undone ? '<span style="color:#98a2b3">已退回</span>'
+          : '<button class="exmini" data-exundo="' + esc(c) + '|' + esc(h.xy || '') + '|' + esc(h.t) + '">退回这个价</button>') + '</td></tr>';
+    });
+    m.querySelector('.exmb').innerHTML = html
+      + '<div style="margin-top:10px;font-size:12px;color:#98a2b3">「退回」= 把卡片定价框改回上一个价（不自动发布，你先看一眼再点标记）。</div>';
+  });
+}
+function exUndo(c, xy, ts){
+  if (!confirm('把「' + c + '」的定价退回上一个价？')) return;
+  exPost({ act: 'undo', m: c, xy: xy || '' }).then(function(j){
+    if (!j || !j.ok){ alert((j && j.msg) || '退不回去'); return; }
+    PRICES[c] = j.price; savePrices(); run();
+    var card = document.querySelector('.card[data-key="' + String(c).replace(/"/g, '\\"') + '"]');
+    if (card){ var box = card.querySelector('.calc input'); if (box){ box.value = j.price; calcUpdate(card.querySelector('.calc')); } }
+    toastMsg('已退回 ' + exMoney(j.price) + '，看一眼再点标记');
+    var m = document.getElementById('exmask'); if (m) m.remove();
+  });
+}
+
+/* ---------------- 号价对比 ---------------- */
+function openCmpPanel(c){
+  var it = exItemOf(c) || {};
+  var mk = MARKED[c] || null;
+  var rows = [];
+  if (mk && mk.xys){
+    for (var k in mk.xys){
+      var e = mk.xys[k] || {};
+      rows.push({ xy: String(k).split('|')[0], kind: (e.k === 's' ? '样机' : '正品'),
+                  p: isNum(e.p) ? +e.p : null, t: e.t, xid: e.xid || '' });
+    }
+  }
+  if (!rows.length && isNum(PRICES[c])) rows.push({ xy: '默认', kind: '-', p: PRICES[c], t: null });
+  var opts = costOptions(it);
+  var cost = opts.length ? opts[0].v : null;
+  var html = '<div style="color:#8a93a3;font-size:12.5px;margin-bottom:8px">同型号在所有闲鱼号上的定价。成本口径：'
+    + (cost != null ? esc(opts[0].l) + ' ' + exMoney(cost) : '没有成本价') + '</div>';
+  if (!rows.length){
+    html += '<div class="empty" style="padding:16px 0">还没在任何一个号上发布过，没有可比的价格。</div>';
+  } else {
+    var ps = rows.map(function(r){ return r.p; }).filter(isNum);
+    var lo = ps.length ? Math.min.apply(null, ps) : null, hi = ps.length ? Math.max.apply(null, ps) : null;
+    html += '<table><tr><th>闲鱼号</th><th>口径</th><th>定价</th><th>比成本</th><th>差最高</th></tr>';
+    rows.sort(function(a, b){ return (a.p || 0) - (b.p || 0); });
+    rows.forEach(function(r){
+      var g = (isNum(r.p) && isNum(cost)) ? r.p - cost : null;
+      html += '<tr><td>' + esc(r.xy || '默认') + '</td><td>' + esc(r.kind) + '</td><td><b>' + exMoney(r.p) + '</b></td>'
+        + '<td class="' + (g > 0 ? 'ok' : g < 0 ? 'bad' : '') + '">' + (g == null ? '—' : (g > 0 ? '挣 ' : '亏 ') + money(Math.abs(g))) + '</td>'
+        + '<td>' + (isNum(hi) && isNum(r.p) && hi > r.p ? '低 ' + money(hi - r.p) : '—') + '</td></tr>';
+    });
+    html += '</table>';
+    if (isNum(lo) && isNum(hi) && hi > lo){
+      html += '<div style="margin-top:10px;font-size:12.5px;color:#c2760a">同型号最高 ' + exMoney(hi) + ' / 最低 ' + exMoney(lo)
+        + '，差 ' + money(hi - lo) + ' 元' + ((hi - lo) / lo > 0.15 ? '（超过 15%，买家比价时会看出来）' : '') + '。</div>';
+    }
+  }
+  exModal('号价对比 · ' + c, html);
+}
+
+/* ---------------- 闲鱼链接回填 ---------------- */
+function openLinkPanel(c){
+  var lk = EX.links[c] || {};
+  var m = exModal('闲鱼链接回填 · ' + c,
+    '<div style="color:#8a93a3;font-size:12.5px;margin-bottom:10px">发布完把宝贝链接（或宝贝 ID）贴回来：以后卡片上直接点「打开宝贝」，不用再去闲鱼翻。</div>'
+    + '<div style="margin-bottom:10px"><div style="font-weight:600;margin-bottom:4px">宝贝链接</div>'
+    + '<input id="exlkurl" value="' + esc(lk.url || '') + '" placeholder="https://www.goofish.com/item?id=..." style="width:100%;padding:8px 10px;border:1px solid #d7dce6;border-radius:9px;font-size:13px;outline:0"></div>'
+    + '<div style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">宝贝 ID（可只填这个）</div>'
+    + '<input id="exlkxid" value="' + esc(lk.xid || '') + '" placeholder="纯数字" style="width:100%;padding:8px 10px;border:1px solid #d7dce6;border-radius:9px;font-size:13px;outline:0"></div>'
+    + '<div style="text-align:right"><a id="exlksave" role="button" style="display:inline-block;background:#2e6be6;color:#fff;border-radius:9px;padding:8px 20px;font-weight:600;cursor:pointer">保存</a>'
+    + '<a id="exlkclr" role="button" style="display:inline-block;margin-left:12px;color:#b42318;padding:8px 4px;cursor:pointer">清掉</a></div>');
+  m.querySelector('#exlksave').addEventListener('click', function(){
+    var url = m.querySelector('#exlkurl').value.trim();
+    var xid = m.querySelector('#exlkxid').value.trim();
+    if (xid && !url) url = 'https://www.goofish.com/item?id=' + encodeURIComponent(xid);
+    if (!xid && /[?&]id=(\d{6,})/.test(url)) xid = url.match(/[?&]id=(\d{6,})/)[1];
+    exPost({ act: 'link', m: c, url: url, xid: xid, price: PRICES[c] || null }).then(function(j){
+      if (j && j.ok){ EX.links[c] = j.link; m.remove(); toastMsg('链接已存'); run(); }
+      else alert((j && j.msg) || '没存上');
+    });
+  });
+  m.querySelector('#exlkclr').addEventListener('click', function(){
+    exPost({ act: 'link', m: c, url: '', xid: '' }).then(function(){
+      delete EX.links[c]; m.remove(); run();
+    });
+  });
+}
+
+/* ---------------- 参数对照 ---------------- */
+function openParamPanel(c){
+  var m = exModal('参数对照 · ' + c, '<div style="color:#98a2b3">读参数…</div>', true);
+  exGet('params', '?model=' + encodeURIComponent(c)).then(function(j){
+    if (!j || !j.ok){ m.querySelector('.exmb').innerHTML = '<div class="bad">没读出来：' + esc((j && j.msg) || '') + '</div>'; return; }
+    var ps = j.params || [];
+    var html = '';
+    if (j.name) html += '<div style="font-weight:600;margin-bottom:8px">' + esc(j.name) + '</div>';
+    var bl = j.blur || {};
+    var blk = Object.keys(bl);
+    if (blk.length){
+      html += '<div style="margin-bottom:8px;padding:7px 10px;border-radius:9px;background:#fff7e6;border:1px solid #ffd591;color:#ad6800;font-size:12.5px">'
+        + '图糊预警：' + blk.map(function(k){ return k + ' ' + bl[k]; }).join('；')
+        + '<br><span style="color:#a16207">建议点卡片上的「挑主图」换一张清晰的，再单张重出。</span></div>';
+    }
+    html += '<div class="exgrid2">';
+    html += '<div><div style="font-weight:600;margin-bottom:4px">官网抓到的参数</div>';
+    if (!ps.length) html += '<div style="color:#98a2b3;font-size:12.5px">这台还没跑过蓝底/聚光，没有参数快照。先出一次图就存下来了。</div>';
+    else {
+      html += '<table>' + ps.map(function(r){ return '<tr><th style="width:42%">' + esc(r[0]) + '</th><td>' + esc(r[1]) + '</td></tr>'; }).join('') + '</table>';
+    }
+    html += '</div><div>';
+    html += '<div style="font-weight:600;margin-bottom:4px">标题三档</div>';
+    html += (j.titles && j.titles.length)
+      ? '<div>' + j.titles.map(function(t, i){ return '<div style="padding:5px 8px;background:#f7f9fc;border-radius:8px;margin-bottom:4px;font-size:12.5px">'
+          + '<span style="color:#98a2b3">' + ['全新未拆', '样机清仓', '特价处理'][i] + '</span> ' + esc(t) + '</div>'; }).join('') + '</div>'
+      : '<div style="color:#98a2b3;font-size:12.5px">还没生成</div>';
+    html += '<div style="font-weight:600;margin:10px 0 4px">卖点</div>';
+    html += (j.points && j.points.length)
+      ? '<div style="font-size:12.5px">' + j.points.map(function(p){ return '· ' + esc(p); }).join('<br>') + '</div>'
+      : '<div style="color:#98a2b3;font-size:12.5px">还没生成</div>';
+    html += '<div style="font-weight:600;margin:10px 0 4px">售后口径</div>'
+      + '<div style="font-size:12.5px;white-space:pre-wrap;color:#43464c">' + esc(j.aftersale || '—') + '</div>';
+    if (j.src) html += '<div style="margin-top:10px;font-size:11.5px"><a href="' + esc(j.src) + '" target="_blank" rel="noopener" style="color:#2e6be6">参数来源页</a></div>';
+    html += '</div></div>';
+    m.querySelector('.exmb').innerHTML = html;
+  });
+}
+
+/* ---------------- 挑主图（出图前） ---------------- */
+function openCands(c){
+  var m = exModal('挑主图 · ' + c,
+    '<div style="color:#8a93a3;font-size:12.5px;margin-bottom:10px">这些是从官网/欣盛/中关村抓回来的候选图，AI 默认挑一张。你要是不满意，点一张当主图，再重出。</div>'
+    + '<div id="excands" class="exgrid"><div style="color:#98a2b3">读取中…</div></div>', true);
+  exGet('cands', '?model=' + encodeURIComponent(c)).then(function(j){
+    var box = m.querySelector('#excands');
+    var lst = (j && j.list) || [];
+    if (!lst.length){
+      box.innerHTML = '<div style="color:#98a2b3;padding:12px 0">这台还没有候选图——先在「蓝底」里出一次图，抓回来的图就都在这了。</div>';
+      return;
+    }
+    box.innerHTML = lst.map(function(x, i){
+      return '<a href="javascript:void(0)" data-exsetmain="' + esc(c) + '|' + esc(x.rel) + '" class="' + (x.cur ? 'on' : '') + '">'
+        + '<img src="' + x.u + '" loading="lazy" alt="">'
+        + '<span>' + (x.cur ? '✓ 当前主图 · ' : '') + esc(x.sub + ' · ' + x.kb + 'KB') + '</span></a>';
+    }).join('');
+    box.insertAdjacentHTML('beforebegin', '<div style="margin-bottom:6px;font-size:12px;color:#98a2b3">共 ' + lst.length
+      + ' 张候选（越靠右越大）；点一张即设为主图，然后去「蓝底」点重出。</div>');
+  });
+}
+
+/* ---------------- 文案多版本 ---------------- */
+function openVersPanel(c){
+  var m = exModal('文案版本 · ' + c,
+    '<div style="color:#8a93a3;font-size:12.5px;margin-bottom:10px">每台最多存 8 版。点一版直接复制走，改价换季不用重写。</div>'
+    + '<div id="exvers"><div style="color:#98a2b3">读取中…</div></div>'
+    + '<div style="margin-top:12px;border-top:1px dashed #e6eaf2;padding-top:10px">'
+    + '<div style="font-weight:600;margin-bottom:4px">存一版</div>'
+    + '<input id="exverti" placeholder="标题（可空）" style="width:100%;padding:7px 9px;border:1px solid #d7dce6;border-radius:8px;font-size:12.5px;margin-bottom:6px;outline:0">'
+    + '<textarea id="exverbd" placeholder="正文（可空；想直接把剪贴板里的文案存进来就点右边「粘剪贴板」）" style="width:100%;height:90px;padding:7px 9px;border:1px solid #d7dce6;border-radius:8px;font-size:12.5px;outline:0;font-family:inherit"></textarea>'
+    + '<div style="margin-top:8px;text-align:right"><button class="exmini" id="exverpaste">粘剪贴板</button>'
+    + '<button class="exmini" id="exversave" style="background:#2e6be6;color:#fff;border-color:#2e6be6">保存这一版</button></div></div>');
+  function load(){
+    exGet('copylist', '?model=' + encodeURIComponent(c)).then(function(j){
+      var lst = (j && j.list) || [];
+      m.querySelector('#exvers').innerHTML = lst.length ? lst.map(function(v){
+        return '<div style="border:1px solid #e6eaf2;border-radius:10px;padding:8px 10px;margin-bottom:6px">'
+          + '<div style="font-size:11.5px;color:#98a2b3">' + exTime(v.t) + (v.tag ? ' · ' + esc(v.tag) : '') + '</div>'
+          + (v.ti ? '<div style="font-weight:600;font-size:12.5px;margin:2px 0">' + esc(v.ti) + '</div>' : '')
+          + '<div style="font-size:12.5px;white-space:pre-wrap;max-height:76px;overflow:auto;color:#43464c">' + esc(v.bd || '') + '</div>'
+          + '<div style="margin-top:6px"><button class="exmini" data-exvercopy="' + esc(v.t) + '|' + esc(c) + '">复制</button>'
+          + '<button class="exmini" data-exverdel="' + esc(v.t) + '|' + esc(c) + '">删掉</button></div></div>';
+      }).join('') : '<div style="color:#98a2b3">还没存过版本</div>';
+    });
+  }
+  load();
+  m.querySelector('#exverpaste').addEventListener('click', function(){
+    if (!(navigator.clipboard && navigator.clipboard.readText)) return;
+    navigator.clipboard.readText().then(function(t){
+      var v = m.querySelector('#exverbd'); if (t) v.value = t;
+    }).catch(function(){});
+  });
+  m.querySelector('#exversave').addEventListener('click', function(){
+    var ti = m.querySelector('#exverti').value.trim();
+    var bd = m.querySelector('#exverbd').value.trim();
+    if (!ti && !bd){ alert('标题和正文都空着'); return; }
+    exPost({ act: 'copy', m: c, title: ti, body: bd }).then(function(j){
+      if (!j || !j.ok){ alert((j && j.msg) || '没存上'); return; }
+      m.querySelector('#exverti').value = ''; m.querySelector('#exverbd').value = '';
+      load();
+    });
+  });
+}
+
+/* ---------------- 图片墙（一窗看全部图） ---------------- */
+function openWall(){
+  var m = exModal('图片墙 · 所有出过的图', '<div style="color:#98a2b3">读图…</div>', true);
+  exGet('wall').then(function(j){
+    var lst = (j && j.list) || [];
+    if (!lst.length){
+      m.querySelector('.exmb').innerHTML = '<div class="empty" style="padding:20px 0">图库里还没有成片。跑一次「蓝底」或「聚光」就会出现在这里。</div>';
+      return;
+    }
+    var html = '<div style="font-size:12px;color:#98a2b3;margin-bottom:8px">共 ' + lst.length
+      + ' 台机器有成片 · 图上点一下看大图 · 目录：' + esc(j.root || '') + '</div>';
+    lst.forEach(function(it){
+      html += '<div style="margin-bottom:14px"><div style="font-weight:600;font-size:13px;margin-bottom:4px">' + esc(it.m) + '</div>';
+      ['蓝底', '聚光'].forEach(function(sub){
+        var im = it.subs[sub];
+        if (!im || !im.length) return;
+        html += '<div style="font-size:11.5px;color:#98a2b3;margin:2px 0">' + sub + '（' + im.length + '）</div><div class="exgrid">';
+        im.forEach(function(x){
+          html += '<a href="' + x.u + '" target="_blank" rel="noopener" title="' + esc(it.m + ' · ' + sub + ' · ' + x.kb + 'KB') + '">'
+            + '<img src="' + x.u + '" loading="lazy" alt=""><span>' + esc(x.f) + ' · ' + x.kb + 'KB</span></a>';
+        });
+        html += '</div>';
+      });
+      html += '</div>';
+    });
+    m.querySelector('.exmb').innerHTML = html;
+  });
+}
+
+/* ---------------- 变更日志 / 配额 / 备份 / 诊断 ---------------- */
+function openChg(){
+  var m = exModal('今天干了啥 · 变更日志', '<div style="color:#98a2b3">读取中…</div>', true);
+  Promise.all([exGet('chg'), exGet('quota')]).then(function(r){
+    var lst = (r[0] && r[0].list) || [];
+    var q = r[1] || {};
+    var KIND = { price: '改价', img: '图片', copy: '文案', pub: '发布', tag: '标签', alias: '别名', link: '链接', stock: '库存', misc: '其他' };
+    var html = '<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">'
+      + '<span style="font-size:12.5px;color:#43464c">云端写入今天 <b>' + (q.n || 0) + '</b> / ' + (q.cap || 1000)
+      + ' 次（剩 ' + (q.left || 0) + '）'
+      + ((q.n || 0) > 800 ? ' <span style="color:#b42318">要用完了，今天尽量别再批量标记</span>' : '') + '</span>'
+      + '<span style="flex:1"></span>'
+      + '<button class="exmini" id="exbak">打包备份</button>'
+      + '<button class="exmini" id="exdiagb">生成诊断包</button></div>';
+    if (!lst.length){
+      html += '<div class="empty" style="padding:18px 0">还没有记录。改价、出图、发布、加标签都会记在这里。</div>';
+    } else {
+      html += '<table><tr><th style="width:96px">时间</th><th style="width:52px">类型</th><th style="width:160px">型号</th><th>做了什么</th></tr>';
+      lst.forEach(function(x){
+        html += '<tr><td>' + exTime(x.t) + '</td><td>' + esc(KIND[x.k] || x.k) + '</td>'
+          + '<td class="mono" style="font-size:11.5px">' + esc(x.m || '') + '</td><td>' + esc(x.x || '') + '</td></tr>';
+      });
+      html += '</table>';
+    }
+    m.querySelector('.exmb').innerHTML = html;
+    m.querySelector('#exbak').addEventListener('click', function(){
+      this.textContent = '打包中…';
+      exJson('/api/exbak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(function(j){
+        alert(j && j.ok ? ('备份好了：' + j.path + '\n' + j.files + ' 个文件，' + j.mb + ' MB。\n换机器/重装前把这个文件夹拷走就行。')
+                        : ('备份失败：' + ((j && j.msg) || '')));
+      });
+    });
+    m.querySelector('#exdiagb').addEventListener('click', function(){
+      this.textContent = '生成中…';
+      exJson('/api/exdiag', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(function(j){
+        alert(j && j.ok ? ('诊断包好了：' + j.path + '\n出问题时把这个发出来，日志和状态都在里面。')
+                        : ('失败：' + ((j && j.msg) || '')));
+      });
+    });
+  });
+}
+
+/* ---------------- 任务队列（出图排队后台） ---------------- */
+function openJobs(){
+  var m = exModal('后台任务', '<div style="color:#98a2b3">读取中…</div>');
+  function draw(){
+    exGet('jobs').then(function(j){
+      var lst = (j && j.list) || [];
+      if (!lst.length){
+        m.querySelector('.exmb').innerHTML = '<div class="empty" style="padding:16px 0">现在没有在跑的任务。<br>'
+          + '<span style="color:#98a2b3;font-size:12.5px">出图、写文案都在后台跑，这里能看到排队和进度，不用守着窗口。</span></div>';
+        return;
+      }
+      m.querySelector('.exmb').innerHTML = '<table><tr><th>任务</th><th style="width:64px">状态</th><th>进度</th></tr>'
+        + lst.map(function(x){
+            var st = x.running ? '<span style="color:#c2760a">跑着</span>'
+                   : (x.ok === true ? '<span class="ok">完成</span>' : '<span class="bad">失败</span>');
+            return '<tr><td class="mono" style="font-size:11.5px">' + esc(x.k) + '</td><td>' + st + '</td>'
+              + '<td style="font-size:12px">' + esc(x.prog || x.err || '—') + '</td></tr>';
+          }).join('') + '</table>'
+        + '<div style="margin-top:8px;font-size:11.5px;color:#98a2b3">每 2 秒自动刷新；关掉这个窗也不影响任务继续跑。</div>';
+    });
+  }
+  draw();
+  var iv = setInterval(function(){
+    if (!document.getElementById('exmask') || !m.isConnected){ clearInterval(iv); return; }
+    draw();
+  }, 2000);
+}
+
+/* ---------------- 水印 ---------------- */
+function openWater(){
+  var w = EX.water || {};
+  var m = exModal('水印设置',
+    '<div style="color:#8a93a3;font-size:12.5px;margin-bottom:10px">给蓝底四张右下角加一行半透明小字（店名/微信/编号都行）。改完下一次出图生效，已出的图重出一张就叠上。</div>'
+    + '<label style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><input type="checkbox" id="exw_on" ' + (w.on ? 'checked' : '') + '> 开启水印</label>'
+    + '<div style="margin-bottom:10px"><div style="font-weight:600;margin-bottom:4px">文字</div>'
+    + '<input id="exw_text" value="' + esc(w.text || '') + '" placeholder="例：型号查询 · 深圳现货" style="width:100%;padding:8px 10px;border:1px solid #d7dce6;border-radius:9px;font-size:13px;outline:0"></div>'
+    + '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">'
+    + '<label style="flex:1;min-width:120px"><div style="font-weight:600;margin-bottom:4px">位置</div>'
+    + '<select id="exw_pos" style="width:100%;padding:7px 9px;border:1px solid #d7dce6;border-radius:9px;font-size:13px">'
+    + ['br:右下', 'bl:左下', 'tr:右上', 'tl:左上'].map(function(x){
+        var v = x.split(':')[0];
+        return '<option value="' + v + '"' + ((w.pos || 'br') === v ? ' selected' : '') + '>' + x.split(':')[1] + '</option>';
+      }).join('') + '</select></label>'
+    + '<label style="flex:1;min-width:100px"><div style="font-weight:600;margin-bottom:4px">字号（%宽）</div>'
+    + '<input id="exw_size" type="number" step="0.5" min="1" max="12" value="' + (Math.round((w.size || 0.032) * 1000) / 10) + '" style="width:100%;padding:7px 9px;border:1px solid #d7dce6;border-radius:9px;font-size:13px"></label>'
+    + '<label style="flex:1;min-width:100px"><div style="font-weight:600;margin-bottom:4px">透明度</div>'
+    + '<input id="exw_alpha" type="number" step="0.05" min="0.1" max="1" value="' + (w.alpha || 0.55) + '" style="width:100%;padding:7px 9px;border:1px solid #d7dce6;border-radius:9px;font-size:13px"></label>'
+    + '<label style="flex:0 0 auto"><div style="font-weight:600;margin-bottom:4px">颜色</div>'
+    + '<input id="exw_color" type="color" value="' + esc(w.color || '#ffffff') + '" style="width:52px;height:34px;border:1px solid #d7dce6;border-radius:8px;background:#fff"></label>'
+    + '</div><div style="text-align:right"><a id="exwsave" role="button" style="display:inline-block;background:#2e6be6;color:#fff;border-radius:9px;padding:8px 20px;font-weight:600;cursor:pointer">保存</a></div>');
+  m.querySelector('#exwsave').addEventListener('click', function(){
+    var b = { act: 'water', on: m.querySelector('#exw_on').checked,
+              text: m.querySelector('#exw_text').value.trim(),
+              pos: m.querySelector('#exw_pos').value,
+              size: (parseFloat(m.querySelector('#exw_size').value) || 3.2) / 100,
+              alpha: parseFloat(m.querySelector('#exw_alpha').value) || 0.55,
+              color: m.querySelector('#exw_color').value };
+    exPost(b).then(function(j){
+      if (j && j.ok){ EX.water = j.water; m.remove(); toastMsg('水印设置已存，下次出图生效'); }
+      else alert((j && j.msg) || '没存上');
+    });
+  });
+}
+
+/* ---------------- 更新日志 ---------------- */
+function openVerLog(){
+  var m = exModal('更新日志', '<div style="color:#98a2b3">读取中…</div>');
+  exGet('changelog').then(function(j){
+    var lst = (j && j.list) || [];
+    m.querySelector('.exmb').innerHTML = lst.map(function(v){
+      return '<div style="margin-bottom:14px"><div style="font-weight:700;font-size:14px">v' + esc(v.v)
+        + ' <span style="font-weight:400;color:#98a2b3;font-size:12px">' + esc(v.d) + '</span></div>'
+        + '<ul style="margin:5px 0 0;padding-left:18px;font-size:12.5px;line-height:1.75;color:#43464c">'
+        + (v.items || []).map(function(x){ return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>';
+    }).join('');
+  });
+}
+
+/* ---------------- 价格嫌疑清单 ---------------- */
+function exCollectRows(){
+  var out = [];
+  for (var i = 0; i < ALL.length; i++){
+    var it = ALL[i];
+    var o = costOptions(it);
+    out.push({ m: it.c, name: (it.b || '') + ' ' + (it.n || ''), pt: it.pt, lpz: it.lpz, spz: it.spz,
+               lp: isNum(it.xp) && it.xp > 0 ? it.xp : it.lp,
+               cost: (o.length && isNum(o[0].v)) ? o[0].v : null });
+  }
+  return out;
+}
+function openSuspect(){
+  var m = exModal('价格嫌疑清单', '<div style="color:#98a2b3">核对中…</div>', true);
+  exPost({ act: 'suspects', rows: exCollectRows() }).then(function(j){
+    var lst = (j && j.list) || [];
+    if (!lst.length){
+      m.querySelector('.exmb').innerHTML = '<div class="empty" style="padding:18px 0">没发现可疑价格。'
+        + '<br><span style="color:#98a2b3;font-size:12.5px">规则：清理价低于成本七成 / 比零售指导价还高 / 同型号价差超 40% / 最近跳变超 30%。</span></div>';
+      return;
+    }
+    m.querySelector('.exmb').innerHTML = '<div style="font-size:12.5px;color:#8a93a3;margin-bottom:8px">共 ' + lst.length
+      + ' 条。点型号直接搜出来核对。</div><table><tr><th style="width:180px">型号</th><th style="width:200px">机器</th><th>可疑点</th></tr>'
+      + lst.map(function(x){
+          return '<tr><td class="mono"><a href="javascript:void(0)" data-exsearch="' + esc(x.m) + '" style="color:#2e6be6">' + esc(x.m) + '</a></td>'
+            + '<td style="font-size:12px">' + esc(x.n) + '</td>'
+            + '<td style="font-size:12px;color:#b42318">' + x.why.map(esc).join('<br>') + '</td></tr>';
+        }).join('') + '</table>';
+  });
+}
+
+/* ---------------- 表格视图 ---------------- */
+function openTable(){
+  if (TBL){ TBL = null; run(); return; }
+  if (!cur.length){ alert('先在左边搜索或点筛选，有结果了再看表格'); return; }
+  TBL = { k: 'c', d: 1 };
+  exTableRender();
+}
+function exTableRender(){
+  if (!TBL) return;
+  var rows = cur.slice(), k = TBL.k, d = TBL.d;
+  rows.sort(function(a, b){
+    var x = a.it, y = b.it, va, vb;
+    if (k === 'p'){ va = exMinPrice(x); vb = exMinPrice(y); }
+    else if (k === 'q'){ va = exQty(x); vb = exQty(y); }
+    else if (k === 'b'){ va = x.b || ''; vb = y.b || ''; }
+    else if (k === 'n'){ va = x._n || ''; vb = y._n || ''; }
+    else if (k === 's'){ va = (MARKED[x.c] ? 1 : 0); vb = (MARKED[y.c] ? 1 : 0); }
+    else { va = x.c; vb = y.c; }
+    if (va == null) va = -1; if (vb == null) vb = -1;
+    if (va < vb) return -d;
+    if (va > vb) return d;
+    return 0;
+  });
+  var ST = { ok: '有货有价', 'no-price': '有货无价', 'no-stock': '有价无货', none: '无货无价' };
+  var th = function(key, label){
+    return '<th data-extsort="' + key + '" style="cursor:pointer;white-space:nowrap">' + label
+      + (k === key ? (d > 0 ? ' ↑' : ' ↓') : '') + '</th>';
+  };
+  var html = '<div class="extblwrap"><div class="extblbar">表格视图 · ' + rows.length + ' 条'
+    + '<span style="flex:1"></span><button class="exmini" id="extblx">回到卡片</button></div>'
+    + '<table class="extbl"><thead><tr>' + th('c', '型号') + th('b', '品牌') + th('n', '机器名')
+    + th('p', '最低价') + th('q', '库存') + th('s', '发布') + '<th>可卖</th><th>标签</th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    var it = r.it;
+    var ss = sellStatusOf(it, stockOf(it.mo, nameOf(it), it.code));
+    var tg = (EX.tags[it.c] || []).join(' · ');
+    html += '<tr data-exrow="' + esc(it.c) + '"><td class="mono">' + hl(it.mo) + '</td><td>' + esc(it.b || '') + '</td>'
+      + '<td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + hl(it.n || '') + '</td>'
+      + '<td>' + exMoney(exMinPrice(it)) + '</td><td>' + exQty(it) + '</td>'
+      + '<td>' + (MARKED[it.c] ? '<span class="ok">已发</span>' : '') + '</td>'
+      + '<td class="' + (ss === 'ok' ? 'ok' : ss === 'none' ? '' : 'bad') + '">' + (ST[ss] || '') + '</td>'
+      + '<td style="font-size:11.5px;color:#5b6577">' + esc(tg) + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
+  moreEl.hidden = true;
+  listEl.innerHTML = html;
+  hintEl.innerHTML = '表格视图 <span class="dot"></span> 点表头排序，点行回卡片定位';
+}
+
+/* ---------------- 变动提醒（价格 / 库存） ---------------- */
+function exSnap(){
+  var pr = {}, st = {};
+  for (var i = 0; i < ALL.length; i++){
+    var it = ALL[i];
+    var p = exMinPrice(it);
+    if (p != null) pr[it.c] = p;
+    var q = stockOf(it.mo, nameOf(it), it.code);
+    if (q && isNum(q.a)) st[it.c] = Math.round(q.a);
+  }
+  if (!Object.keys(pr).length && !Object.keys(st).length) return;
+  exPost({ act: 'snap', prices: pr, stocks: st }).then(function(j){
+    if (!j || !j.ok) return;
+    var pc = (j.price && j.price.changed) || [], sc = (j.stock && j.stock.changed) || [];
+    if (!pc.length && !sc.length) return;
+    exAlert(pc, sc);
+  });
+}
+function exAlert(pc, sc){
+  var box = document.getElementById('exalert');
+  if (!box) return;
+  var bits = [];
+  if (pc.length) bits.push('价格变动 <b>' + pc.length + '</b> 台');
+  if (sc.length) bits.push('库存突变 <b>' + sc.length + '</b> 台');
+  var detail = [];
+  pc.slice(0, 6).forEach(function(x){
+    detail.push('<a class="pubwarn-chip" href="javascript:void(0)" data-exsearch="' + esc(x.m) + '">'
+      + esc(x.m) + ' ' + Math.round(x.o) + '→' + Math.round(x.n) + '</a>');
+  });
+  sc.slice(0, 6).forEach(function(x){
+    detail.push('<a class="pubwarn-chip" href="javascript:void(0)" data-exsearch="' + esc(x.m) + '">'
+      + esc(x.m) + ' 库存 ' + x.o + '→' + x.n + '</a>');
+  });
+  box.hidden = false;
+  box.className = 'yyalert';
+  box.style.background = '#fff7e6';
+  box.style.borderColor = '#ffd591';
+  box.style.color = '#ad6800';
+  box.innerHTML = '<b>数据有变动</b>' + bits.join(' · ') + '：' + detail.join('')
+    + ' <span style="flex:1"></span><button class="close" id="exalertx" title="知道了（下次变动再提醒）">×</button>';
+  var x = document.getElementById('exalertx');
+  if (x) x.addEventListener('click', function(){ box.hidden = true; });
+}
+
+/* ---------------- 发布前三查 ---------------- */
+function exPrecheck(c, go){
+  exGet('precheck', '?model=' + encodeURIComponent(c) + '&price=' + encodeURIComponent(PRICES[c] || '')).then(function(j){
+    if (!j || !j.ok){ go(); return; }
+    var items = j.items || [];
+    var bad = items.filter(function(x){ return !x.ok; });
+    if (!bad.length){ go(); return; }
+    var html = '<div style="font-size:12.5px;color:#8a93a3;margin-bottom:8px">发布前过一眼，缺的能补就补；不补也能发，只是发出去体验差。</div>'
+      + '<table>' + items.map(function(x){
+          return '<tr><td style="width:64px"><b>' + esc(x.k) + '</b></td>'
+            + '<td style="width:40px" class="' + (x.ok ? 'ok' : 'bad') + '">' + (x.ok ? '✓' : '缺') + '</td>'
+            + '<td style="font-size:12.5px">' + esc(x.x) + '</td></tr>';
+        }).join('') + '</table>'
+      + '<div style="margin-top:14px;text-align:right">'
+      + '<a id="expc_go" role="button" style="display:inline-block;background:#2e6be6;color:#fff;border-radius:9px;padding:8px 20px;font-weight:600;cursor:pointer">照样发布</a>'
+      + '<a id="expc_no" role="button" style="display:inline-block;margin-left:12px;color:#6b7280;padding:8px 4px;cursor:pointer">先去补</a></div>';
+    var m = exModal('发布前三查 · ' + c, html);
+    m.querySelector('#expc_go').addEventListener('click', function(){ m.remove(); go(); });
+    m.querySelector('#expc_no').addEventListener('click', function(){ m.remove(); });
+  });
+}
+
+/* ---------------- 打字候选 ---------------- */
+function exDatalist(){
+  var inp = document.getElementById('q');
+  if (!inp || document.getElementById('qlist')) return;
+  var dl = document.createElement('datalist');
+  dl.id = 'qlist';
+  var seen = {}, out = [];
+  function add(v){
+    v = String(v || '').trim();
+    if (!v || v.length > 26 || seen[v]) return;
+    seen[v] = 1; out.push(v);
+  }
+  (BRANDS || []).forEach(add);
+  (CATS || []).forEach(add);
+  (ALL || []).slice(0, 300).forEach(function(it){ add(it.mo); });
+  dl.innerHTML = out.slice(0, 220).map(function(v){ return '<option value="' + esc(v) + '">'; }).join('');
+  document.body.appendChild(dl);
+  inp.setAttribute('list', 'qlist');
+}
+
+/* ---------------- 启动 / 事件 ---------------- */
+function exBoot(){
+  exGet('').then(function(j){
+    if (j && j.ok){
+      EX = j; EX_ON = true;
+    }
+  }).then(function(){
+    exDatalist();
+    /* 侧栏工具按钮 + 菜单触发的隐藏按钮，一律走 addEventListener（innerHTML 里禁内联事件） */
+    var BIND = { wallbtn: openWall, extwall: openWall, jobsbtn: openJobs, extjobs: openJobs,
+                 susbtn: openSuspect, extsus: openSuspect, chgbtn: openChg, extchg: openChg,
+                 tblbtn: openTable, exttbl: openTable, verbtn: openVerLog, extver: openVerLog,
+                 waterbtn: openWater, extwater: openWater, exttag: openTagPanel, exttbl2: openTable };
+    for (var id in BIND){
+      (function(el, fn){
+        if (el) el.addEventListener('click', function(e){ e.preventDefault(); fn(); });
+      })(document.getElementById(id), BIND[id]);
+    }
+    if (cur && cur.length && window.scrollY < 40) run();
+    else if (document.getElementById('list')) exDatalist();
+    setTimeout(exSnap, 2500);
+  });
+}
+document.addEventListener('click', function(e){
+  var t = e.target, el;
+  function q(attr){ return t.closest ? t.closest('[' + attr + ']') : null; }
+  if ((el = q('data-exhist'))){ e.preventDefault(); openHistPanel(el.getAttribute('data-exhist')); return; }
+  if ((el = q('data-extag'))){ e.preventDefault(); openTagPanel(el.getAttribute('data-extag')); return; }
+  if ((el = q('data-excmp'))){ e.preventDefault(); openCmpPanel(el.getAttribute('data-excmp')); return; }
+  if ((el = q('data-exparam'))){ e.preventDefault(); openParamPanel(el.getAttribute('data-exparam')); return; }
+  if ((el = q('data-excands'))){ e.preventDefault(); openCands(el.getAttribute('data-excands')); return; }
+  if ((el = q('data-exvers'))){ e.preventDefault(); openVersPanel(el.getAttribute('data-exvers')); return; }
+  if ((el = q('data-exlink'))){ e.preventDefault(); openLinkPanel(el.getAttribute('data-exlink')); return; }
+  if ((el = q('data-exsearch'))){
+    e.preventDefault();
+    var mm = el.getAttribute('data-exsearch');
+    var m0 = document.getElementById('exmask'); if (m0) m0.remove();
+    if (TBL){ TBL = null; }
+    input.value = mm; fitQ(); run(); input.focus();
+    return;
+  }
+  if ((el = q('data-exsetmain'))){
+    e.preventDefault();
+    var pr = el.getAttribute('data-exsetmain').split('|');
+    exPost({ act: 'setmain', m: pr[0], rel: pr.slice(1).join('|') }).then(function(j){
+      if (j && j.ok){ toastMsg(j.msg || '主图换了'); openCands(pr[0]); }
+      else alert((j && j.msg) || '换不了');
+    });
+    return;
+  }
+  if ((el = q('data-extagdel'))){
+    e.preventDefault();
+    var pp = el.getAttribute('data-extagdel').split('|');
+    exPost({ act: 'untag', m: pp[0], tag: pp[1] }).then(function(){ run(); });
+    return;
+  }
+  if ((el = q('data-exundo'))){
+    e.preventDefault();
+    var uu = el.getAttribute('data-exundo').split('|');
+    exUndo(uu[0], uu[1], uu[2]);
+    return;
+  }
+  if ((el = q('data-extsort'))){
+    e.preventDefault();
+    var kk = el.getAttribute('data-extsort');
+    if (TBL.k === kk) TBL.d = -TBL.d; else { TBL.k = kk; TBL.d = 1; }
+    exTableRender();
+    return;
+  }
+  if ((el = q('data-exvercopy'))){
+    e.preventDefault();
+    var vv = el.getAttribute('data-exvercopy').split('|');
+    exGet('copylist', '?model=' + encodeURIComponent(vv[1])).then(function(j){
+      var lst = (j && j.list) || [];
+      for (var i = 0; i < lst.length; i++){
+        if (String(lst[i].t) === vv[0]){
+          doCopy((lst[i].ti ? lst[i].ti + '\n' : '') + (lst[i].bd || ''), el);
+          return;
+        }
+      }
+    });
+    return;
+  }
+  if ((el = q('data-exverdel'))){
+    e.preventDefault();
+    var dd = el.getAttribute('data-exverdel').split('|');
+    exPost({ act: 'copydel', m: dd[1], t: dd[0] }).then(function(){ openVersPanel(dd[1]); });
+    return;
+  }
+  if (e.target && e.target.id === 'extblx'){ TBL = null; run(); return; }
+  if ((el = q('data-exrow'))){
+    var rc = el.getAttribute('data-exrow');
+    TBL = null; run();
+    setTimeout(function(){
+      var card = document.querySelector('.card[data-key="' + String(rc).replace(/"/g, '\\"') + '"]');
+      if (card) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 120);
+    return;
+  }
+});
+document.addEventListener('keydown', function(e){
+  /* 应用内快捷键：Ctrl+K 搜型号（随手就敲）、Ctrl+G 表格视图、Ctrl+W 托盘（原生层已接） */
+  if (e.ctrlKey && !e.altKey && (e.key === 'k' || e.key === 'K')){
+    e.preventDefault(); input.focus(); input.select(); return;
+  }
+  if (e.ctrlKey && !e.altKey && (e.key === 'g' || e.key === 'G')){
+    e.preventDefault(); openTable(); return;
+  }
+});
+function toastMsg(s){
+  try {
+    var d = document.createElement('div');
+    d.textContent = s;
+    d.style.cssText = 'position:fixed;left:50%;bottom:42px;transform:translateX(-50%);background:#1b2431;color:#fff;'
+      + 'padding:9px 16px;border-radius:10px;font-size:13px;z-index:10000;box-shadow:0 8px 24px rgba(0,0,0,.25)';
+    document.body.appendChild(d);
+    setTimeout(function(){ d.remove(); }, 1800);
+  } catch (e) {}
+}
+
 ensureAuth().then(function(){
 if (DATA){
   start(DATA);                      // 离线单文件版：数据本来就烤在页面里

@@ -99,10 +99,12 @@ class ApiGetMixin:
             import kitset
             if openfolder:
                 # 打开蓝底套图的图片文件夹（跨平台 reveal：Win 资源管理器 / Mac Finder）
+                # 2026-10-31 重组后四张成片在 蓝底\ 子文件夹——打开要开到它，不能停型号根
                 d = kitset.model_dir(model)
+                bd = os.path.join(d, kitset.BLUE_SUB)
                 try:
                     from paths import reveal
-                    reveal(d)
+                    reveal(bd if os.path.isdir(bd) else d)
                     self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
                 except Exception as e:
                     self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
@@ -442,6 +444,67 @@ class ApiGetMixin:
         if path == "/api/pubjob":
             import pubwork
             self._send(200, json.dumps(pubwork.job_state(), ensure_ascii=False))
+            return
+
+        # ---------- 增强层 GET（2026-10-31 用户令「剩下的全改」） ----------
+        if path == "/api/ex" or path.startswith("/api/ex/"):
+            import extras
+            q = urllib.parse.parse_qs(u.query)
+            sub = path[len("/api/ex"):].strip("/")
+            try:
+                if sub == "":
+                    r = extras.get_all()
+                elif sub == "chg":
+                    r = {"ok": True, "list": extras._load()["chg"][:600]}
+                elif sub == "wall":
+                    r = extras.wall()
+                elif sub == "params":
+                    r = extras.params_of((q.get("model") or [""])[0].strip())
+                elif sub == "precheck":
+                    r = extras.precheck((q.get("model") or [""])[0].strip(),
+                                        (q.get("price") or [None])[0])
+                elif sub == "jobs":
+                    r = extras.jobs()
+                elif sub == "changelog":
+                    r = extras.changelog()
+                elif sub == "hist":
+                    r = extras.hist_of((q.get("model") or [""])[0].strip())
+                elif sub == "copylist":
+                    r = extras.list_copy((q.get("model") or [""])[0].strip())
+                elif sub == "quota":
+                    r = extras.quota_info()
+                elif sub == "cands":
+                    r = extras.candidates((q.get("model") or [""])[0].strip())
+                else:
+                    r = {"ok": False, "msg": "unknown"}
+            except Exception as e:
+                r = {"ok": False, "msg": extras.rep(e)}
+            self._send(200, json.dumps(r, ensure_ascii=False))
+            return
+
+        if path == "/api/kitone":
+            # 只重出单张（2026-10-31「只重出单张」）：n=1..4，走后台 + jobman 轮询
+            q = urllib.parse.parse_qs(u.query)
+            model = (q.get("model") or [""])[0].strip()
+            try:
+                n = int((q.get("n") or ["1"])[0])
+            except Exception:
+                n = 1
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            import jobman
+            import kitset
+            key = "kitone:%s:%d" % (model, n)
+
+            def _do():
+                return kitset.regen_one(model, n, log=lambda s: (
+                    state.LOG.append("[蓝底·单张] " + s), jobman.prog(key, s)))
+            if not jobman.submit(key, _do, _log=lambda s: state.LOG.append("[蓝底·单张] " + s)):
+                self._send(200, json.dumps({"ok": False, "msg": "这张正在重出中，等一下"},
+                                           ensure_ascii=False))
+                return
+            self._send(200, json.dumps({"ok": True, "started": True, "key": key}, ensure_ascii=False))
             return
 
         if path == "/api/jobget":

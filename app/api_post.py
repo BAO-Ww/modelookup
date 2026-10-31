@@ -301,6 +301,63 @@ class ApiPostMixin:
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
             return
 
+        # ---------- 增强层（2026-10-31 用户令「剩下的全改」）：一个入口全兜住 ----------
+        # 别名/标签/改价历史退回/文案多版本/链接回填/水印/快照比对/嫌疑价/配额/备份/诊断包
+        if u.path in ("/api/ex", "/api/exbak", "/api/exdiag"):
+            import extras
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}") if n else {}
+            except Exception:
+                d = {}
+            act = str(d.get("act") or "")
+            try:
+                if u.path == "/api/exbak":
+                    r = extras.backup()
+                elif u.path == "/api/exdiag":
+                    r = extras.diag()
+                elif act == "alias":
+                    r = extras.set_alias(d.get("m"), d.get("names"))
+                elif act == "tag":
+                    r = extras.add_tag(d.get("m"), d.get("tag"))
+                elif act == "untag":
+                    r = extras.del_tag(d.get("m"), d.get("tag"))
+                elif act == "hist":
+                    r = extras.add_hist(d.get("m"), d.get("xy"), d.get("o"), d.get("n"), d.get("by"))
+                elif act == "undo":
+                    r = extras.undo_hist(d.get("m"), d.get("xy") or "")
+                elif act == "copy":
+                    r = extras.save_copy(d.get("m"), d.get("title"), d.get("body"),
+                                         d.get("kind") or "z", d.get("tag") or "")
+                elif act == "copydel":
+                    r = extras.del_copy(d.get("m"), d.get("t"))
+                elif act == "link":
+                    r = extras.set_link(d.get("m"), d.get("xid"), d.get("url"),
+                                        d.get("price"), d.get("xy"))
+                elif act == "water":
+                    r = extras.set_water(**{k: d[k] for k in ("on", "text", "pos", "size",
+                                                              "color", "alpha") if k in d})
+                elif act == "snap":
+                    # 一次报两路：prices / stocks，前端按返回的 changed 亮条
+                    r = {"ok": True, "price": extras.snap("p", d.get("prices") or {}),
+                         "stock": extras.snap("s", d.get("stocks") or {})}
+                elif act == "setmain":
+                    r = extras.set_main(d.get("m"), d.get("rel"))
+                elif act == "suspects":
+                    r = extras.suspects(d.get("rows") or [])
+                elif act == "log":
+                    extras.log(d.get("k") or "misc", d.get("m") or "", d.get("x") or "")
+                    r = {"ok": True}
+                elif act == "quota":
+                    q = extras.quota_bump(int(d.get("n") or 1))
+                    r = {"ok": True, "quota": q}
+                else:
+                    r = {"ok": False, "msg": "未知操作：" + act}
+            except Exception as e:
+                r = {"ok": False, "msg": extras.rep(e)}
+            self._send(200, json.dumps(r, ensure_ascii=False))
+            return
+
         # ---------- 素材存储路径（2026-10-24 用户定稿：界面可改，peiwork+copy 共用，老数据搬） ----------
         if u.path in ("/api/pubroot", "/api/pubrootset"):
             import pubwork
