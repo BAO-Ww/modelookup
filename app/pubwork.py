@@ -12,11 +12,13 @@
   · 线程模型：HTTP 线程只入队，重活在 daemon 线程跑，前端轮询 /api/pubjob
 """
 import base64
+import io
 import json
 import os
 import re
 import shutil
 import threading
+import time
 
 from paths import reveal
 
@@ -42,8 +44,37 @@ def reset_root():
     _ROOT[0] = None
 
 
+_SIZE_CACHE = {"at": 0.0, "base": "", "bytes": -1}
+
+
+def _dir_bytes(root, limit_files=60000):
+    """目录总字节（2026-10-31 图片库占用显示用）：不跟随符号链接、限 6 万文件防卡死。"""
+    total = 0
+    n = 0
+    stack = [root]
+    while stack:
+        d = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                        elif e.is_file(follow_symlinks=False):
+                            total += e.stat(follow_symlinks=False).st_size
+                            n += 1
+                            if n >= limit_files:
+                                return total, True
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+    return total, False
+
+
 def root_status():
-    """存储路径现状（2026-10-31 扩到三个库：peiwork + copy + kitset 一个总根）"""
+    """存储路径现状（2026-10-31 扩到三个库：peiwork + copy + kitset 一个总根）。
+    另带占用/剩余/可写状态，供「图片库路径失效提示 + 占用提示」用（2026-10-31 用户令）。"""
     import paths
     base = paths.data_base()
     try:
@@ -51,8 +82,38 @@ def root_status():
         kdir = _ks.kit_root()
     except Exception:
         kdir = ""
+    exists = bool(base) and os.path.isdir(base)
+    writable = False
+    free = -1
+    used = -1
+    if exists:
+        try:
+            probe = os.path.join(base, ".ml_probe")
+            with io.open(probe, "w", encoding="utf-8") as f:
+                f.write("1")
+            os.remove(probe)
+            writable = True
+        except Exception:
+            writable = False
+        try:
+            import shutil as _sh
+            free = int(_sh.disk_usage(base).free)
+        except Exception:
+            free = -1
+        # 占用走缓存（5 分钟），别每次开面板都扫几万个文件
+        now = time.time()
+        if _SIZE_CACHE["base"] == base and (now - _SIZE_CACHE["at"]) < 300:
+            used = _SIZE_CACHE["bytes"]
+        else:
+            try:
+                used, _trunc = _dir_bytes(base)
+            except Exception:
+                used = -1
+            _SIZE_CACHE.update({"at": now, "base": base, "bytes": used})
     return {"ok": True, "base": base, "override": paths.data_root() or "",
-            "default": paths.default_base(), "peiwork": sroot(), "kitset": kdir}
+            "default": paths.default_base(), "peiwork": sroot(), "kitset": kdir,
+            "exists": exists, "writable": writable,
+            "used": used, "free": free}
 
 
 def root_move(new_base):

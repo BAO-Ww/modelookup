@@ -13,6 +13,7 @@ import io
 import json
 import os
 import re
+import shutil
 import urllib.parse
 from collections import Counter
 
@@ -2859,6 +2860,22 @@ def generate(model, force=0, log=None):
             with io.open(cache, encoding="utf-8") as f:
                 res = json.load(f)
             res["cached"] = True
+            # 2026-10-31 出图提速：缓存命中但缺张（用户删了/搬目录丢了）→ 只补缺的那几张，
+            # 不再为一两张图整套重跑一遍（整套 1-2 分钟，单张几秒）
+            try:
+                _bdir0 = os.path.join(mdir, BLUE_SUB)
+                _miss = [n for n in (1, 2, 3, 4)
+                         if not os.path.isfile(os.path.join(_bdir0, "img_%d.jpg" % n))]
+                if _miss and res.get("cfg"):
+                    log("缓存命中，补 %d 张缺图（%s）…" % (len(_miss), ",".join(map(str, _miss))))
+                    for _n in _miss:
+                        try:
+                            regen_one(model, _n, log)
+                        except Exception as _e2:
+                            log("补第 %d 张失败：%r" % (_n, _e2))
+                res["blur"] = blur_warn(_bdir0)
+            except Exception:
+                pass
             # 缓存命中也要对账：官方尺寸图可能后到（聚光先跑手绘落盘实锤），
             # 不重渲染蓝底（set.json 参数快照一致），只把聚光第 4 张按需重出
             sync_spot_size(model, None, log)
@@ -2939,8 +2956,153 @@ def generate(model, force=0, log=None):
            "titles": titles, "points": points, "aftersale": aftersale,
            "params": dict(cfg["params_rows"]), "src": cfg["url"],
            "imgs": ["1", "2", "3", "4"]}
+    # 2026-10-31（用户令「剩下全改」）：
+    #   ① cfg 一并存进 set.json —— 以后「只重出单张」「参数对照」都不用再抓一遍网络；
+    #   ② 水印（设置里开了才叠）；③ 出图后做一次糊/空图预警，前端卡片上标出来
+    res["cfg"] = cfg
+    try:
+        apply_water(bdir)
+    except Exception as _e:
+        log("水印没叠上（不影响出图）：%r" % (_e,))
+    try:
+        res["blur"] = blur_warn(bdir)
+    except Exception:
+        res["blur"] = {}
     with io.open(cache, "w", encoding="utf-8") as f:
         json.dump(res, f, ensure_ascii=False)
     return res
+
+
+# ---------------- 单张重出 / 水印 / 糊图预警（2026-10-31 用户令「剩下全改」） ----------------
+def _cfg_of(model, mdir=None):
+    """从 set.json 取上次生成的参数快照（含 cfg）。没有就返回 (None, None)。"""
+    mdir = mdir or model_dir(model)
+    fp = os.path.join(mdir, "set.json")
+    if not os.path.isfile(fp):
+        return None, mdir
+    try:
+        with io.open(fp, encoding="utf-8") as f:
+            j = json.load(f)
+        return j, mdir
+    except Exception:
+        return None, mdir
+
+
+def regen_one(model, n, log=None):
+    """只重出第 n 张（1 主图 / 2 参数 / 3 卖点 / 4 尺寸），其余三张一个字都不动。
+    用户 2026-10-31 要求：某一张不满意不用等整套重跑（整套 1-2 分钟，单张几秒）。"""
+    log = log or (lambda s: None)
+    n = int(n or 1)
+    if n not in (1, 2, 3, 4):
+        return {"ok": False, "msg": "n 只能是 1-4"}
+    j, mdir = _cfg_of(model)
+    if not j or not j.get("cfg"):
+        # 老数据没存 cfg：退回整套生成（会顺带把 cfg 补上）
+        log("老数据没有参数快照，改走整套重出…")
+        return generate(model, 1, log=log)
+    cfg = j["cfg"]
+    bdir = os.path.join(mdir, BLUE_SUB)
+    os.makedirs(bdir, exist_ok=True)
+    prod = os.path.join(mdir, "product.png")
+    out = os.path.join(bdir, "img_%d.jpg" % n)
+    if n in (1, 2) and not os.path.isfile(prod):
+        return {"ok": False, "msg": "主图丢了（product.png 不在），得整套重出"}
+    log("重出第 %d 张…" % n)
+    if n == 1:
+        _render_img1(cfg, Image.open(prod), out)
+    elif n == 2:
+        _render_img2(cfg, Image.open(prod), out)
+    elif n == 3:
+        _render_img3(cfg, j.get("points") or [], out)
+    else:
+        _render_img4(cfg, out, prod if os.path.isfile(prod) else None)
+    try:
+        apply_water(bdir)
+    except Exception:
+        pass
+    # 单张重出的成片也得过一遍 AI 复检（跟整套同口径），失败不拦
+    try:
+        _qa_blue(model, (j.get("info") or {}), mdir, cfg, j.get("points") or [],
+                 prod if os.path.isfile(prod) else None, log)
+    except Exception as e:
+        log("单张复检跳过：%r" % (e,))
+    return {"ok": True, "n": n, "file": out, "blur": blur_warn(bdir)}
+
+
+def apply_water(bdir):
+    """按 extras 里的水印设置，给 蓝底/img_1..4 右下（可换角）叠一行半透明字。
+    每一次重出都会重叠 —— 原图先备份在 蓝底/_raw/ 里，叠的时候永远从原图开始（不叠两层）。"""
+    try:
+        import extras
+        w = extras.water_cfg()
+    except Exception:
+        return
+    if not w or not w.get("on") or not str(w.get("text") or "").strip():
+        return
+    txt = str(w.get("text")).strip()[:40]
+    pos = str(w.get("pos") or "br")
+    size = float(w.get("size") or 0.032)
+    color = str(w.get("color") or "#ffffff")
+    alpha = float(w.get("alpha") or 0.55)
+    raw = os.path.join(bdir, "_raw")
+    os.makedirs(raw, exist_ok=True)
+    for n in (1, 2, 3, 4):
+        fp = os.path.join(bdir, "img_%d.jpg" % n)
+        if not os.path.isfile(fp):
+            continue
+        bak = os.path.join(raw, "img_%d.jpg" % n)
+        if not os.path.isfile(bak):
+            try:
+                shutil.copy2(fp, bak)
+            except Exception:
+                continue
+        try:
+            im = Image.open(bak).convert("RGBA")
+            W, H = im.size
+            f = _font(F_BOLD, max(14, int(W * size)))
+            layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
+            d = ImageDraw.Draw(layer)
+            tb = d.textbbox((0, 0), txt, font=f)
+            tw, th = tb[2] - tb[0], tb[3] - tb[1]
+            pad = int(W * 0.035)
+            x = W - tw - pad if "r" in pos else pad
+            y = H - th - pad if "b" in pos else pad
+            col = _hex_rgba(color, alpha)
+            d.text((x - tb[0], y - tb[1]), txt, font=f, fill=col)
+            out = Image.alpha_composite(im, layer).convert("RGB")
+            out.save(fp, quality=92)
+        except Exception:
+            continue
+
+
+def _hex_rgba(s, a):
+    s = str(s or "#ffffff").lstrip("#")
+    if len(s) == 3:
+        s = "".join(c * 2 for c in s)
+    try:
+        r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+    except Exception:
+        r = g = b = 255
+    return (r, g, b, max(0, min(255, int(a * 255))))
+
+
+def blur_warn(bdir):
+    """糊图/空图预警：成片太小（<55KB）或短边 <1000 → 标出来让你换图重出。"""
+    out = {}
+    for n in (1, 2, 3, 4):
+        fp = os.path.join(bdir, "img_%d.jpg" % n)
+        if not os.path.isfile(fp):
+            continue
+        kb = os.path.getsize(fp) / 1024.0
+        side = 0
+        try:
+            with Image.open(fp) as im:
+                side = min(im.size)
+        except Exception:
+            pass
+        if kb < 55 or (side and side < 1000):
+            out["img_%d" % n] = "糊（%dKB%s）" % (int(kb), "，短边 %d" % side if side else "")
+    return out
+
 
 

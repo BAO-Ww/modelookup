@@ -263,16 +263,56 @@ def build_menu(sub=False):
         # 走 js_click 隐藏按钮 fontbtn（同 selfdispbtn 的可靠链路）
         js_click("fontbtn")
 
+    def price_cfg():
+        # 定价设置（2026-10-31 用户定稿）：砍价余地默认 0%，走 js_click 隐藏按钮 prbtn
+        js_click("prbtn")
+
     def stor_root():
         # 图片存储位置（2026-10-31 用户令）：菜单「设置」里改所有图片的存储根
         # （蓝底/聚光/发布图素材/文案素材整体搬迁）。走 js_click 隐藏按钮 storbtn。
         js_click("storbtn")
 
+    def ext_water():
+        # 水印设置（2026-10-31 用户令「剩下全改」）：蓝底四张叠店名/联系方式
+        js_click("extwater")
+
+    def diag_pack():
+        # 崩溃诊断包：日志尾巴 + 状态 + 环境 + 配置，一个 zip 发出来就能远程查
+        try:
+            import json as _json
+            import extras
+            r = extras.diag()
+            state.LOG.append("[诊断] 诊断包 %s" % r.get("path"))
+            if r.get("ok"):
+                webview.windows[0].evaluate_js(
+                    "alert('诊断包已生成：\\n' + %s + '\\n出问题时把这个文件发出来。')"
+                    % _json.dumps(r.get("path") or "", ensure_ascii=False))
+            else:
+                webview.windows[0].evaluate_js("alert('诊断包没生成：%s')" % (r.get("msg") or "未知原因"))
+        except Exception as e:
+            state.LOG.append("[诊断] 失败：%r" % (e,))
+
+    def backup_pack():
+        # 本机数据备份包：三个图库 + extras + settings 打成一个 zip（换机器/重装前用）
+        try:
+            import json as _json
+            import extras
+            r = extras.backup()
+            state.LOG.append("[备份] %s" % r.get("path"))
+            if r.get("ok"):
+                webview.windows[0].evaluate_js(
+                    "alert('备份好了：\\n' + %s + '\\n' + %s + ' 个文件，' + %s + ' MB。')"
+                    % (_json.dumps(r.get("path") or "", ensure_ascii=False),
+                       _json.dumps(str(r.get("files"))), _json.dumps(str(r.get("mb")))))
+            else:
+                webview.windows[0].evaluate_js("alert('备份失败：%s')" % (r.get("msg") or "未知原因"))
+        except Exception as e:
+            state.LOG.append("[备份] 失败：%r" % (e,))
+
     def exp_img():
         if not guarded("导出我补的图", "addimg"):
             return
         js_click("expimg")
-
     def imp_img():
         if not guarded("导入补图", "addimg"):
             return
@@ -297,9 +337,12 @@ def build_menu(sub=False):
             MenuAction("账号管理", adm),
             Menu("设置(&S)", [
                 MenuAction("字体大小", fontsize),
+                MenuAction("定价设置", price_cfg),
             ]),
+            MenuAction("图片墙（全部成片）", lambda: js_click("extwall")),
             MenuAction("重新加载页面", reload_page),
             MenuAction("软件更新", upd_app),
+            MenuAction("更新日志", lambda: js_click("extver")),
             MenuAction("退出登录", logout),
         ]
     # 2026-10-08 顶部菜单归类（用户要求：平铺 9 项太乱，收成三个下拉）：
@@ -317,6 +360,13 @@ def build_menu(sub=False):
             MenuSeparator(),
             MenuAction("导出我补的图", exp_img),
             MenuAction("导入补图", imp_img),
+            MenuSeparator(),
+            # 2026-10-31 用户令「剩下全改」：这些页内面板也从菜单能开
+            MenuAction("图片墙（全部成片）", lambda: js_click("extwall")),
+            MenuAction("后台任务（出图/文案排队）", lambda: js_click("extjobs")),
+            MenuAction("价格嫌疑清单", lambda: js_click("extsus")),
+            MenuAction("表格视图", lambda: js_click("exttbl")),
+            MenuAction("变更日志（今天干了啥）", lambda: js_click("extchg")),
         ]),
         Menu("账号(&A)", [
             MenuAction("账号管理", adm),
@@ -329,9 +379,15 @@ def build_menu(sub=False):
             MenuAction("字体大小", fontsize),
             MenuSeparator(),
             MenuAction("图片存储位置", stor_root),
+            MenuAction("定价设置", price_cfg),
+            MenuAction("出图水印", ext_water),
         ]),
         Menu("帮助(&H)", [
             MenuAction("软件更新", upd_app),
+            MenuAction("更新日志", lambda: js_click("extver")),
+            MenuSeparator(),
+            MenuAction("生成诊断包", diag_pack),
+            MenuAction("打包备份（换机器前用）", backup_pack),
             MenuSeparator(),
             MenuAction(autostart_lab, autostart_toggle),
             MenuAction("关于", about),
@@ -569,6 +625,35 @@ def run_app(httpd, port, startup_xlsx=None):
         坑（2026-10-09 修）：native 窗口是 GUI 线程异步建的，after_start 一进来就取十有八九
         还是 None —— 旧代码取不到就直接跳过，等于托盘从没装上、点 × 直接真退出。
         现在后台轮询等 native 出现，再 BeginInvoke 到 UI 线程装托盘。"""
+        def _hotkey():
+            """全局热键 Ctrl+Alt+M 唤出主窗口（2026-10-31 用户令「托盘+全局热键」）：
+            软件缩在托盘/被别的窗口盖住时，随手一按就回来。注册失败不影响任何功能。"""
+            try:
+                import ctypes
+                import ctypes.wintypes as wt
+                u32 = ctypes.windll.user32
+                MOD_ALT, MOD_CONTROL, WM_HOTKEY, VK_M = 0x0001, 0x0002, 0x0312, 0x4D
+                if not u32.RegisterHotKey(None, 0xB001, MOD_CONTROL | MOD_ALT, VK_M):
+                    _tick("全局热键 Ctrl+Alt+M 没注册上（可能被别的软件占了）")
+                    return
+                _tick("全局热键就绪：Ctrl+Alt+M 随时唤出窗口")
+                msg = wt.MSG()
+                while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                    if msg.message == WM_HOTKEY:
+                        try:
+                            w = webview.windows[0]
+                            try:
+                                w.restore()
+                            except Exception:
+                                pass
+                            w.show()
+                        except Exception:
+                            pass
+            except Exception as e:
+                _tick("全局热键没装上（不影响其他功能）：%r" % e)
+
+        threading.Thread(target=_hotkey, daemon=True).start()
+
         def _late():
             for _ in range(150):                 # 最多等 15 秒
                 bv = getattr(winref.MAIN_WIN, "native", None)

@@ -83,7 +83,15 @@ def cloud_req(path, method="GET", obj=None, timeout=90):
     req.add_header("Referer", CLOUD_HOST + "/")
     try:
         with urlopen_ssl(req, timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8")), None
+            j = json.loads(r.read().decode("utf-8"))
+            # 2026-10-31 云端写入配额（KV 每天 1000 次写上限）：非 GET 记一次，面板上看得见
+            if method != "GET":
+                try:
+                    import extras
+                    extras.quota_bump(1)
+                except Exception:
+                    pass
+            return j, None
     except urllib.error.HTTPError as e:
         try:
             j = json.loads(e.read().decode("utf-8"))
