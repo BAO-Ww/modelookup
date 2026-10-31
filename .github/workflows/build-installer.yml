@@ -201,7 +201,9 @@ jobs:
   build-mac:
     needs: build
     if: ${{ always() && !cancelled() && needs.build.result == 'success' }}
-    runs-on: macos-14
+    # 2026-10-31：macos-14 镜像 11/2 退役，正在 brownout（CI #196 起来 1 秒被取消、runner 为空，
+    # 注解写「scheduled macOS 14 runner image brownout」）；改 macos-15（同为 arm64）
+    runs-on: macos-15
 
     env:
       PYTHONIOENCODING: utf-8
