@@ -8125,7 +8125,8 @@ function exDatalist(){
   }
   inp.removeAttribute('list');                        /* 原生 datalist 下线 */
   inp.addEventListener('input', function(){ clearTimeout(t); t = setTimeout(show, 120); });
-  inp.addEventListener('focus', show);
+  /* 2026-10-31 23:02 用户令：候选列表不许开软件就弹出来（启动时输入框有焦点+残留上次搜索词，
+     旧版 focus 即 show → 一开窗就是一坨候选）。现在只有「真的打字」才出，点进去/带着旧词都不弹。 */
   inp.addEventListener('keydown', function(e){
     if (e.key === 'Escape'){ box.hidden = true; return; }
     if (e.key === 'ArrowDown' && !box.hidden){
