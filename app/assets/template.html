@@ -1871,6 +1871,15 @@ function afterAuth(){
     fb.addEventListener('click', openFontPanel);
     bar.appendChild(fb);
   }
+  // 图片存储位置（2026-10-31）：菜单「设置(S) → 图片存储位置」点开存储设置面板。
+  // 所有图片（蓝底/聚光/发布图素材/文案素材）的总根，改了自动整体搬迁
+  if (AUTH.role === 'admin' && !document.getElementById('storbtn')){
+    var stb = document.createElement('button');
+    stb.className = 'chip'; stb.id = 'storbtn'; stb.hidden = true;
+    stb.textContent = '📁 图片存储位置';
+    stb.addEventListener('click', openStorPanel);
+    bar.appendChild(stb);
+  }
   applyPermBar();
   // 权限热刷新（2026-10-09）：perm 烤在登录 token 里，管理号勾完/撤了权限，
   // 启动时拉一次最新权限表并重排界面——重启软件即生效，不用重新登录。
@@ -2033,6 +2042,72 @@ function openFontPanel(){
   draw();
   m.querySelector('#ftreset').addEventListener('click', function(){ setFontScale(1); draw(); });
   m.querySelector('#ftclose').addEventListener('click', function(){ m.remove(); });
+  m.addEventListener('click', function(e){ if (e.target === m) m.remove(); });
+}
+/* 图片存储位置面板（2026-10-31 用户令：菜单「设置(S) → 图片存储位置」打开）：
+   所有图片一个总根——蓝底/聚光/抓取图（kitset）+ 发布图素材（peiwork）+ 文案素材（copy）
+   全在里面，默认 = 软件安装目录\图片库。改成别的盘会自动把老数据整体搬过去。 */
+function openStorPanel(){
+  var old = document.getElementById('adminmask'); if (old) old.remove();
+  var m = document.createElement('div'); m.id = 'adminmask';
+  m.innerHTML = '<div class="amodal" style="width:min(560px,94vw)"><h3>📁 图片存储位置 '
+    + '<button class="achip" id="storclose" style="float:right">关闭</button></h3>'
+    + '<div style="font-size:12.5px;color:#8a93a3;margin-bottom:10px">所有生成和下载的图片都存这一个根目录里：'
+    + '蓝底套图、聚光、官网/欣盛抓取图、发布图素材、文案素材。默认跟软件装在哪走（安装目录\\图片库）。</div>'
+    + '<div id="storcur" style="font-size:12.5px;color:#43464c;background:#f4f6fa;border:1px solid #e2e6ee;border-radius:9px;padding:9px 12px;margin-bottom:10px;line-height:1.6">读取中…</div>'
+    + '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">'
+    +   '<input id="storpath" placeholder="填新的总目录绝对路径（如 D:\\图片库）" style="flex:1;min-width:0;padding:8px 10px;border:1px solid #d7dce6;border-radius:9px;font-size:13px;outline:0">'
+    +   '<button class="achip" id="storpick" title="选文件夹">选择…</button></div>'
+    + '<div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">'
+    +   '<button class="achip" id="storsave" style="background:#2e6be6;color:#fff;border-color:#2e6be6">保存并搬迁</button>'
+    +   '<button class="achip" id="storreset" title="恢复默认（软件安装目录\\图片库）；当前数据留在原地不动">恢复默认</button>'
+    +   '<span id="stormsg" style="font-size:12px;color:#15803d;align-self:center"></span></div>'
+    + '<div style="font-size:11.5px;color:#98a0ae;margin-top:10px">搬迁期间别关软件、别跑图片生成任务；搬完立即生效，重启也记住。</div></div>';
+  document.body.appendChild(m);
+  function msg(t, c){ var e = m.querySelector('#stormsg'); e.textContent = t || ''; e.style.color = c || '#15803d'; }
+  fetch('/api/pubroot', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if (!(j && j.ok)) return;
+      m.querySelector('#storcur').innerHTML = '当前：<b>' + esc(j.base) + '</b>'
+        + (j.override ? '<br><span style="color:#8a93a3">自定义位置（恢复默认 = ' + esc(j.default) + '）</span>'
+                      : '<br><span style="color:#8a93a3">默认位置（跟软件安装目录走）</span>');
+      m.querySelector('#storpath').value = j.base || '';
+    }).catch(function(){});
+  m.querySelector('#storpick').addEventListener('click', function(){
+    if (window.pywebview && pywebview.api && pywebview.api.pick_folder){
+      pywebview.api.pick_folder().then(function(p){ if (p) m.querySelector('#storpath').value = p; });
+    } else {
+      m.querySelector('#storpath').focus();
+    }
+  });
+  function _doSet(p, tip){
+    if (!window.confirm(tip + '\n\n新位置：' + (p || '默认（安装目录\\图片库）'))) return;
+    msg('正在搬迁老数据（别关软件、别跑生成任务）…', '#c8b45a');
+    fetch('/api/pubrootset', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path: p || ''})})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (j && j.ok){
+          msg('✓ 已生效：' + j.base);
+          m.querySelector('#storcur').innerHTML = '当前：<b>' + esc(j.base) + '</b>'
+            + (j.override ? '<br><span style="color:#8a93a3">自定义位置</span>'
+                          : '<br><span style="color:#8a93a3">默认位置（跟软件安装目录走）</span>');
+          try { if (typeof pubLoadLib === 'function') pubLoadLib(); } catch(e){}
+        } else {
+          msg((j && j.msg) || '设置失败', '#b42318');
+        }
+      }).catch(function(e){ msg('请求失败：' + e, '#b42318'); });
+  }
+  m.querySelector('#storsave').addEventListener('click', function(){
+    var p = (m.querySelector('#storpath').value || '').trim();
+    if (!p){ msg('先填路径或点「选择…」', '#b42318'); return; }
+    _doSet(p, '把所有图片（含老数据）整体搬到这个目录？');
+  });
+  m.querySelector('#storreset').addEventListener('click', function(){
+    _doSet('', '恢复默认存储位置（软件安装目录\\图片库）？\n注意：现有数据留在原地，不会自动搬回默认目录。');
+  });
+  m.querySelector('#storclose').addEventListener('click', function(){ m.remove(); });
   m.addEventListener('click', function(e){ if (e.target === m) m.remove(); });
 }
 function openAdmin(){
@@ -4535,7 +4610,7 @@ function openKitView(k){
     +   '<span style="font-size:12px;color:#8a929e">' + esc(k) + '</span>'
     +   '<span style="flex:1"></span>'
     +   '<span id="kv_msg" style="font-size:11.5px;color:#9fe0a8"></span>'
-    +   '<button id="kv_folder" title="打开这套图的保存文件夹（img_1~4.jpg 就在里面，跟写文案图片一个存法）" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">图片文件夹</button>'
+    +   '<button id="kv_folder" title="打开这套图的保存文件夹（四张成片在 蓝底 子文件夹里）" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">图片文件夹</button>'
     +   '<button id="kv_force" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">重新生成</button>'
     +   '<button id="kv_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
     + '</div>'
@@ -4546,7 +4621,7 @@ function openKitView(k){
     fetch('/api/kitset?model=' + encodeURIComponent(k) + '&open=1');
   });
   var D = null, cur = 1;
-  function imgSrc(n){ return '/api/kitimg/' + encodeURIComponent(k) + '/img_' + n + '.jpg'; }
+  function imgSrc(n){ return '/api/kitimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('蓝底') + '/img_' + n + '.jpg'; }
   function render(){
     var body = wrap.querySelector('#kv_body');
     var items = [{n:1,label:'主图'},{n:2,label:'参数'},{n:3,label:'卖点'},{n:4,label:'尺寸'}];
@@ -4667,7 +4742,7 @@ function openSpotView(k){
     +   '<b style="font-size:14px">暗角聚光</b>'
     +   '<span id="sv_slot" style="flex:1;display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap"></span>'
     +   '<span id="sv_msg" style="font-size:11.5px;color:#9fe0a8"></span>'
-    +   '<button id="sv_folder" title="打开这套图的保存文件夹（AI6张_聚光）" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">图片文件夹</button>'
+    +   '<button id="sv_folder" title="打开这套图的保存文件夹（聚光）" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">图片文件夹</button>'
     +   '<button id="sv_force" title="重新生成这 6 张" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">重新生成</button>'
     +   '<button id="sv_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
     + '</div>'
@@ -4676,12 +4751,12 @@ function openSpotView(k){
   wrap.querySelector('#sv_close').addEventListener('click', function(){ wrap.remove(); });
   wrap.querySelector('#sv_folder').addEventListener('click', function(){
     fetch('/api/pubopen', {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({model: k, sub: 'AI6张_聚光'})});
+      body: JSON.stringify({model: k, sub: '聚光'})});
   });
   var LAB = {'1_首图': '首图', '2_机器图': '机器展示', '4_核心参数': '机器参数', '5_尺寸图': '尺寸图'};
   var FILES = [], cur = 0, D = null, genning = false;
   function src(f){
-    return '/pubimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('AI6张_聚光') + '/' + encodeURIComponent(f);
+    return '/pubimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('聚光') + '/' + encodeURIComponent(f);
   }
   function lab(f){
     var key = String(f).replace(/\.(jpg|jpeg|png)$/i, '');
@@ -4732,9 +4807,9 @@ function openSpotView(k){
         FILES = [];
         if (j && j.ok && j.groups){
           j.groups.forEach(function(g){
-            if (g.sub === 'AI6张_聚光'){
+            if (g.sub === '聚光'){
               (g.files || []).forEach(function(rel){
-                var f = String(rel).replace(/^AI6张_聚光\//, '');
+                var f = String(rel).replace(/^聚光\//, '');
                 /* 只收聚光四件套；旧 6 张缓存里的立体角度/实拍/交易保障直接不显示 */
                 if (f && LAB[String(f).replace(/\.(jpg|jpeg|png)$/i, '')]) FILES.push(f);
               });
@@ -4786,7 +4861,7 @@ function openSpotView(k){
               msg('生成完成 · AI 后台复检中'); loadLib();
               /* 生成完自动打开图片文件夹（2026-10-28 用户令） */
               fetch('/api/pubopen', {method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({model: k, sub: 'AI6张_聚光'})});
+                body: JSON.stringify({model: k, sub: '聚光'})});
             }
             else { msg(''); alert('聚光图生成失败：' + (jb.err || '未知错误')); }
           });

@@ -18,7 +18,7 @@ import re
 import shutil
 import threading
 
-from paths import reveal, wp
+from paths import reveal
 
 # ---------------------------------------------------------------- 素材根与型号目录
 
@@ -26,13 +26,12 @@ _ROOT = [None]
 
 
 def sroot():
-    """素材存储根（2026-10-24 用户定稿：可在界面改存储路径）。
-    默认 work_dir/peiwork；settings.json 设了 data_root → data_root/peiwork。
-    改路径时老数据由 /api/pubroot 搬运，这里只管读当前生效值。"""
+    """素材存储根（2026-10-24 可在界面改；2026-10-31 起默认跟软件安装目录走）。
+    图片总根 data_base()/peiwork；总根 = exe 目录\图片库（打包版），settings.json
+    设了 data_root → data_root/peiwork。改路径时老数据由 /api/pubrootset 搬运。"""
     if not _ROOT[0]:
         import paths
-        base = paths.data_root()
-        d = os.path.join(base, "peiwork") if base else wp("peiwork")
+        d = os.path.join(paths.data_base(), "peiwork")
         os.makedirs(d, exist_ok=True)
         _ROOT[0] = d
     return _ROOT[0]
@@ -44,47 +43,57 @@ def reset_root():
 
 
 def root_status():
-    """存储路径现状（2026-10-24 用户定稿：界面可改，peiwork+copy 共用一个根）"""
+    """存储路径现状（2026-10-31 扩到三个库：peiwork + copy + kitset 一个总根）"""
     import paths
-    base = paths.data_root()
-    return {"ok": True, "base": base or paths.work_dir(),
-            "override": base or "", "default": paths.work_dir(),
-            "peiwork": sroot()}
+    base = paths.data_base()
+    try:
+        import kitset as _ks
+        kdir = _ks.kit_root()
+    except Exception:
+        kdir = ""
+    return {"ok": True, "base": base, "override": paths.data_root() or "",
+            "default": paths.default_base(), "peiwork": sroot(), "kitset": kdir}
 
 
 def root_move(new_base):
-    """更改素材存储根并把老数据搬过去（peiwork/copy 两个库整体迁移）。
-    空串 = 恢复默认（数据留在原地不往回搬——搬回去反而吓人）。"""
+    """更改图片总根并把老数据搬过去（peiwork / copy / kitset 三个库整体迁移）。
+    空串 = 恢复默认（exe 目录\图片库），数据留在原地不往回搬——搬回去反而吓人。"""
     import paths
     new_base = str(new_base or "").strip().strip('"')
+    old_base = paths.data_base()
     if not new_base:
         paths.set_data_root(None)
         reset_root()
         return root_status()
     if not os.path.isabs(new_base):
-        return {"ok": False, "msg": "请填绝对路径（如 D:\\素材库）"}
-    old_base = paths.work_dir()
+        return {"ok": False, "msg": "请填绝对路径（如 D:\\图片库）"}
     if os.path.abspath(new_base) == os.path.abspath(old_base):
-        paths.set_data_root(None)
-        reset_root()
-        return root_status()
+        return root_status()               # 填的就是当前目录：无事可做
+    # 新根落定后各库根缓存全部失效
+    try:
+        import kitset as _ks
+        _olds = {"peiwork": sroot(), "copy": __import__("copywriter").copy_root(),
+                 "kitset": _ks.kit_root()}
+    except Exception:
+        _olds = {}
     try:
         os.makedirs(new_base, exist_ok=True)
-        for name in ("peiwork", "copy"):
-            src = os.path.join(old_base, name)
+        for name in ("peiwork", "copy", "kitset"):
+            src = _olds.get(name) or os.path.join(old_base, name)
             dst = os.path.join(new_base, name)
-            if os.path.isdir(src):
-                if os.path.isdir(dst):
-                    if os.listdir(dst):
-                        return {"ok": False, "msg": "目标 %s 已有内容，换个空文件夹或先清掉" % dst}
-                    os.rmdir(dst)          # 空壳（sroot 可能预创建过）拆掉再整目录搬
-                shutil.move(src, dst)
+            if not os.path.isdir(src):
+                continue
+            if os.path.isdir(dst):
+                if os.listdir(dst):
+                    return {"ok": False, "msg": "目标 %s 已有内容，换个空文件夹或先清掉" % dst}
+                os.rmdir(dst)          # 空壳（sroot 可能预创建过）拆掉再整目录搬
+            shutil.move(src, dst)
     except Exception as e:
         return {"ok": False, "msg": "搬运失败：%s" % e}
     paths.set_data_root(new_base)
     reset_root()
     st = root_status()
-    _logf()("素材存储路径已迁移 -> %s" % st["base"])
+    _logf()("图片存储根已迁移 -> %s" % st["base"])
     return st
 
 
@@ -375,8 +384,8 @@ def _enrich_specs(model, info, prog=None):
 
 # peiwen app.py 原样：5 风格 → 目录名 / 中文名；每套 6 张精修（槽位 1,2,3,4,6,9）
 SLOTS6 = [1, 2, 3, 4, 6, 9]
-STYLE_DIRS = {"studio": "AI6张", "spot": "AI6张_聚光", "white": "AI6张_亮白",
-              "pure": "AI6张_纯白", "scene": "AI6张_实景"}
+STYLE_DIRS = {"studio": "AI6张", "spot": "聚光", "white": "AI6张_亮白",
+              "pure": "AI6张_纯白", "scene": "AI6张_实景"}   # 2026-10-31 用户令：聚光文件夹就叫「聚光」
 STYLE_NAMES = {"studio": "深灰影棚", "spot": "暗角聚光", "white": "亮白影棚",
                "pure": "纯白", "scene": "实景合成"}
 
@@ -577,8 +586,8 @@ def lib(model):
             _ks.ensure_data(model, log=lambda s: _logf()(s))
     except Exception as e:
         _logf()("聚光老图搬入失败（不影响其它）：%s" % e)
-    for sub in ("AI6张", "AI6张_聚光", "AI6张_亮白", "AI6张_纯白", "AI6张_实景", "发布图"):
-        label = {"AI6张": "发布图 · 深灰影棚", "AI6张_聚光": "发布图 · 暗角聚光",
+    for sub in ("AI6张", SPOT_SUB, "AI6张_亮白", "AI6张_纯白", "AI6张_实景", "发布图"):
+        label = {"AI6张": "发布图 · 深灰影棚", SPOT_SUB: "发布图 · 暗角聚光",
                  "AI6张_亮白": "发布图 · 亮白影棚", "AI6张_纯白": "发布图 · 纯白",
                  "AI6张_实景": "发布图 · 实景合成", "发布图": "保存精选 / 促销首图"}.get(sub, sub)
         fs = _img_files(dir_of(model, sub))   # 聚光走 kitset（2026-10-30），其余走 peiwork
@@ -773,7 +782,7 @@ def pub_xy(model, version="N"):
         _job_end(False, str(e))
 
 
-SPOT_SUB = "AI6张_聚光"
+SPOT_SUB = "聚光"   # 2026-10-31 用户令：去「AI6张_」前缀（写入端 = kitset.SPOT_SUB，两边必须一致）
 
 
 def dir_of(model, sub=""):
@@ -783,7 +792,8 @@ def dir_of(model, sub=""):
     但读侧三处（打开文件夹 / 取图 / 列库）还挂在旧 peiwork 根 → 点开文件夹是空的、页面显示没图。
     这里统一收口：聚光一律走 kitset，其余风格照旧走素材根 peiwork。"""
     sub = (sub or "").replace("/", os.sep).strip(os.sep)
-    if sub and sub.split(os.sep)[0] == SPOT_SUB:
+    # 2026-10-31：聚光一律走 kitset（新版文件夹叫「聚光」；旧名 AI6张_聚光 兼容收进来）
+    if sub and sub.split(os.sep)[0] in (SPOT_SUB, "AI6张_聚光"):
         import kitset
         return os.path.join(kitset.model_dir(model), sub)
     return os.path.join(mdir(model), sub) if sub else mdir(model)
