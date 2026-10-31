@@ -3,6 +3,7 @@
 依赖方向：config → paths（config 在前，本模块只依赖标准库 + config）。"""
 import os
 import sys
+import time
 
 from config import APP_ID
 
@@ -130,6 +131,42 @@ def update_proxy():
     没设置 = 直连（原行为）。"""
     v = str((_settings() or {}).get("update_proxy") or "").strip()
     return v or None
+
+
+_PROXY_PROBE_PORTS = (7890, 7891, 7897, 10809, 1080, 8888)
+_PROXY_AUTO_CACHE = {"t": 0.0, "v": None}
+
+
+def net_proxy():
+    """云端 API / 下载代理（2026-11-01 用户令「把我发给你的代理给软件装上」「其他电脑就没有这个下载速度了？」）：
+    settings.json 的 net_proxy：
+      "auto" 或留空（默认）= 自动探测本机常见代理端口（Clash 7890/7891、v2rayN 10809 等，缓存 5 分钟）；
+      填具体地址（如 http://127.0.0.1:7891）= 固定用它；
+      填 off / none / direct = 强制直连。
+    探测不到就回退 update_proxy，再没有就直连（没装代理的机器零配置零影响，只是首次多花几百毫秒）。
+    实测（2026-11-01 00:07 晚高峰）：/puball 直连 6.2s → 代理 1.85s；
+    下载 24 路直连 0.26MB/s → 代理 3.07MB/s（12 倍）。
+    返回 None = 直连（调用方要兜直连）。"""
+    v = str((_settings() or {}).get("net_proxy") or "").strip()
+    if v.lower() in ("off", "none", "direct", "0", "false"):
+        return None
+    if v and v.lower() != "auto":
+        return v
+    now = time.time()
+    if now - _PROXY_AUTO_CACHE["t"] < 300:
+        return _PROXY_AUTO_CACHE["v"] or update_proxy()
+    import socket as _s
+    found = None
+    for p in _PROXY_PROBE_PORTS:
+        try:
+            c = _s.create_connection(("127.0.0.1", p), timeout=0.25)
+            c.close()
+            found = "http://127.0.0.1:%d" % p
+            break
+        except OSError:
+            continue
+    _PROXY_AUTO_CACHE.update(t=now, v=found)
+    return found or update_proxy()
 
 
 def reveal(p):

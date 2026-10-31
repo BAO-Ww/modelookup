@@ -68,22 +68,41 @@ def _cloud_token():
         return ""
 
 
+_PROXY_BAD = [0.0]          # 代理连挂的话 5 分钟内不再试（免得每个请求都白等一次）
+
+
 def cloud_req(path, method="GET", obj=None, timeout=90):
-    """调云端 worker（带页面登录态）。返回 (dict|None, err|None)。"""
+    """调云端 worker（带页面登录态）。返回 (dict|None, err|None)。
+    2026-11-01：settings.json 配了 net_proxy（"auto"=自动探测本机代理端口）就先走代理，
+    代理网络层失败自动退直连（HTTP 4xx/5xx 不算网络失败，照常返回不重试）。"""
     tok = _cloud_token()
     if not tok:
         return None, "还没有登录态（页面没登录过）"
     body = json.dumps(obj).encode("utf-8") if obj is not None else None
-    req = urllib.request.Request(CLOUD_HOST + path, data=body, method=method)
-    req.add_header("X-Token", tok)
-    if body is not None:
-        req.add_header("Content-Type", "application/json")
-    req.add_header("User-Agent", _CLOUD_UA)
-    req.add_header("Origin", CLOUD_HOST)
-    req.add_header("Referer", CLOUD_HOST + "/")
+    px = None
     try:
-        with urlopen_ssl(req, timeout=timeout) as r:
-            j = json.loads(r.read().decode("utf-8"))
+        from paths import net_proxy as _npx
+        px = _npx()
+    except Exception:
+        px = None
+    if px and time.time() - _PROXY_BAD[0] < 300:
+        px = None
+
+    def _do(use_px):
+        req = urllib.request.Request(CLOUD_HOST + path, data=body, method=method)
+        req.add_header("X-Token", tok)
+        if body is not None:
+            req.add_header("Content-Type", "application/json")
+        req.add_header("User-Agent", _CLOUD_UA)
+        req.add_header("Origin", CLOUD_HOST)
+        req.add_header("Referer", CLOUD_HOST + "/")
+        with urlopen_ssl(req, timeout=timeout, proxy=use_px) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    last_err = None
+    for use_px in ((px, None) if px else (None,)):
+        try:
+            j = _do(use_px)
             # 2026-10-31 云端写入配额（KV 每天 1000 次写上限）：非 GET 记一次，面板上看得见
             if method != "GET":
                 try:
@@ -92,14 +111,21 @@ def cloud_req(path, method="GET", obj=None, timeout=90):
                 except Exception:
                     pass
             return j, None
-    except urllib.error.HTTPError as e:
-        try:
-            j = json.loads(e.read().decode("utf-8"))
-            return (j, None) if isinstance(j, dict) else (None, "HTTP %d" % e.code)
-        except Exception:
-            return None, "HTTP %d" % e.code
-    except Exception as e:
-        return None, str(e)
+        except urllib.error.HTTPError as e:
+            try:
+                j = json.loads(e.read().decode("utf-8"))
+                return (j, None) if isinstance(j, dict) else (None, "HTTP %d" % e.code)
+            except Exception:
+                return None, "HTTP %d" % e.code
+        except Exception as e:
+            last_err = e
+            if use_px:
+                _PROXY_BAD[0] = time.time()
+                try:
+                    state.LOG.append("云端走代理失败（%s），退直连重试" % str(e)[:80])
+                except Exception:
+                    pass
+    return None, str(last_err)
 
 
 def yy_alert_push(msg, log=None):
@@ -309,7 +335,12 @@ def sync_xlsx_cloud(log, touch=False):
         try:
             log("☁ 云端表格有更新（%s…），自动同步…" % ts[:8])
             state.set_state("running", "正在从云端同步表格数据…")
-            j2, err2 = cloud_req("/xlsxcloud", "GET", timeout=300)
+            # 2026-10-31 晚：晚高峰跨境链路极慢（85 字节的 /xlsxmeta 都要 3.2s），
+            # 300s 超时把能拉完的也判死 → 提到 600s，且失败自动重试一次再宣判。
+            j2, err2 = cloud_req("/xlsxcloud", "GET", timeout=600)
+            if err2 or not j2 or not j2.get("ok"):
+                state.set_state("running", "云端响应慢，正在重试同步表格…")
+                j2, err2 = cloud_req("/xlsxcloud", "GET", timeout=600)
             if err2 or not j2 or not j2.get("ok"):
                 msg = "云端表格同步失败：%s" % (err2 or (j2 or {}).get("msg"))
                 _sync_fail.update(ts=ts, at=time.time())   # 退避，防 60s 无限重拉

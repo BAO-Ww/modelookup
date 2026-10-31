@@ -77,6 +77,19 @@ class ApiPostMixin:
                 state.LOG.append("登录态镜像失败：%s" % e)
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             return
+        if u.path == "/api/pubcache":
+            # /puball 整包的落盘镜像（写）：整包 ~27KB，整文件覆盖写，坏了也不会撑爆盘。
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                if n and n < 2 * 1024 * 1024:
+                    raw = self.rfile.read(n)
+                    json.loads(raw.decode("utf-8"))        # 先验 JSON，坏的绝不落盘
+                    with open(wp("pubcache.json"), "wb") as fh:
+                        fh.write(raw)
+            except Exception as e:
+                state.LOG.append("发布缓存镜像失败：%s" % e)
+            self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            return
         if u.path == "/api/stock":
             # 2026-10-10 全云端：管理号→触发云端拉用友（同「全部更新」的 yy 分支）；
             # 子账号→直接从云端同步。本机 CAS 直拉/自动登录已退役（错密码撞锁号风险）。

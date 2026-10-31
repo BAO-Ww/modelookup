@@ -365,6 +365,20 @@ class ApiGetMixin:
                 "newer": _ver_gt(latest, APP_VERSION)}, ensure_ascii=False))
             return
 
+        if path == "/api/pubcache":
+            # /puball 整包的落盘镜像（读）：WebView2 被托盘硬杀时 localStorage 偶发没落盘，
+            # 「已发布/子用户发布」就回退成干等 9s 的 /puball。页面启动时没缓存就先从这里兜底。
+            f = wp("pubcache.json")
+            try:
+                if os.path.isfile(f):
+                    with open(f, encoding="utf-8") as fh:
+                        self._send(200, fh.read())
+                else:
+                    self._send(200, '{"ok":false}')
+            except Exception:
+                self._send(200, '{"ok":false}')
+            return
+
         if path == "/api/token":
             # 登录态镜像（读）：页面启动时 localStorage 没有 token 就从这里兜底恢复。
             # 背景：托盘「退出」会硬杀进程，WebView2 的 localStorage 偶发没落盘 → 每次都要重登。
