@@ -224,6 +224,14 @@ def main():
     except Exception:
         pass
     _tick("版本清场检查完成")
+    # 2026-10-31 存储根改跟软件安装目录走：旧 %LOCALAPPDATA% 里的 kitset/peiwork/copy
+    # 一次性搬到 exe 目录\图片库（幂等，目标有内容绝不覆盖；源码直跑自动跳过）
+    try:
+        import paths as _paths
+        import state as _state
+        _paths.migrate_images(log=lambda s: _state.LOG.append("[图片库] " + s))
+    except Exception:
+        pass
     # Mac 用 WKWebView，没有 WebView2 这回事（2026-10-11 Mac 端）
     if sys.platform != "darwin" and not webview2_ok():
         warn_no_webview2()

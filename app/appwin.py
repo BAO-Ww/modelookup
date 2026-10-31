@@ -263,6 +263,11 @@ def build_menu(sub=False):
         # 走 js_click 隐藏按钮 fontbtn（同 selfdispbtn 的可靠链路）
         js_click("fontbtn")
 
+    def stor_root():
+        # 图片存储位置（2026-10-31 用户令）：菜单「设置」里改所有图片的存储根
+        # （蓝底/聚光/发布图素材/文案素材整体搬迁）。走 js_click 隐藏按钮 storbtn。
+        js_click("storbtn")
+
     def exp_img():
         if not guarded("导出我补的图", "addimg"):
             return
@@ -290,7 +295,7 @@ def build_menu(sub=False):
     if sub:
         return [
             MenuAction("账号管理", adm),
-            Menu("显示(&S)", [
+            Menu("设置(&S)", [
                 MenuAction("字体大小", fontsize),
             ]),
             MenuAction("重新加载页面", reload_page),
@@ -317,10 +322,13 @@ def build_menu(sub=False):
             MenuAction("账号管理", adm),
             MenuAction("退出登录", logout),
         ]),
-        Menu("显示(&S)", [
+        # 2026-10-31 用户令：「显示」改「设置」，图片存储位置入口加进来
+        Menu("设置(&S)", [
             MenuAction("我的显示开关", selfdisp),
             MenuSeparator(),
             MenuAction("字体大小", fontsize),
+            MenuSeparator(),
+            MenuAction("图片存储位置", stor_root),
         ]),
         Menu("帮助(&H)", [
             MenuAction("软件更新", upd_app),

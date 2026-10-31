@@ -148,9 +148,16 @@ class ApiGetMixin:
             return
 
         if path.startswith("/api/kitimg/"):
-            # 蓝底套图产物（kitset/<型号>/img_N.jpg / set.json / product.jpg），只许读 kitset 目录
+            # 蓝底套图产物（kitset/<型号>/蓝底/img_N.jpg / set.json / product.jpg），只许读 kitset 目录
             import kitset
             core = urllib.parse.unquote(path[len("/api/kitimg/"):])
+            # 2026-10-31 目录重组：老数据（根目录 img_N / AI6张_聚光）先整一次再读
+            _m = core.split("/", 1)[0]
+            if _m:
+                try:
+                    kitset.model_dir(_m)
+                except Exception:
+                    pass
             root = os.path.abspath(kitset.kit_root())
             fp = os.path.abspath(os.path.join(kitset.kit_root(), core))
             if not fp.startswith(root) or not os.path.isfile(fp):
@@ -481,9 +488,10 @@ class ApiGetMixin:
                     (".." in p) or ("/" in p) or ("\\" in p) for p in parts):
                 self._send(403, b"forbidden", "text/plain; charset=utf-8")
                 return
-            if len(parts) >= 2 and parts[1] == pubwork.SPOT_SUB:
-                # 聚光四件套成品在 kitset/<型号>/（2026-10-30 修：原来只认 peiwork 根
-                # → 图明明生成了，页面 /pubimg 全 404，左边一直「还没有图」）
+            if len(parts) >= 2 and parts[1] in (pubwork.SPOT_SUB, "AI6张_聚光"):
+                # 聚光四件套成品在 kitset/<型号>/聚光（2026-10-31 改名，旧请求名自动映射）
+                if parts[1] != pubwork.SPOT_SUB:
+                    parts[1] = pubwork.SPOT_SUB
                 import kitset
                 base = kitset.model_dir(parts[0])
                 parts = parts[1:]

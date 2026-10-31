@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
 from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch
 from normalize import norm_model
-from paths import wp
+import paths
 import pei_core
 from net import urlopen_ssl
 
@@ -48,12 +48,77 @@ _SKIP_KEYS = ("箱门结构", "面板材质", "控温方式", "额定电压", "�
 
 
 def kit_root():
-    return wp("kitset")
+    # 2026-10-31 存储根统一：跟图片总根走（打包版 = exe 目录\图片库\kitset，
+    # settings.json 设了 data_root → data_root/kitset），不再钉死在 work_dir
+    import paths
+    return os.path.join(paths.data_base(), "kitset")
 
 
 def model_dir(model):
     nm = norm_model(model) or re.sub(r"\s+", "", model)
-    return os.path.join(kit_root(), nm)
+    d = os.path.join(kit_root(), nm)
+    _migrate_once(d)
+    return d
+
+
+# 2026-10-31 目录重组（用户令）：聚光文件夹去「AI6张_」前缀就叫「聚光」；
+# 蓝底四张进独立 蓝底\ 文件夹（不再裸放在型号根目录）；
+# 下载的候选图按来源进 官网/欣盛/中关村/其他 子文件夹
+SPOT_SUB = "聚光"
+BLUE_SUB = "蓝底"
+_SRC_TAG_DIRS = ("官网", "欣盛", "中关村", "其他")
+_MIG_OK = set()
+
+
+def _migrate_once(mdir):
+    """老目录一次性整理（marker 文件幂等）：AI6张_聚光→聚光、img_N.jpg→蓝底\、
+    根目录散落的下载候选 src_N/trans_fallback → 其他\。绝不碰 product/sizeimg/info/set。"""
+    if not mdir or mdir in _MIG_OK:
+        return
+    try:
+        if not os.path.isdir(mdir):
+            _MIG_OK.add(mdir)
+            return
+        mark = os.path.join(mdir, ".migrated_20261031")
+        if os.path.isfile(mark):
+            _MIG_OK.add(mdir)
+            return
+        n = 0
+        old_sp = os.path.join(mdir, "AI6张_聚光")
+        new_sp = os.path.join(mdir, SPOT_SUB)
+        if os.path.isdir(old_sp) and not os.path.isdir(new_sp):
+            os.rename(old_sp, new_sp)
+            n += 1
+        elif os.path.isdir(old_sp) and os.path.isdir(new_sp) and not os.listdir(new_sp):
+            os.rmdir(new_sp)
+            os.rename(old_sp, new_sp)
+            n += 1
+        bd = os.path.join(mdir, BLUE_SUB)
+        for f in ("img_1.jpg", "img_2.jpg", "img_3.jpg", "img_4.jpg"):
+            p = os.path.join(mdir, f)
+            if os.path.isfile(p):
+                os.makedirs(bd, exist_ok=True)
+                os.rename(p, os.path.join(bd, f))
+                n += 1
+        otd = os.path.join(mdir, "其他")
+        for p in glob.glob(os.path.join(mdir, "src_*.jpg")) + \
+                 glob.glob(os.path.join(mdir, "src_*.png")) + \
+                 [os.path.join(mdir, "trans_fallback.png")]:
+            if os.path.isfile(p):
+                os.makedirs(otd, exist_ok=True)
+                os.rename(p, os.path.join(otd, os.path.basename(p)))
+                n += 1
+        with io.open(mark, "w", encoding="utf-8") as f:
+            f.write("2026-10-31 目录重组\n")
+        _MIG_OK.add(mdir)
+        if n:
+            try:
+                import jobman
+                jobman.prog("kitset:migrate", "目录整理 %s：%d 项归位" % (os.path.basename(mdir), n))
+            except Exception:
+                pass
+    except Exception:
+        _MIG_OK.add(mdir)   # 迁移失败别把整个型号目录拖死，下次再试
 
 
 def _font(p, s):
@@ -875,13 +940,15 @@ def _gather_info(model, log):
         xs = fetch_xinsheng(model, log)
     except Exception:
         xs = None
-    for src in (data, xs):
+    for src, _tag in ((data, "官网"), (xs, "欣盛")):
         if src and src.get("imgs"):
-            imgs.extend([u for u in src["imgs"] if u])
+            # 2026-10-31 用户令：下载的图按来源分文件夹——候选带来源标签，
+            # _pick_prod 落盘时进 官网\ / 欣盛\ 子目录
+            imgs.extend([(u, _tag) for u in src["imgs"] if u])
     if imgs:
         # 大图变体优先（_1200 > 其他 > _600）：透明底机图锁定不比面积，先到先得，
         # 600px 小图先到会顶掉 1200px 大图导致成图发糊（2026-10-22 XQS100 用户实锤）
-        imgs = sorted(imgs, key=lambda u: 0 if "_1200" in u else (2 if "_600" in u else 1))
+        imgs = sorted(imgs, key=lambda it: 0 if "_1200" in it[0] else (2 if "_600" in it[0] else 1))
     if not info:
         info = {}
     if not (info.get("props") or []):
@@ -915,7 +982,7 @@ def _gather_info(model, log):
         try:
             _zi, _zp = _zol_data(model, (info.get("brand") or ""), log)
             if _zi:
-                imgs.extend([u for u in _zi if u])
+                imgs.extend([(u, "中关村") for u in _zi if u])
             if _zp:
                 _have = {str(k).strip() for k, _v in (info.get("props") or [])}
                 for k, v in _zp:
@@ -1132,7 +1199,11 @@ def _ai_read_size_nums(path, log=None):
 def _ai_is_sizeimg(im, log=None):
     """AI 视觉认官方尺寸图（2026-10-26 用户令：「加了AI识别图的嘛，让他去找我要的图」）。
     线框启发式 _looks_like_sizeimg 漏判时（官网手绘风/异形版式）商汤→GLM 兜底认图。
-    返回 True/False；AI 完全不可用返回 None（调用方据此放弃，别一张张空烧）。"""
+
+    2026-10-31 用户令「让 AI 去选图，找出尺寸图然后使用」：启发式降为初筛，**AI 有最终否决权**。
+    ES80HD-RC3PLUSA03U1 实锤——官网详情页的「e⁻ 加热管」渲染图（浅蓝白底、无深色块、
+    彩色像素 <6%）把像素三条件全骗过，被当成线框图贴进 img4，AI 压根没被问。
+    返回 True/False；AI 完全不可用返回 None（调用方据 None 保留启发式结论，别一张张空烧）。"""
     try:
         import base64
         import pei_core
@@ -1145,15 +1216,21 @@ def _ai_is_sizeimg(im, log=None):
         im2.save(buf, "JPEG", quality=80)
         data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
         txt = pei_core._vision_call(None, data_url,
-            "这张图是不是家电产品的官方尺寸示意图（线框图/三视图，带宽高深毫米数字标注）？"
-            "产品照片、场景图、促销图都算不是。只回答：是 或 否", log=log)
+            "这是家电产品的官方尺寸示意图吗？三条必须同时满足："
+            "①画的是整机外形（正视图/侧视图/俯视图之一）；"
+            "②带尺寸标注线或箭头；"
+            "③标注上印有毫米数字。"
+            "任意一条不满足就回答：否。产品照片、局部零件渲染图、内部结构图、"
+            "场景图、促销图、卖点宣传图，一律回答：否。只回答一个字：是 或 否", log=log)
         if not txt:
             return None
-        t = txt.strip()[:8].lower()
-        if "是" in txt[:8] or "yes" in t:
-            return True
-        if "否" in txt[:8] or "not" in t or "no" in t:
+        head = txt.strip()[:16]
+        low = head.lower()
+        # 「否」优先判：中文「不是」里含「是」，顺序反了会把否定判成肯定
+        if "否" in head or "不是" in head or "no" in low or "not" in low:
             return False
+        if "是" in head or "yes" in low:
+            return True
         return None
     except Exception:
         return None
@@ -1345,11 +1422,22 @@ def _try_save_sizeimg(u, sizeimg, log, prod_path=None, ai_budget=None):
         im = Image.open(io.BytesIO(raw))
         if min(im.size) < 250:
             return False
-        if _looks_like_sizeimg(im) or (
-                ai_budget is not None and ai_budget[0] > 0 and _ai_is_sizeimg(im, log)):
-            # AI 兜底认图有预算（默认 4 张）：线框启发式漏判的手绘风尺寸图靠它捞回
-            if ai_budget is not None and not _looks_like_sizeimg(im):
+        # 2026-10-31 用户令「让 AI 去选图」：像素特征通过也要 AI 点头才算；
+        # 像素没通过时才用 AI 捞回手绘风线稿（预算 4 张，只对 AI 真回答过的扣额度）
+        ok = _looks_like_sizeimg(im)
+        if ok:
+            v = _ai_is_sizeimg(im, log)
+            if v is False:
+                ok = False
+                if log:
+                    log("详情页候选 %s 像素像线框图但 AI 否掉，跳过" % u.split("/")[-1])
+        elif ai_budget is not None and ai_budget[0] > 0:
+            v = _ai_is_sizeimg(im, log)
+            if v is not None:
                 ai_budget[0] -= 1
+            if v:
+                ok = True
+        if ok:
             if prod_path and os.path.isfile(prod_path) and _same_img(im, Image.open(prod_path)):
                 return False   # 与产品主图同图 → 是产品照不是尺寸图
             _flat_white(im).save(sizeimg, quality=92)
@@ -1654,13 +1742,18 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             log("写文案/爬虫缓存 %d 张入候选（%s）" % (len(srcs), nm2))
     except Exception:
         pass
-    srcs += [("url", u) for u in img_urls]
+    # 2026-10-31 用户令：url 候选带来源标签（官网/欣盛/中关村），下载落盘进对应子文件夹
+    srcs += [("url", u, t) for it in (img_urls or []) for u, t in
+             [(it if isinstance(it, tuple) else (it, "其他"))]]
     best = None   # (score, PIL image)
     _trans_fallback = [None]   # 透明底小图暂存路径（等更大的变体）
     _ai_cand = []   # 尺寸图 AI 复核候选（本地路径，启发式漏判时商汤/GLM 兜底认）
+    _ai_rej = set()  # 2026-10-31：已由 AI 明确否掉的图，别在兜底循环里再烧一次额度
     seen = set()
     n = 0
-    for kind, u in srcs:
+    for item in srcs:
+        kind, u = item[0], item[1]
+        _srctag = item[2] if len(item) > 2 else "其他"   # 来源（官网/欣盛/中关村/其他）
         # 2026-10-26 上限 24→40：官网/ 子目录按字节降序入队后，小字节的官方尺寸线稿
         # （22.jpg 13KB 实锤）被挤出局 → 尺寸图候选根本没进评比，img4 退化手绘
         if u in seen or n >= 40 or (have_prod and have_size):
@@ -1672,7 +1765,10 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                             binary=True, timeout=20)
                 if len(raw) < 3000:
                     continue
-                fp = os.path.join(mdir, "src_%d.jpg" % n)
+                # 2026-10-31 用户令：下载图按来源进子文件夹，型号根目录不再散落 src_N
+                _sdir = os.path.join(mdir, _srctag if _srctag in _SRC_TAG_DIRS else "其他")
+                os.makedirs(_sdir, exist_ok=True)
+                fp = os.path.join(_sdir, "src_%d.jpg" % n)
                 with io.open(fp, "wb") as f:
                     f.write(raw)
                 im = Image.open(fp)
@@ -1692,11 +1788,21 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                     if log:
                         log("候选%d 与已选机图同图，是产品照不是尺寸图，跳过" % n)
                     continue
-                _flat_white(im).save(sizeimg, quality=92)
-                have_size = True
-                if log:
-                    log("候选%d 识别为官网尺寸图，img4 直接用它" % n)
-                continue
+                # 2026-10-31 用户令「让 AI 去选图，找出尺寸图然后使用」：
+                # 像素特征只当初筛，AI 说了才算。AI 明确否 → 弃用，继续当机图候选往下走；
+                # AI 不可用（None）才退回纯启发式，避免没网/没额度时整张图出不来。
+                _verdict = _ai_is_sizeimg(im, log)
+                if _verdict is False:
+                    _ai_rej.add(fp if kind == "url" else u)
+                    if log:
+                        log("候选%d 像素像线框图，但 AI 判定不是尺寸图（缺整机外形/标注线/毫米数字），弃用" % n)
+                else:
+                    _flat_white(im).save(sizeimg, quality=92)
+                    have_size = True
+                    if log:
+                        log("候选%d 判定为官网尺寸图（%s），img4 直接用它"
+                            % (n, "AI 确认" if _verdict else "AI 不可用·按像素特征采用"))
+                    continue
             # 启发式没认出：先记进 AI 复核候选（本地路径，循环结束后商汤/GLM 看图定夺）
             if not have_size and len(_ai_cand) < 12:
                 _ai_cand.append(fp if kind == "url" else u)
@@ -1769,6 +1875,8 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             except Exception:
                 return 1.0
         for pth in sorted(_ai_cand[:20], key=_color_ratio)[:10]:
+            if pth in _ai_rej:
+                continue   # 上面主循环已由 AI 明确否掉，别再问一次
             try:
                 im2 = Image.open(pth)
             except Exception:
@@ -1894,7 +2002,7 @@ def _ensure_dims(info, mdir, img_urls=None, log=None):
             _neg_set(mdir, "zol_dims")
         return info, img_urls
     if zi and not img_urls:
-        img_urls = zi
+        img_urls = [(u, "中关村") for u in zi if u]
     if zp:
         have = {str(k) for k, _v in (info.get("props") or [])}
         for k, v in zp:
@@ -2591,11 +2699,13 @@ def ensure_data(model, log=None):
                 for p in glob.glob(os.path.join(bg, "*")):
                     if os.path.isfile(p) and _link_or_copy(p, os.path.join(kd, "官网", "AI背景", os.path.basename(p))):
                         n += 1
-            # ④ 旧聚光成品一次性入伙（迁移存量，不重跑）
-            sp = os.path.join(pd, "AI6张_聚光")
-            if os.path.isdir(sp):
+            # ④ 旧聚光成品一次性入伙（迁移存量，不重跑；2026-10-31 起文件夹叫「聚光」）
+            for _spnm in (SPOT_SUB, "AI6张_聚光"):
+                sp = os.path.join(pd, _spnm)
+                if not os.path.isdir(sp):
+                    continue
                 for p in glob.glob(os.path.join(sp, "*")):
-                    if os.path.isfile(p) and _link_or_copy(p, os.path.join(kd, "AI6张_聚光", os.path.basename(p))):
+                    if os.path.isfile(p) and _link_or_copy(p, os.path.join(kd, SPOT_SUB, os.path.basename(p))):
                         n += 1
         if n:
             log("聚光数据入伙：%d 个文件 → kitset\\%s（硬链接，写文案目录不动）" % (n, os.path.basename(kd)))
@@ -2605,19 +2715,20 @@ def ensure_data(model, log=None):
 
 
 def spot_dir(model):
-    """聚光四件套产物目录 = kitset/<型号>/AI6张_聚光（2026-10-29 起跟蓝底同家）。"""
-    return os.path.join(model_dir(model), "AI6张_聚光")
+    """聚光四件套产物目录 = kitset/<型号>/聚光（2026-10-29 起跟蓝底同家；
+    2026-10-31 用户令：文件夹名去「AI6张_」前缀，就叫「聚光」）。"""
+    return os.path.join(model_dir(model), SPOT_SUB)
 
 
 def _spot_out_dir(model):
-    """聚光四件套产物目录（kitset/<型号>/AI6张_聚光），norm 与 _safe 两种命名都试。
-    2026-10-29 迁移：旧 peiwork/<型号>/AI6张_聚光 由 ensure_data 硬链入伙后这里只认 kitset。"""
+    """聚光四件套产物目录（kitset/<型号>/聚光），norm 与 _safe 两种命名都试。
+    旧 peiwork/<型号>/AI6张_聚光 由 ensure_data 硬链入伙后这里只认 kitset。"""
     try:
         for nm in dict.fromkeys([norm_model(model) or model, model]):
-            d = os.path.join(kit_root(), nm, "AI6张_聚光")
+            d = os.path.join(kit_root(), nm, SPOT_SUB)
             if os.path.isdir(d):
                 return d
-        return os.path.join(model_dir(model), "AI6张_聚光")
+        return os.path.join(model_dir(model), SPOT_SUB)
     except Exception:
         return ""
 
@@ -2639,10 +2750,11 @@ def _qa_blue(model, info, mdir, cfg, points, prod, log):
         if not key:
             log("AI 复检跳过：未配置视觉 key")
             return
-        p1 = os.path.join(mdir, "img_1.jpg")
-        p2 = os.path.join(mdir, "img_2.jpg")
-        p3 = os.path.join(mdir, "img_3.jpg")
-        p4 = os.path.join(mdir, "img_4.jpg")
+        bd = os.path.join(mdir, BLUE_SUB)   # 蓝底四张住 蓝底\ 文件夹（2026-10-31 目录重组）
+        p1 = os.path.join(bd, "img_1.jpg")
+        p2 = os.path.join(bd, "img_2.jpg")
+        p3 = os.path.join(bd, "img_3.jpg")
+        p4 = os.path.join(bd, "img_4.jpg")
         paths = [p for p in (p1, p2, p3, p4) if os.path.isfile(p)]
         if len(paths) < 4:
             return
@@ -2684,7 +2796,7 @@ def sync_blue4_size(model, info, log=None):
     try:
         kd = model_dir(model)
         si = os.path.join(kd, "sizeimg.jpg")
-        b4 = os.path.join(kd, "img_4.jpg")
+        b4 = os.path.join(kd, BLUE_SUB, "img_4.jpg")   # 蓝底四张住 蓝底\（2026-10-31 目录重组）
         prod = os.path.join(kd, "product.png")
         if not (os.path.isfile(si) and os.path.isfile(b4) and os.path.isfile(prod)):
             return
@@ -2719,7 +2831,10 @@ def sync_spot_size(model, info, log=None):
         import pei_ai9
         pei_ai9.P["brand"] = (info or {}).get("brand") or pei_ai9.P.get("brand") or ""
         pei_ai9.P["model"] = (info or {}).get("model") or model
-        pei_ai9.img_size(info, None, out)
+        # 2026-10-31 修：img_size 里 out / "5_尺寸图.jpg" 要求 Path，传 str 会
+        # TypeError("'str' / 'str'")——ES80HD-RC3PLUSA03U1 对账实锤，聚光 5_尺寸图 一直没自动重出
+        from pathlib import Path as _Path
+        pei_ai9.img_size(info, None, _Path(out))
         log("官方尺寸图后到，聚光尺寸图已自动重出（5_尺寸图 换官方图版）")
     except Exception as e:
         log("聚光尺寸图对账失败：%r" % (e,))
@@ -2757,6 +2872,7 @@ def generate(model, force=0, log=None):
         # 官网/欣盛没图或没参数：中关村在线兜底（用户令 2026-10-21）
         log("常规渠道缺料，试中关村…")
         zimgs, zprops = _zol_data(model, (info or {}).get("brand") or "", log)
+        zimgs = [(u, "中关村") for u in zimgs if u]   # 下载落盘按来源进 中关村\ 文件夹
         if zimgs and not img_urls:
             img_urls = zimgs
         if zprops and not (info.get("props") or []):
@@ -2801,13 +2917,16 @@ def generate(model, force=0, log=None):
         except Exception:
             pass
     _p("渲染 1/4 主图…")
-    _render_img1(cfg, Image.open(prod), os.path.join(mdir, "img_1.jpg"))
+    # 蓝底四张住 蓝底\ 文件夹（2026-10-31 用户令：蓝底也要有自己的文件夹）
+    bdir = os.path.join(mdir, BLUE_SUB)
+    os.makedirs(bdir, exist_ok=True)
+    _render_img1(cfg, Image.open(prod), os.path.join(bdir, "img_1.jpg"))
     _p("渲染 2/4 参数图…")
-    _render_img2(cfg, Image.open(prod), os.path.join(mdir, "img_2.jpg"))
+    _render_img2(cfg, Image.open(prod), os.path.join(bdir, "img_2.jpg"))
     _p("渲染 3/4 卖点图…")
-    _render_img3(cfg, points, os.path.join(mdir, "img_3.jpg"))
+    _render_img3(cfg, points, os.path.join(bdir, "img_3.jpg"))
     _p("渲染 4/4 尺寸图…")
-    _render_img4(cfg, os.path.join(mdir, "img_4.jpg"), prod)
+    _render_img4(cfg, os.path.join(bdir, "img_4.jpg"), prod)
     # AI 复检成片（2026-10-29 用户令「蓝底也要接上」）：与聚光同一套质检，
     # 压字/截断/出画自动保守档重渲；复检完再做聚光时间线对账
     _p("AI 复检成片…")

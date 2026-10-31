@@ -59,11 +59,10 @@ SITES = {
 
 
 def copy_root():
-    """文案素材根（2026-10-24 用户定稿：与发布图素材库共用「存储路径」设置）。
-    settings.json 设了 data_root → data_root/copy；没设 → work_dir/copy（原行为）。"""
+    """文案素材根（2026-10-24 与发布图素材库共用「存储路径」设置；2026-10-31 起跟图片总根走：
+    总根 = exe 目录\图片库（打包版默认），settings.json 设了 data_root → data_root/copy）。"""
     import paths
-    base = paths.data_root()
-    d = os.path.join(base, "copy") if base else wp("copy")
+    d = os.path.join(paths.data_base(), "copy")
     if not os.path.isdir(d):
         try:
             os.makedirs(d)
