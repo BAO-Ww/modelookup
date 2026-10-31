@@ -4,6 +4,7 @@
 依赖方向：appwin 在 updater/cloud 之上（被 server 的 POST 路由与入口 main() 调用）。
 ⚠ 不再细拆：setup_tray/_wire_tray/guarded 是 run_app 的内嵌套函数，拆出必须重构签名
   传 win/tray 引用——会触碰原本不用动的代码（拆分设计.md 附录明令不拆）。"""
+import json
 import os
 import sys
 import threading
@@ -153,6 +154,40 @@ def rebuild_menu_for(role):
         state.LOG.append("菜单已按角色重画：%s" % ("管理号全量" if role == "admin" else "子账号精简"))
     except Exception as e:
         state.LOG.append("菜单重画失败：%s" % e)
+
+
+# 2026-10-31 用户令（晚三批）：子用户发布挪进顶部菜单栏（「帮助」前面）。
+# 列表由页面 loadSubRec 拉到后经 js_api sync_subusers 同步进来；✓ 标当前选中；
+# 菜单点名字 → _menu_pick_sub → 页面 exPickSub 走既有下拉 change 流程切视角。
+_SUB_USERS = []      # 子账号名列表（不含自己）
+_SUB_SEL = ""        # 当前在看谁的发布（"" = 不筛选）
+
+
+def _menu_pick_sub(u):
+    global _SUB_SEL
+    _SUB_SEL = str(u or "")
+    try:
+        webview.windows[0].evaluate_js(
+            "window.exPickSub && exPickSub(%s)" % json.dumps(_SUB_SEL, ensure_ascii=False))
+    except Exception:
+        pass
+    threading.Thread(target=rebuild_menu_for,
+                     args=(state.PERM_STATE.get("role") or "admin",), daemon=True).start()
+
+
+def _sub_menu_items():
+    """「子用户(&U)」下拉的条目：不筛选 + 每个子账号名，当前选中的带 ✓。"""
+    from webview.menu import MenuAction      # 模块级不能碰 webview.menu（PyInstaller 规矩，与 build_menu 同源）
+    items = []
+    if not _SUB_USERS:
+        items.append(MenuAction("（登录后自动列出子账号）", lambda: None))
+        return items
+    items.append(MenuAction(("✓ " if not _SUB_SEL else "") + "不筛选（看全部）",
+                            lambda: _menu_pick_sub("")))
+    for _u in _SUB_USERS:
+        items.append(MenuAction(("✓ " if _SUB_SEL == _u else "") + _u,
+                                (lambda uu: (lambda: _menu_pick_sub(uu)))(_u)))
+    return items
 
 
 def build_menu(sub=False):
@@ -364,9 +399,7 @@ def build_menu(sub=False):
             # 2026-10-31 用户令「剩下全改」：这些页内面板也从菜单能开
             MenuAction("图片墙（全部成片）", lambda: js_click("extwall")),
             MenuAction("后台任务（出图/文案排队）", lambda: js_click("extjobs")),
-            MenuAction("价格嫌疑清单", lambda: js_click("extsus")),
-            MenuAction("表格视图", lambda: js_click("exttbl")),
-            MenuAction("变更日志（今天干了啥）", lambda: js_click("extchg")),
+            # 2026-10-31 22:03 用户令：价格嫌疑清单 / 表格视图 / 变更日志 三个菜单入口去掉
         ]),
         Menu("账号(&A)", [
             MenuAction("账号管理", adm),
@@ -542,6 +575,29 @@ def run_app(httpd, port, startup_xlsx=None):
                 return str(res[0]) if res else ""
             except Exception:
                 return ""
+
+        def sync_subusers(self, payload="[]"):
+            """2026-10-31 晚三批：页面 loadSubRec 拉到子账号列表后同步进来，
+            原生菜单「子用户」跟着重画（列表变了才重画，省得闪）。"""
+            try:
+                us = json.loads(payload or "[]")
+                if isinstance(us, list):
+                    us = [str(x) for x in us if str(x)]
+                    if us != _SUB_USERS:
+                        _SUB_USERS[:] = us
+                        threading.Thread(target=rebuild_menu_for, args=(
+                            state.PERM_STATE.get("role") or "admin",), daemon=True).start()
+            except Exception:
+                pass
+
+        def sub_sel(self, u=""):
+            """页面侧子用户选择变化（含菜单点回来的回声）→ 同步 ✓ 到菜单。"""
+            global _SUB_SEL
+            u = str(u or "")
+            if u != _SUB_SEL:
+                _SUB_SEL = u
+                threading.Thread(target=rebuild_menu_for, args=(
+                    state.PERM_STATE.get("role") or "admin",), daemon=True).start()
 
     _dpi()                                  # 必须在量屏幕 / 建窗前：否则算出来是缩放前的尺寸
     w, h, x, y = fit_window(1480, 940)

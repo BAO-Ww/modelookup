@@ -270,7 +270,7 @@
       <h3>品牌</h3><div class="opts" id="shBrand"></div>
       <h3>品类</h3><div class="opts" id="shCat"></div>
       <h3>价格类型</h3><div class="opts" id="shPtype"></div>
-      <h3>价格区间（最低清理价）</h3>
+      <h3>价格区间（拿货价）</h3>
       <div class="rng"><input id="shPmin" type="number" inputmode="numeric" placeholder="最低"> — <input id="shPmax" type="number" inputmode="numeric" placeholder="最高"></div>
       <div class="acts"><button class="reset" id="shReset">重置</button><button class="apply" id="shApply">确定</button></div>
     </div>
@@ -603,7 +603,7 @@ function pass(it){
   /* 抽屉「状态」：没库存 = 已发布且用友清零；亏钱 = 按当前口径净挣为负 */
   if (fNo && PUBWARN_LOST.indexOf(it.c) < 0) return false;
   if (fLoss && LOSS_KEYS.indexOf(it.c) < 0) return false;
-  /* 清理价区间（2026-10-30 用户定稿，与电脑端同步）：任何一个拿货价超出 最低~最高 都不显示 */
+  /* 价格区间（2026-10-30 用户定稿，与电脑端同步；2026-10-31 晚更名：清理价→拿货价，电脑端一直叫拿货价）：任何一个拿货价超出 最低~最高 都不显示 */
   if (pminV!=null || pmaxV!=null){
     var P = takePrices(it); if (!P.length) return false;
     for (var _pi=0;_pi<P.length;_pi++){

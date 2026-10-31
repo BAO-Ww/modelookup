@@ -974,7 +974,7 @@ def _gather_info(model, log):
                     _have.add(ks)
     # 全网搜参兜底（2026-10-29 用户令）：pubwork/官网/欣盛/中关村全空时（渠道机实锤），
     # 必应搜型号从结果页正文抠参数。已有键不覆盖；凑不满 5 条才算「参数残缺」才触发。
-    # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 7 天内不再跑。
+    # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 2 天内不再跑（重出会清掉重试）。
     _mdir = model_dir(model)
     # 中关村全量参数源（2026-10-29 LTD-575WDS9U1 实锤：leader 官网 WAF 拦 IP 403、
     # pubwork/欣盛 0 参数、必应 0 结果，ZOL 却有 23 条全参数）——必应之前先问 ZOL，
@@ -1893,22 +1893,22 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 if log:
                     log("视觉 AI 不可用，尺寸图复核跳过")
                 break
-    if not have_size and page_url and mdir and not _neg_get(mdir, "sizeimg_official"):
+    if not have_size and page_url and mdir and not _neg_get(mdir, "sizeimg_official", ttl_days=2):
         # 候选图里没认出尺寸图：去官网详情页定向翻一遍（有官方尺寸图就不用手绘）。
-        # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 7 天内不再跑
+        # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 2 天内不再跑（重出会清掉重试）
         _hunt_sizeimg_page(page_url, sizeimg, log,
                            skip_urls=(picked_url,) if picked_url else (),
                            prod_path=picked if have_prod and os.path.isfile(picked) else None)
         if not os.path.isfile(sizeimg):
             _neg_set(mdir, "sizeimg_official")
             if log:
-                log("官网没有官方尺寸图（已记住，7 天内不再重复找）")
+                log("官网没有官方尺寸图（已记住，2 天内不再重复找）")
     if not have_size and want_dims:
         # 官网也没有 → 中关村图集兜底（2026-10-29 用户令「中关村有图怎么还自己画」）：
         # 真图优先，AI 读图上数字跟本机真实参数全对上号才收，对不上宁走手绘防张冠李戴
-        if mdir and _neg_get(mdir, "sizeimg_zol"):
+        if mdir and _neg_get(mdir, "sizeimg_zol", ttl_days=2):
             if log:
-                log("中关村图集已试过没有（7 天内不重复找）")
+                log("中关村图集已试过没有（2 天内不重复找）")
         else:
             try:
                 if _zol_hunt_sizeimg(model, want_dims, sizeimg, log,
@@ -1917,7 +1917,7 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 elif mdir:
                     _neg_set(mdir, "sizeimg_zol")
                     if log:
-                        log("中关村图集也没有尺寸图（已记住，7 天内不再重复找）")
+                        log("中关村图集也没有尺寸图（已记住，2 天内不再重复找）")
             except Exception:
                 pass
     return picked
@@ -2852,6 +2852,15 @@ def generate(model, force=0, log=None):
         if os.path.isfile(_stale):
             try:
                 os.remove(_stale)
+            except Exception:
+                pass
+        # 2026-10-31 晚实锤（BCD-500WLCFD8FVAU1）：AI 终审把真尺寸图误否一次 →
+        # 官网 hunt 失败记 7 天负缓存 → 用户之后每次点都被挡，看着像「有图却不出」。
+        # 手动重出必须连负缓存一起清，真重试。
+        _negp = os.path.join(mdir, "_neg.json")
+        if os.path.isfile(_negp):
+            try:
+                os.remove(_negp)
             except Exception:
                 pass
     cache = os.path.join(mdir, "set.json")
