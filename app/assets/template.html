@@ -1876,6 +1876,26 @@ function pubAllCacheGet(force){          // 只给「新鲜」的（号价对比
 function pubAllCacheSet(j){
   if (!j || !j.ok) return;
   try { localStorage.setItem('ml_puball', JSON.stringify({ t: Date.now(), d: j })); } catch(e){}
+  /* 2026-10-31 深夜：再落一份到本机文件（/api/pubcache）。WebView2 被托盘硬杀时
+     localStorage 偶发没落盘（登录态镜像同款病），丢了「已发布」就得干等 9s 的 /puball。 */
+  try {
+    fetch('/api/pubcache', { method: 'POST', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ t: Date.now(), d: j }) });
+  } catch(e){}
+}
+var _pubRestoreTried = false;
+function pubCacheRestore(){                // localStorage 空时从文件镜像兜底（每次加载只试一次）
+  _pubRestoreTried = true;
+  return fetch('/api/pubcache', { cache: 'no-store' })
+    .then(function(r){ return r.json(); })
+    .then(function(o){
+      if (o && o.ok && o.d && o.d.ok){
+        try { localStorage.setItem('ml_puball', JSON.stringify({ t: o.t || (Date.now() - 600000), d: o.d })); } catch(e){}
+        return o.d;
+      }
+      return null;
+    }).catch(function(){ return null; });
 }
 function pubAllTouch(){                   // 本地改过发布/价格后，顺手把缓存同步成最新
   if (window._SUBPUB && window._SUBPUB.ok) pubAllCacheSet(window._SUBPUB);
@@ -1889,8 +1909,11 @@ function fetchPubAll(force, onUpdate){
       if (j && j.ok && onUpdate){ try { onUpdate(j); } catch(e){} }
       if (!c) res(j || { ok: false, _st: 0, msg: '拉取失败' });
     }
+    /* localStorage 没缓存（硬杀丢盘/换机器）→ 先试本机文件镜像，有就先画，不等 9s 的 /puball */
+    var pre = (c || _pubRestoreTried) ? Promise.resolve()
+            : pubCacheRestore().then(function(d){ if (d && !c){ window._SUBPUB = d; res(d); } });
     if (_pubAllFly){ _pubAllFly.then(done); return; }
-    _pubAllFly = authFetch('/puball').then(function(j){
+    _pubAllFly = pre.then(function(){ return authFetch('/puball'); }).then(function(j){
       _pubAllFly = null;
       if (j && j.ok){ window._SUBPUB = j; pubAllCacheSet(j); }
       return j;

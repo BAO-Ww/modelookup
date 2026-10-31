@@ -125,19 +125,20 @@ def _app_install_bg(log):
         req = urllib.request.Request(CLOUD_HOST + "/appdl?tag=" + urllib.parse.quote(tag))
         req.add_header("X-Token", tok)
         req.add_header("User-Agent", _CLOUD_UA)
-        # 更新下载挂节点（2026-10-29 用户令）：settings.json 配了 update_proxy 就走它，
-        # 实测直连 0.10MB/s → 走节点 0.55MB/s。没配置保持直连，老机器零变化。
+        # 更新下载挂节点（2026-10-29 用户令；2026-11-01 升级为 net_proxy：
+        # "auto" 自动探测本机代理端口。实测晚高峰 24 路直连 0.26MB/s → 代理 3.07MB/s）
         try:
-            from paths import update_proxy as _upd_proxy
-            _upx = _upd_proxy()
+            from paths import net_proxy as _npx
+            _upx = _npx()
         except Exception:
             _upx = None
         if _upx:
             log("自更新：下载走代理 %s" % _upx)
         dest = os.path.join(os.environ.get("TEMP") or wp(""),
                             "ModelLookup-Setup-%s.exe" % (ver or APP_VERSION))
-        # 并发分块下载（2026-10-29 用户令）：源支持分段（worker 透传 Range 后）就 8 路并发
+        # 并发分块下载（2026-10-29 用户令）：源支持分段（worker 透传 Range 后）就并发
         # 约 5 倍速；不支持自动退单流，SHA-256 校验兜底完整性。
+        # 2026-10-31 晚实测（晚高峰慢网）：8 路 0.59MB/s → 24 路 1.23MB/s（37MB 60s→29s），提到 24。
         from net import dl_parallel as _dlp
 
         def _pg(got, total):
@@ -145,7 +146,7 @@ def _app_install_bg(log):
                 state.set_state("running", "正在下载新版本 v%s… %d%%" % (ver, got * 100 // total))
 
         got, total = _dlp(req.get_full_url(), dict(req.headers), dest,
-                          proxy=_upx, progress=_pg, log=log)
+                          proxy=_upx, nchunks=24, progress=_pg, log=log)
         if got < 1048576:
             state.set_state("error", "安装包下载不完整（%d 字节），重试一次" % got)
             return

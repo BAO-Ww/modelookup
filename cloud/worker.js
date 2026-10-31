@@ -124,13 +124,28 @@ async function getJSON(env, key, fallback) {
 // 表结构：store(k TEXT PRIMARY KEY, v TEXT, updated_at INTEGER)，k 与 KV 键名同构（pub_B/pubp_B…）。
 // env.DB 未绑（部署漏 binding）→ 退回 KV 不炸；D1 已绑但读写失败 → 抛错，绝不退 KV 读旧数据。
 let _d1ok = null;   // null=没试过，true/false=建表结果（每 isolate 一次）
+let _d1P = null;    // 初始化中的 Promise（并发安全，见下）
 async function d1Init(env) {
   if (_d1ok !== null) return _d1ok;
-  _d1ok = false;
-  if (!env.DB) return false;
-  await env.DB.prepare("CREATE TABLE IF NOT EXISTS store (k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER)").run();
-  _d1ok = true;
-  return true;
+  /* 2026-11-01 严重修复（并发读空数据实锤）：原来是 `_d1ok=false; await 建表; _d1ok=true`，
+     串行调用没事，可一旦同一个请求里并发读（/puball 三账号同时查），后到的调用看到
+     _d1ok===false 直接返回「D1 不可用」→ 静默退 KV / 返回 {}：实测 /puball 里 XU 的 20 条
+     发布、TB 的 168 条定价全被吞成空，界面看着就是「没发布/没定价」。
+     改成共享同一个初始化 Promise：并发的都等这一次建表完，结果一致。 */
+  if (!_d1P) {
+    _d1P = (async () => {
+      try {
+        if (!env.DB) { _d1ok = false; return false; }
+        await env.DB.prepare("CREATE TABLE IF NOT EXISTS store (k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER)").run();
+        _d1ok = true;
+        return true;
+      } catch (e) {
+        _d1ok = false;
+        return false;
+      }
+    })();
+  }
+  return await _d1P;
 }
 async function d1Get(env, key, fallback) {
   if (!(await d1Init(env))) return getJSON(env, key, fallback);
@@ -234,12 +249,18 @@ const MARKS_TABLES_SQL = [
   "CREATE TABLE IF NOT EXISTS prices (u TEXT NOT NULL, c TEXT NOT NULL, p REAL, PRIMARY KEY (u, c))"
 ];
 let _marksOK = false;
+let _marksP = null;   // 建表 Promise（并发时只建一次，别 6 个查询各建一遍）
 async function marksInit(env) {
   if (!(await d1Init(env))) return false;
   if (_marksOK) return true;
-  for (const s of MARKS_TABLES_SQL) await env.DB.prepare(s).run();
-  _marksOK = true;
-  return true;
+  if (!_marksP) {
+    _marksP = (async () => {
+      for (const s of MARKS_TABLES_SQL) await env.DB.prepare(s).run();
+      _marksOK = true;
+      return true;
+    })().catch((e) => { _marksP = null; throw e; });
+  }
+  return await _marksP;
 }
 const DEF_XY = "默认";
 // 组装：行 → 与 blob 时代完全同构的 {c: {t,k,cs?,bn?,nat?,xys:{...}}}
@@ -1118,11 +1139,17 @@ async function route(request, env, path, ctx) {
     const me = users[who];
     if (!me || me.role !== "admin") return jerr("只有管理号能看", 403);
     const out = {}, prices = {};
-    for (const u of Object.keys(users)) {
-      if (users[u].role === "admin") continue;
-      out[u] = await getPubN(u);
-      prices[u] = await getPubP(u);
-    }
+    // 2026-11-01 用户令「已发布每次打开都要好久」：原来子账号之间串行、每个账号内部
+    // getPubN 又把 pub/pubp 串着读 → 3 个号 = 9 次 D1 串行，晚高峰实测 6-9s（最坏 61s）。
+    // 改成账号间 Promise.all + 账号内两读并发，一次往返全部拿回。
+    const subs = Object.keys(users).filter((u) => users[u].role !== "admin");
+    await Promise.all(subs.map(async (u) => {
+      const [m, pp] = await Promise.all([getPub(u), getPubP(u)]);
+      const o = {};
+      for (const [c, v] of Object.entries(m || {})) o[c] = normMark(v, (pp || {})[c]);
+      out[u] = o;
+      prices[u] = pp || {};
+    }));
     return J({ ok: true, all: out, prices });
   }
 
@@ -1379,6 +1406,7 @@ async function route(request, env, path, ctx) {
     if (!obj) return J({ ok: true });          // 云端还没有过上传，无需报到
     obj.up = Date.now();
     await env.KV.put("xlsxlive", JSON.stringify(obj));
+    try { await env.KV.put("xlsxm", JSON.stringify({ ts: obj.ts || "", by: obj.by || "", up: obj.up })); } catch (e) {}
     return J({ ok: true });
   }
 
@@ -1396,6 +1424,9 @@ async function route(request, env, path, ctx) {
     if (!b || !b.ts || !b.files || !b.files["data.xlsx"]) return jerr("表格数据为空，拒收");
     const obj = { ts: String(b.ts).slice(0, 64), files: b.files, by: isCloud ? "云端定时" : who, up: Date.now() };
     await env.KV.put("xlsxlive", JSON.stringify(obj));
+    // 2026-11-01：顺手落一份「只有元信息」的小键。xlsxlive 里装着 3 个 xlsx 的 base64
+    // （整包十几 MB），原来每台机器每 60 秒轻探 /xlsxmeta 都要把整包读一遍 → 单次 3s。
+    try { await env.KV.put("xlsxm", JSON.stringify({ ts: obj.ts, by: obj.by, up: obj.up })); } catch (e) {}
     return J({ ok: true, mb: Math.round(JSON.stringify(obj).length / 1048576 * 10) / 10 });
   }
   if (path === "/xlsxcloud" && request.method === "GET") {
@@ -1404,8 +1435,15 @@ async function route(request, env, path, ctx) {
     return J({ ok: true, ts: obj.ts, files: obj.files, by: obj.by });
   }
   if (path === "/xlsxmeta" && request.method === "GET") {
-    const obj = await getJSON(env, "xlsxlive", null);
-    if (!obj) return J({ ok: true, ts: "" });
+    // 2026-11-01：先读小元信息键（几十字节），读不到才回退读整包并顺手补一份，
+    // 免得每台机器每 60 秒都把十几 MB 的 xlsxlive 拉一遍。
+    let obj = await getJSON(env, "xlsxm", null);
+    if (!obj) {
+      const big = await getJSON(env, "xlsxlive", null);
+      if (!big) return J({ ok: true, ts: "" });
+      obj = { ts: big.ts || "", by: big.by || "", up: +big.up || 0 };
+      if (ctx && ctx.waitUntil) ctx.waitUntil(env.KV.put("xlsxm", JSON.stringify(obj)).catch(() => {}));
+    }
     if (ctx && ctx.waitUntil && await autoKick("kd", Date.now() - (+obj.up || 0)))
       ctx.waitUntil(ghDispatch("kdocs-cloud-data.yml"));
     return J({ ok: true, ts: obj.ts || "", by: obj.by || "", up: +obj.up || 0 });   // up=最近成功跑批时间戳（本机哨兵用，2026-10-24）
