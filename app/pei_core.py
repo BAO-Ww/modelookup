@@ -1511,8 +1511,14 @@ def _zhipu_vision(api_key, data_url, prompt):
     return d["choices"][0]["message"]["content"]
 
 
+# 2026-11-02 用户令「把商汤弄成首选」：sn_key.txt 是本机私有文件、不随包发布，
+# Mac 装完没有它 → 商汤整个不参与，只剩 GLM。改成跟 GLM 一样三级：env → 本机 → 内置兜底，
+# 这样每台机器一开始就是商汤先看图、失败才落 GLM。想换 key 仍可本机放 sn_key.txt 覆盖。
+_BUILTIN_SN_KEY = "sk-rtviXN9tAkYvRWrI7rc4exs2McO3a2OA"
+
+
 def _sn_key():
-    """商汤 SenseNova key：env ML_SN_KEY → wp("sn_key.txt")。没有返回空串。
+    """商汤 SenseNova key：env ML_SN_KEY → wp("sn_key.txt") → 内置兜底。
     2026-10-24 用户接入（sk- 开头，token.sensenova.cn 免费额度）。"""
     k = os.environ.get("ML_SN_KEY") or ""
     if k:
@@ -1527,7 +1533,7 @@ def _sn_key():
                     return t
     except Exception:
         pass
-    return ""
+    return _BUILTIN_SN_KEY
 
 
 def _sn_vision(api_key, data_url, prompt):
