@@ -23,6 +23,10 @@ import state
 import winref
 from appwin import auto_updater, build_menu, yy_alert_loop    # 跨平台复用
 from config import APP_NAME, HOST
+try:                                      # 2026-11-02 用户令：窗口标题带版本号
+    from config import APP_TITLE
+except ImportError:
+    APP_TITLE = APP_NAME
 from paths import is_frozen, wp
 from state import _tick, set_state
 from updater import do_update, xinsheng_follower, xlsx_follower
@@ -206,7 +210,7 @@ def run_app(httpd, port, startup_xlsx=None):
     lw, lh, lx, ly = fit_window(1180, 860)
 
     winref.MAIN_WIN = webview.create_window(
-        APP_NAME,
+        APP_TITLE,                             # 2026-11-02 用户令：标题带版本号
         url=url,
         width=w, height=h, x=x, y=y,
         min_size=(900, 600),

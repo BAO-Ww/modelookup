@@ -33,10 +33,15 @@ class ApiPostMixin:
                 state.LOG.append("权限已同步：%s（%s）" % (
                     d.get("u") or "?", "管理号" if d.get("role") == "admin" else "子账号"))
                 # 2026-10-09 用户要求：标题栏显示当前登录账号（2026-10-13：去掉「（子账号）/（管理号）」后缀）
+                # 2026-11-02 用户令：标题要带版本号——型号查询 v3.0.34 — B（版本号从 config 取，别再写死）
                 try:
                     _u = str(d.get("u") or "")
                     if winref.MAIN_WIN is not None:
-                        winref.MAIN_WIN.set_title("型号查询 — %s" % _u if _u else "型号查询")
+                        try:
+                            from config import APP_TITLE as _TT
+                        except ImportError:
+                            _TT = "型号查询"
+                        winref.MAIN_WIN.set_title(("%s — %s" % (_TT, _u)) if _u else _TT)
                 except Exception:
                     pass
                 # 按角色重画原生菜单：子账号只留 账号管理/退出登录
