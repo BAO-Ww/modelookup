@@ -399,6 +399,8 @@ def build_menu(sub=False):
             # 2026-10-31 用户令「剩下全改」：这些页内面板也从菜单能开
             MenuAction("图片墙（全部成片）", lambda: js_click("extwall")),
             MenuAction("后台任务（出图/文案排队）", lambda: js_click("extjobs")),
+            # 2026-11-01 云端体检：数据新鲜度/抓取流水/健康分，页内面板（worker /diag，管理号）
+            MenuAction("云端体检（干没干活一眼看全）", lambda: js_click("extdiag")),
             # 2026-10-31 22:03 用户令：价格嫌疑清单 / 表格视图 / 变更日志 三个菜单入口去掉
         ]),
         Menu("账号(&A)", [

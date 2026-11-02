@@ -1667,6 +1667,17 @@ async function route(request, env, path, ctx) {
     return run ? { id: run.id, num: run.run_number, status: run.status,
                    con: run.conclusion, at: run.created_at } : null;
   }
+  // 云端体检（2026-11-01）：最近 N 次 run 明细（带触发方式 event，分清本机哨兵/CF 兜底/手动）
+  async function ghRuns(wf, n) {
+    const r = await fetch(
+      "https://api.github.com/repos/BAO-Ww/modelookup/actions/workflows/" + wf + "/runs?per_page=" + (n || 6),
+      { headers: { "Authorization": "Bearer " + (env.GH_TOKEN || ""),
+                   "User-Agent": "modelookup-worker", "Accept": "application/vnd.github+json" } });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return (d.workflow_runs || []).map(x => ({ id: x.id, num: x.run_number, status: x.status,
+      con: x.conclusion, at: x.created_at, ev: x.event || "" }));
+  }
   if (path === "/citrigger" && request.method === "POST") {
     // 审计（S2）：原来任何登录者都能触发 GitHub Actions。现在限管理号，
     // 或被明确勾了「更新面板」权限的子账号（面板上有更新按钮的人）；外加 60 秒节流。
@@ -1698,6 +1709,23 @@ async function route(request, env, path, ctx) {
     let _cronlg = [];
     try { _cronlg = JSON.parse((await env.KV.get("cronlog")) || "[]"); } catch (e) {}
     return J({ ok: true, yy, kd, cron: _cronlg });   // cron：CF 派班日志（最近40条，方案B）
+  }
+
+  if (path === "/diag" && request.method === "GET") {
+    // 云端体检（2026-11-01 用户令「看看云端的流程和到底干活还是没干活」）：只有管理号。
+    // 聚合四路原料，一次带回：①数据新鲜度（xlsxm 小键）②CF 派班流水（cronlog）
+    // ③两个抓取 workflow 最近 6 次 run ④本机 runner 在线状态。健康分/诊断结论前端算。
+    const users = await getUsers(env);
+    const me = users[who] || {};
+    if (me.role !== "admin") return jerr("云端体检只有管理号能看", 403);
+    const meta = (await getJSON(env, "xlsxm", null)) || {};
+    let cronLg = [];
+    try { cronLg = JSON.parse((await env.KV.get("cronlog")) || "[]"); } catch (e) {}
+    let yy = null, kd = null, runner = null;
+    try { [yy, kd, runner] = await Promise.all([
+      ghRuns(CI_WF.yy, 6), ghRuns(CI_WF.kd, 6), cronRunnerOnline(env)]); } catch (e) {}
+    return J({ ok: true, xlsx: { ts: meta.ts || "", by: meta.by || "", up: +meta.up || 0 },
+               cron: cronLg, yy, kd, runner, now: Date.now() });
   }
 
   return jerr("接口不存在", 404);
