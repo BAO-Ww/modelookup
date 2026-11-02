@@ -1159,6 +1159,22 @@ def _interior_ink(im):
     return ink / float(tot)
 
 
+def _vision_key():
+    """尺寸图 AI 判定用的视觉 key（2026-11-02 Mac 实锤修复）。
+
+    原来这里给 pei_core._vision_call 传的是 None —— 只有 sn_key.txt（商汤）存在时
+    才有 key 可用，GLM 分支永远加不进去。而 sn_key.txt 是**本机私有文件、不随包发布**，
+    Mac 上根本没有 → _vision_call 直接返回 None（0.0s，连网络都没发），
+    _ai_is_sizeimg / _ai_read_size_nums 全部失效，尺寸图只能靠像素启发式瞎猜。
+    改：拿 copywriter 的 GLM key（env → 本机 glm_key.txt → 内置兜底，三级必有一份），
+    这样 Mac 零配置也能看图；有商汤 key 的机器仍优先烧商汤（_vision_call 内部顺序不变）。"""
+    try:
+        import copywriter as _cw
+        return (_cw._load_glm_key() or "").strip() or None
+    except Exception:
+        return None
+
+
 def _ai_read_size_nums(path, log=None):
     """AI 视觉读官方尺寸图上印的数字 → (宽, 高, 深) 或 None。
     2026-10-26：参数表的「外形尺寸」常有横竖颠倒/包装尺寸混入（ES60H-Q3 参数
@@ -1175,7 +1191,7 @@ def _ai_read_size_nums(path, log=None):
         buf = io.BytesIO()
         im2.save(buf, "JPEG", quality=85)
         data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-        txt = pei_core._vision_call(None, data_url,
+        txt = pei_core._vision_call(_vision_key(), data_url,
             "这是家电产品的尺寸线框图。读出图上标注的毫米数字：主视图的宽和高，"
             "以及俯视图/侧视图表示深度的那个数字。只回答一行 JSON："
             '{"w":数字,"h":数字,"d":数字}，某个读不出来就填 null，不要解释', log=log)
@@ -1216,7 +1232,7 @@ def _ai_is_sizeimg(im, log=None):
         buf = io.BytesIO()
         im2.save(buf, "JPEG", quality=80)
         data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-        txt = pei_core._vision_call(None, data_url,
+        txt = pei_core._vision_call(_vision_key(), data_url,
             "这是家电产品的官方尺寸示意图吗？三条必须同时满足："
             "①画的是整机外形（正视图/侧视图/俯视图之一）；"
             "②带尺寸标注线或箭头；"
