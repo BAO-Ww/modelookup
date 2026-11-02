@@ -364,6 +364,17 @@ class ApiPostMixin:
                 elif act == "quota":
                     q = extras.quota_bump(int(d.get("n") or 1))
                     r = {"ok": True, "quota": q}
+                elif act == "citrigger":
+                    # 云端体检一键重派（2026-11-01）：只触发不等待（跑完各机器自动同步）。
+                    # 权限由 worker /citrigger 上游把门（管理号或勾了更新面板权限）。
+                    import cloud as _cl
+                    try:
+                        j, err = _cl.cloud_req("/citrigger", "POST",
+                                               {"wf": str(d.get("wf") or "all")}, timeout=60)
+                        r = j if (j and j.get("ok") and not err) else \
+                            {"ok": False, "msg": err or (j or {}).get("msg") or "触发失败"}
+                    except Exception as e:
+                        r = {"ok": False, "msg": str(e)}
                 else:
                     r = {"ok": False, "msg": "未知操作：" + act}
             except Exception as e:

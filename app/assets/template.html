@@ -528,6 +528,29 @@ mark.hlm{background:#fff3bf;color:inherit;padding:0 1px;border-radius:3px}
 .exgrid a.on{border-color:var(--brand);box-shadow:0 0 0 2px rgba(46,107,230,.16)}
 .exgrid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
 @media(max-width:760px){.exgrid2{grid-template-columns:1fr}}
+/* 云端体检（2026-11-01）：心跳灯/卡片/流水 */
+.dgtop{display:flex;align-items:center;gap:12px;padding:4px 2px 12px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.dgdot{display:inline-block;width:14px;height:14px;border-radius:50%;flex:none;vertical-align:-2px}
+.dgdot.ok{background:#12b76a;box-shadow:0 0 0 4px rgba(18,183,106,.15);animation:dgpulse 2s ease-in-out infinite}
+.dgdot.warn{background:#f79009;box-shadow:0 0 0 4px rgba(247,144,9,.15)}
+.dgdot.bad{background:#d92d20;box-shadow:0 0 0 4px rgba(217,45,32,.15)}
+@keyframes dgpulse{0%,100%{opacity:1}50%{opacity:.45}}
+.dggrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+@media(max-width:760px){.dggrid{grid-template-columns:1fr}}
+.dgcard{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fafbfd;margin-bottom:10px;text-align:left}
+.dgcard .dgbig{text-align:left}
+.dggrid .dgcard{margin-bottom:0}
+.dgch{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink2);margin-bottom:6px}
+.dgch b{margin-left:auto;color:var(--ink)}
+.dgbig{font-size:15px;font-weight:600;margin-bottom:2px}
+.dgrun{display:flex;gap:10px;font-size:12px;color:var(--ink2);padding:2px 0;border-top:1px dashed var(--line2)}
+.dgrun span:nth-child(2){width:44px}.dgrun span:nth-child(3){width:70px}
+.dgcron{font-family:Consolas,Menlo,monospace;font-size:11.5px;color:var(--ink2);padding:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dgcron.bad{color:#b42318;font-weight:600}
+.dgdg{font-size:12.5px;padding:5px 8px;border-radius:8px;margin:3px 0}
+.dgdg.ok{background:rgba(18,183,106,.08);color:#0f7a45}
+.dgdg.warn{background:rgba(247,144,9,.1);color:#b54708}
+.dgdg.bad{background:rgba(217,45,32,.08);color:#b42318}
 .extblwrap{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .extblbar{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12.5px;color:var(--ink2);
   background:#fafbfd;border-bottom:1px solid var(--line)}
@@ -612,6 +635,7 @@ mark.hlm{background:#fff3bf;color:inherit;padding:0 1px;border-radius:3px}
         <button class="chip" id="impimg" title="导入之前导出的 补图.json">导入补图</button>
         <button class="chip" id="extwall">图片墙</button>
         <button class="chip" id="extjobs">后台任务</button>
+        <button class="chip" id="extdiag" data-exdiag="1" title="云端体检：数据新鲜度 + 抓取流水 + 健康分（只有管理号能看）">云端体检</button>
         <!-- 2026-10-31 22:03 用户令：变更日志 / 嫌疑价 / 表格视图 三个功能下线（入口与快捷键一并撤） -->
         <button class="chip" id="extver">更新日志</button>
         <button class="chip" id="extwater">水印</button>
@@ -980,6 +1004,13 @@ function rememberXy(x){
   }
   refreshXySel();
 }
+/* 挣的运费扣不扣（2026-11-02）：跟卡片 calcUpdate 同一套规则——
+   记录 nat=0（只发深莞惠）不扣；该口径不能发全国（「全国，含运费」族）不扣；其余扣 100 */
+function earnFreight(mk, it, kind){
+  if (mk && mk.nat === 0) return 0;
+  if (!it || typeof canNationwide !== 'function') return 100;
+  return canNationwide(it, kind) ? 100 : 0;
+}
 /* 卡片「已发布」后的小尾巴：多号时列出各号现价（点一个号 = 定价框改那个号的价） */
 function xyChipsHTML(c){
   var xs = markXys(c);
@@ -990,11 +1021,13 @@ function xyChipsHTML(c){
   return ' ' + xs.map(function(x){
     var on = act && act.key === x.key, s = x.k === 's';
     var col = s ? '#b45309' : '#0f7b3a', bd = s ? '#f3ddb0' : '#bfe3cb';
+    /* 2026-11-02 用户再令：胶囊不显示挣了——点开胶囊定价框里的「挣 ¥xxx」实时行才是唯一入口 */
     return '<span data-actxy="' + esc(x.key) + '" data-key="' + esc(c) + '" title="点别的胶囊=定价框切到那条；再点一下当前这条=直接改价/改口径/填闲鱼ID（整颗都能点）" style="display:inline-block;cursor:pointer;border-radius:99px;padding:1px 9px;margin:1px 0 1px 5px;font-weight:600;background:#fff;border:1px solid ' + bd + ';color:' + col + ';vertical-align:1px;'
          + (on ? 'border-color:#2e6be6;box-shadow:0 0 0 2px rgba(46,107,230,.22);' : '')
          + '">'
          + esc(x.xy) + '·' + (s ? '样机' : '正品')
-         + (isNum(x.p) ? '¥' + x.p : '') + '</span>';
+         + (isNum(x.p) ? '¥' + x.p : '')
+         + '</span>';
   }).join('');
 }
 var PRICES = load(PRICE_KEY, {});
@@ -1577,8 +1610,7 @@ function calcHTML(it){
     + (_bnc && +_bnc.sb > 0 ? ' data-bnsb="' + (+_bnc.sb) + '"' : '') + '>'
     + '<span class="cgoal" title="输入想挣多少 → 直接把标价填进右边定价框（按当前口径 + 砍价余地），不自动发布">'
     + '<span class="cl">挣</span>'
-    + '<input type="number" class="gnum" min="0" step="1" inputmode="numeric" placeholder="如 200"'
-    + (GVALS[it.c] != null && GVALS[it.c] !== '' ? ' value="' + esc(String(GVALS[it.c])) + '"' : '') + '>'
+    + '<input type="number" class="gnum" min="0" step="1" inputmode="numeric" placeholder="如 200">'
     + '</span>'
     + '<span class="cl">闲鱼定价</span>'
     + '<input type="number" min="0" step="1" inputmode="decimal" placeholder="输入你的定价"'
@@ -1635,12 +1667,14 @@ function goalPrice(box){
   var need = (gv + cost - bn + freight) / (1 - FEE);
   var mp = goalMarginPct();
   var list = mp > 0 ? need / (1 - mp) : need;
-  var base = Math.ceil(list);
-  /* 直接填「49/99 结尾」那一档（2149 这种，闲鱼最常见）；只会比公式价高，不会亏 */
-  var c0 = Math.ceil((base + 1) / 50) * 50 - 1;
+  /* 2026-11-02 用户令「我挣50怎么显示的不止50」：原「49/99 结尾」整档跳太高
+     （挣50 → 公式价 1299.8 → 尾数档直接跳 1349，挣变 98.42），废止；
+     改填精确价（向上取整到元），挣就 ≈ 目标值，后面那行挣实时跟你说真实数。 */
+  var c0 = Math.max(1, Math.ceil(list));
   if (pi){
     pi.value = c0;
     calcUpdate(box);
+    delete GVALS[box.dataset.key];   /* 挣目标是临时输入：填完这一次就作废（2026-11-02 用户令「切换了不该还有」） */
   }
   if (pn) pn.hidden = true;
 }
@@ -2731,8 +2765,23 @@ function openPubAll(m){
     Object.keys(j.all || {}).sort().forEach(function(u){
       var marks = j.all[u] || {}, ks = Object.keys(marks);
       ks.sort(function(a, b){ return (tsOf(marks[b])) - (tsOf(marks[a])); });
+      /* 2026-11-02 用户令：同一个闲鱼ID算 1 个型号（去重；没填ID的照旧一条算 1） */
+      var _seen = {}, _un = 0;
+      ks.forEach(function(k){
+        var v = marks[k];
+        var _xs = (typeof v === 'object' && v && v.xys) ? v.xys : null, _ids = [], _nox = false;
+        if (!_xs){ _nox = true; }
+        else {
+          Object.keys(_xs).forEach(function(_k2){
+            var _e = _xs[_k2] || {};
+            if (_e.xid != null && String(_e.xid) !== '') _ids.push(String(_e.xid)); else _nox = true;
+          });
+        }
+        if (_ids.length) _ids.forEach(function(id){ if (!_seen[id]){ _seen[id] = 1; _un++; } });
+        else if (_nox) _un++;
+      });
       html += '<div class="auser"><div class="arow"><span class="uname">' + esc(u) + '</span>'
-            + '<span style="font-size:12.5px;color:#7b8494">已发布 ' + ks.length + ' 个型号</span></div>';
+            + '<span style="font-size:12.5px;color:#7b8494">已发布 ' + _un + ' 个型号</span></div>';
       if (ks.length){
         html += '<div class="permchips">' + ks.map(function(k){
           var v = marks[k], p = prices[u] && prices[u][k];
@@ -2765,20 +2814,33 @@ function tsOf(v){ return typeof v === 'object' && v ? (v.t || 0) : (v || 0); }
 /* 子用户发布查看模式：横幅挪侧栏「闲鱼号」格子（2026-10-30 用户令），这里只出筛选胶囊 */
 function subBannerHTML(){
   /* 2026-10-14 用户实锤：标题里的型号数要跟顶部「闲鱼号」筛选联动——选了号就数那个号名下的 */
-  function _countSet(){
-    var n = 0;
+  /* 2026-11-02 用户令「同一个闲鱼ID算1个型号，所以是68」：按闲鱼ID去重——
+     两个型号挂同一个闲鱼ID（同一个宝贝）只算 1；没填闲鱼ID的记录照旧一条算 1。
+     countAll=true 时不管号筛选，算总数（「共 X 个」那个数）。 */
+  function _countSet(countAll){
+    var seen = {}, n = 0;
     Object.keys(SUBVIEW.set).forEach(function(k){
-      var xs = SUBVIEW.info[k] && SUBVIEW.info[k].xs;
-      if (!selXy){ n++; return; }
-      if (!xs){ if (selXy === '默认') n++; return; }   // 老格式记录只挂「默认」
-      var hit = false;
-      Object.keys(xs).forEach(function(key){ if ((String(key).split('|')[0] || key) === selXy) hit = true; });
-      if (hit) n++;
+      var xs = SUBVIEW.info[k] && SUBVIEW.info[k].xs, ids = [], nox = false;
+      if (!xs){
+        if (countAll || !selXy || selXy === '默认') nox = true;   // 老格式记录只挂「默认」
+      } else {
+        Object.keys(xs).forEach(function(key){
+          if (!countAll && selXy && (String(key).split('|')[0] || key) !== selXy) return;
+          var e = xs[key] || {};
+          if (e.xid != null && String(e.xid) !== '') ids.push(String(e.xid));
+          else nox = true;
+        });
+      }
+      if (ids.length){
+        ids.forEach(function(id){ if (!seen[id]){ seen[id] = 1; n++; } });
+      } else if (nox){
+        n++;
+      }
     });
     return n;
   }
   return '<span>看「' + esc(SUBVIEW.disp || SUBVIEW.u) + '」的发布（'
-       + (selXy ? esc(selXy) + ' ' : '') + _countSet() + ' 个型号' + (selXy ? ' / 共 ' + Object.keys(SUBVIEW.set).length + ' 个' : '') + '）</span>';
+       + (selXy ? esc(selXy) + ' ' : '') + _countSet(false) + ' 个型号' + (selXy ? ' / 共 ' + _countSet(true) + ' 个' : '') + '）</span>';
 }
 function subHeaderHTML(){
   function _chip(k, label){
@@ -3886,10 +3948,10 @@ function renderBatch(){
   if (shown < cur.length){ moreEl.hidden = false; moreEl.textContent = '向下滚动加载更多（已显示 ' + shown + ' / ' + cur.length + '）'; }
   else moreEl.hidden = true;
   Array.prototype.forEach.call(listEl.querySelectorAll('.calc'), function(box){
-    var _g = box.querySelector('.gnum');
-    if (_g && box.dataset.key && GVALS[box.dataset.key] != null && _g.value !== GVALS[box.dataset.key]) _g.value = GVALS[box.dataset.key];
-    if (_g && parseFloat(_g.value) > 0){ goalPrice(box); return; }
-    if (box.querySelector('input').value) calcUpdate(box);
+    /* 2026-11-02 用户令：挣是临时输入，重渲染不回填、不按旧挣值反灌定价；
+       但定价框有值的（已发布的卡）渲染完就直接算出平台费/挣，别挂着 — */
+    var _pi = box.querySelector('input[type=number]:not(.gnum)');
+    if (_pi && _pi.value) calcUpdate(box);
   });
 }
 function emptyHTML(q){
@@ -4760,6 +4822,7 @@ function openPickKind(k, recKey){
     + '<div style="font-weight:700;margin:12px 0 6px">这个号的闲鱼定价</div>'
     + '<input id="kindprice" type="number" min="0" step="1" placeholder="填这个号发布的价"'
     + ' style="width:100%;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:14px">'
+    + '<div id="kindearn" style="margin-top:6px;font-size:12.5px;color:#6b7280">挣：填了价就算给你看（按卡片上的成本口径）</div>'
     + '<div style="font-weight:700;margin:12px 0 6px">闲鱼ID（选填）</div>'
     + '<div style="display:flex;gap:8px;align-items:center">'
     + '<input id="kindxid" type="text" maxlength="40" placeholder="这个宝贝的闲鱼ID，发布多个时点胶囊各显各的"'
@@ -4781,7 +4844,37 @@ function openPickKind(k, recKey){
     else if (_ax0 && isNum(_ax0.p)) _pre = _ax0.p;
     else if (isNum(PRICES[k]) && PRICES[k] > 0) _pre = PRICES[k];
     if (isFinite(_pre) && _pre > 0) _kp.value = _pre;
-    setTimeout(function(){ try{ _kp.focus(); _kp.select(); }catch(e){} }, 60);
+    setTimeout(function(){ try{ _kp.focus(); _kp.select(); }catch(e){ } }, 60);
+  }
+  /* 挣多少实时跟你说（2026-11-02 用户问「闲鱼定价怎么识别我挣的钱」）：
+     挣 = 定价×(1−1.6%平台费) − 成本口径价 ＋ 出库奖励 −（发全国 100 运费），
+     口径优先跟这条记录的 cs 走，没落库的现看卡片上选的口径。 */
+  var _ke = m.querySelector('#kindearn');
+  if (_ke && _kp){
+    var _kindEarn = function(){
+      var _v = parseFloat(_kp.value);
+      var _mk = MARKED[k] || {};
+      var _cost = (_mk.cs && isFinite(+_mk.cs.v)) ? +_mk.cs.v : NaN;
+      if (!isFinite(_cost)){
+        var _bs = document.querySelectorAll('.calc');
+        for (var _bi = 0; _bi < _bs.length; _bi++){
+          if (_bs[_bi].getAttribute('data-key') === k){
+            var _cs2 = _bs[_bi].querySelector('.costsel');
+            if (_cs2 && isFinite(parseFloat(_cs2.value))) _cost = parseFloat(_cs2.value);
+            break;
+          }
+        }
+      }
+      var _bn = _mk.bn ? ((+_mk.bn.lb || 0) + (+_mk.bn.sb || 0)) : 0;
+      var _fr = earnFreight(_mk, itemOf(k), curKindOf() || 'l');
+      if (!isFinite(_v) || _v <= 0){ _ke.textContent = '挣：填了价就算给你看（按卡片上的成本口径）'; return; }
+      if (!isFinite(_cost) || _cost <= 0){ _ke.textContent = '挣：—（这张卡还没有成本口径，先在卡片上选一个）'; return; }
+      var _e = Math.round((_v * (1 - FEE) - _cost + _bn - _fr) * 100) / 100;
+      _ke.innerHTML = '挣 <b style="color:' + (_e >= 0 ? '#0f7b3a' : '#c0392b') + '">¥' + _e + '</b>'
+        + '（=定价×98.4% −成本' + _cost + (_bn ? ' ＋奖' + _bn : '') + (_fr ? ' −运费100' : '') + '）';
+    };
+    _kp.addEventListener('input', _kindEarn);
+    _kindEarn();
   }
   /* 闲鱼ID预填：从胶囊点进来的（recKey）带出那条记录自己的ID；＋再发一号留空各填各的 */
   var _kx = m.querySelector('#kindxid');
@@ -6561,9 +6654,8 @@ listEl.addEventListener('change', function(e){
     var k = box.dataset.key, opt = sel.options[sel.selectedIndex];
     if (k && opt && opt.getAttribute('data-l')){
       saveCostSel(k, { l: opt.getAttribute('data-l'), v: sel.value });
-      /* 没发布的卡 saveCostSel 直接 return（不重渲染），这里手动按「挣 X」重算直填；
-         已发布的卡 saveCostSel→run()→renderBatch 里统一重算（2026-10-31 用户令） */
-      if (!MARKED[k] && GVALS[k] != null && parseFloat(GVALS[k]) > 0) goalPrice(box);
+      /* 2026-11-02 用户令「我输了的不都是临时的嘛」：挣目标一次性，切口径后
+         不再按旧挣值反灌定价框（定价框里已填的精确价保持不动） */
     }
   }
 });
@@ -6594,6 +6686,8 @@ function pickCell(cell){
   }
   /* --- 价格格：成本切到同口径 + 定价框填这个价 --- */
   if (sel){
+    /* 2026-11-02 用户令「切换了不该还有」：换价=挣目标作废，挣框当场清空 */
+    var _gg = box.querySelector('.gnum'); if (_gg) _gg.value = '';
     var want = normBasis(cell.dataset.basis);
     for (var i = 0; i < sel.options.length; i++){
       if (normBasis(sel.options[i].getAttribute('data-l')) === want){
@@ -6607,12 +6701,10 @@ function pickCell(cell){
   }
   if (inp && isFinite(parseFloat(cell.dataset.v))) inp.value = cell.dataset.v;
   /* 走一遍 input 事件：calcUpdate（挣/平台费草稿预览）挂在那儿，别抄第二份。
-     2026-10-14 定稿两段式后点格填的也是草稿——不动记录/胶囊/云端 */
-  var _gv = box.dataset.key ? GVALS[box.dataset.key] : null;
+     2026-10-14 定稿两段式后点格填的也是草稿——不动记录/胶囊/云端。
+     2026-11-02 用户令「切换了不该还有」：点格/胶囊=换价，不再按旧挣值反灌
+     （dispatch input 会把挣框一并清空，临时输入到此为止） */
   if (inp) inp.dispatchEvent(new Event('input', { bubbles: true }));
-  /* dispatch 的 input 会清 GVALS（手改价=放弃挣目标）——点格切口径不算手改，恢复后按挣 X 重算直填 */
-  if (_gv != null && box.dataset.key) GVALS[box.dataset.key] = _gv;
-  if (_gv != null && parseFloat(_gv) > 0) goalPrice(box);
 }
 /* 看子用户发布 = 只读（2026-10-10 用户补刀）：点价格格会把价填进定价框并
    dispatch input → PRICES 存进全局定价表——readonly 挡得住键盘挡不住这个，
@@ -7800,6 +7892,138 @@ function openVersPanel(c){
   });
 }
 
+/* ---------------- 云端体检（2026-11-01：云端流程+干没干活一屏看全，只有管理号） ---------------- */
+var _diagTmr = null;
+function openDiag(){
+  var m = exModal('云端体检', '<div id="diagbox" style="color:#98a2b3;padding:30px 0;text-align:center">体检中…</div>', true);
+  function draw(){
+    authFetch('/diag').then(function(j){
+      var box = m.querySelector('#diagbox');
+      if (!box) return;                        // 弹窗已被关掉
+      if (!j || !j.ok){ box.innerHTML = '<div style="color:#d92d20">拿不到体检数据：' + esc((j && j.msg) || '接口失败') + '</div>'; return; }
+      box.innerHTML = diagHtml(j);
+      var re = box.querySelector('[data-diagref]');
+      if (re) re.addEventListener('click', function(){ draw(); });
+      var go = box.querySelector('[data-diagkick]');
+      if (go) go.addEventListener('click', function(){ diagKick(go); });
+    });
+  }
+  draw();
+  if (_diagTmr) clearInterval(_diagTmr);
+  _diagTmr = setInterval(function(){          // 面板开着每 30 秒自动复检
+    if (!document.getElementById('exmask')){ clearInterval(_diagTmr); _diagTmr = null; return; }
+    draw();
+  }, 30000);
+}
+function _diagAgo(ts){
+  if (!ts) return '—';
+  var n = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  return n < 1 ? '刚刚' : n + ' 分钟前';
+}
+function _diagBJ(){                           // 北京墙钟小时（营业 8:40-23:40 之外算休班，新鲜度不扣分）
+  var d = new Date(Date.now() + (8 - (-new Date().getTimezoneOffset() / 60)) * 3600000);
+  return d.getHours() + d.getMinutes() / 60;
+}
+function diagHtml(j){
+  var now = j.now || Date.now();
+  var up = +((j.xlsx || {}).up) || 0;
+  var by = (j.xlsx || {}).by || '';
+  var open = (function(){ var h = _diagBJ(); return h >= 8.5 && h <= 23.75; })();
+  // ① 数据新鲜度（40 分）：休班不扣
+  var freshMin = up ? Math.round((now - up) / 60000) : 9999;
+  var freshScore = !open ? 40 : (freshMin <= 35 ? 40 : freshMin <= 70 ? 28 : freshMin <= 100 ? 15 : 0);
+  var freshDot = !open ? 'ok' : (freshMin <= 35 ? 'ok' : freshMin <= 70 ? 'warn' : 'bad');
+  var freshTxt = !open ? '休班中（8:40 开工）'
+    : (up ? (freshMin <= 35 ? '节奏正常' : freshMin + ' 分钟没更新了') : '从没同步过');
+  // ② workflow 成功率（40 分）
+  function wfStat(runs){
+    if (!runs) return { s: 0, txt: '查不到 run（GitHub 查询失败）', dot: 'bad', last: null };
+    var busy = function(r){ return r && (r.status === 'in_progress' || r.status === 'queued' || r.status === 'waiting'); };
+    var last = runs[0] || null;
+    var sc = last && last.con === 'success' ? 20 : (busy(last) ? 12 : 4);
+    return { s: sc, last: last,
+      txt: last ? (busy(last) ? '正在跑（第 ' + last.num + ' 次）'
+        : last.con === 'success' ? '最近一次成功 · ' + _diagAgo(new Date(last.at).getTime())
+        : '最近一次失败（' + last.con + '）') : '还没有运行记录',
+      dot: last && !busy(last) && last.con !== 'success' ? 'bad' : 'ok' };
+  }
+  var yy = wfStat(j.yy), kd = wfStat(j.kd);
+  // ③ runner（10 分）④ cronlog（10 分）
+  var runScore = j.runner === true ? 10 : j.runner === false ? 5 : 0;
+  var cronLg = j.cron || [];
+  var cronBad = false;
+  for (var i = Math.max(0, cronLg.length - 10); i < cronLg.length; i++)
+    if (/失败|未识别|error/i.test(cronLg[i])) cronBad = true;
+  var score = freshScore + yy.s + kd.s + runScore + (cronBad ? 4 : 10);
+  var dot = score >= 80 ? 'ok' : score >= 60 ? 'warn' : 'bad';
+  var dotTxt = dot === 'ok' ? '运转正常' : dot === 'warn' ? '有点不对劲' : '出问题了';
+  // 诊断（人话结论）
+  var dg = [];
+  function _busy(r){ return r && (r.status === 'in_progress' || r.status === 'queued' || r.status === 'waiting'); }
+  if (open && freshMin > 70) dg.push(['bad', '数据 ' + freshMin + ' 分钟没更新了——本机抓取哨兵可能没在跑（查计划任务 ModelLookupDataTrigger）']);
+  else if (open && freshMin > 35) dg.push(['warn', '数据 ' + freshMin + ' 分钟没更新，比正常节奏（≤35 分钟）慢一点，再观察一轮']);
+  if (yy.last && yy.last.con && yy.last.con !== 'success' && !_busy(yy.last))
+    dg.push(['bad', '用友库存抓取最近一次失败（' + _diagAgo(new Date(yy.last.at).getTime()) + '）——多半是用友登录挂了']);
+  if (kd.last && kd.last.con && kd.last.con !== 'success' && !_busy(kd.last))
+    dg.push(['bad', '金山表格抓取最近一次失败（' + _diagAgo(new Date(kd.last.at).getTime()) + '）']);
+  if (_busy(yy.last) && now - new Date(yy.last.at).getTime() > 20 * 60000)
+    dg.push(['warn', '用友抓取第 ' + yy.last.num + ' 次跑了 ' + _diagAgo(new Date(yy.last.at).getTime())
+      + '还没结束——疑似卡住，可点下面「重新派发」']);
+  if (_busy(kd.last) && now - new Date(kd.last.at).getTime() > 20 * 60000)
+    dg.push(['warn', '金山抓取第 ' + kd.last.num + ' 次跑了 ' + _diagAgo(new Date(kd.last.at).getTime())
+      + '还没结束——疑似卡住，可点下面「重新派发」']);
+  if (j.runner === false) dg.push(['warn', '本机抓取端离线（电脑关机中）——这段时间由 GitHub 云端 runner 兜底']);
+  if (j.runner === null) dg.push(['warn', '查不到抓取端状态（GitHub 接口抖动），下次刷新再看']);
+  if (cronBad) dg.push(['warn', 'CF 派班流水最近出现失败/未识别班次，往下看流水找红字']);
+  if (j.yy === null || j.kd === null) dg.push(['bad', 'GitHub 查询失败——检查 worker 的 GH_TOKEN 配置']);
+  if (!dg.length) dg.push(['ok', '四路全绿：数据新鲜、两个抓取工作流正常、派班流水干净']);
+  // 渲染
+  function runRow(r){
+    if (!r) return '';
+    var ic = (r.status === 'in_progress' || r.status === 'queued' || r.status === 'waiting')
+      ? '⏳' : (r.con === 'success' ? '✅' : '❌');
+    var ev = { schedule: '定时', workflow_dispatch: '手动/派发', repository_dispatch: '云端派发' }[r.ev] || (r.ev || '?');
+    return '<div class="dgrun"><span>' + ic + '</span><span>#' + r.num + '</span><span>' + ev
+      + '</span><span>' + _diagAgo(new Date(r.at).getTime()) + '</span></div>';
+  }
+  function cronRow(l, i){
+    var bad = /失败|未识别|error/i.test(l);
+    return '<div class="dgcron' + (bad ? ' bad' : '') + '">' + esc(l) + '</div>';
+  }
+  var h = ''
+    + '<div class="dgtop">'
+    +   '<span class="dgdot ' + dot + '"></span>'
+    +   '<div><b style="font-size:17px">云端健康 ' + score + ' 分</b><div style="color:#98a2b3;font-size:12px">' + dotTxt + ' · 30 秒自动复检</div></div>'
+    + '</div>'
+    + '<div class="dggrid">'
+    +   '<div class="dgcard"><div class="dgch"><span class="dgdot ' + freshDot + '" style="width:8px;height:8px"></span>数据新鲜度 <b>' + freshScore + '/40</b></div>'
+    +     '<div class="dgbig">' + (up ? esc(by || '—') + ' · ' + _diagAgo(up) : '—') + '</div>'
+    +     '<div style="color:#98a2b3;font-size:12px">' + freshTxt + '（表格版本 ' + esc((j.xlsx || {}).ts || '无') + '）</div></div>'
+    +   '<div class="dgcard"><div class="dgch"><span class="dgdot ' + (j.runner === true ? 'ok' : j.runner === false ? 'warn' : 'bad') + '" style="width:8px;height:8px"></span>本机抓取端 <b>' + runScore + '/10</b></div>'
+    +     '<div class="dgbig">' + (j.runner === true ? '在线' : j.runner === false ? '离线' : '未知') + '</div>'
+    +     '<div style="color:#98a2b3;font-size:12px">' + (j.runner === false ? '电脑关机中，云端 runner 兜底' : '每分钟扫班点的哨兵') + '</div></div>'
+    + '</div>'
+    + '<div class="dggrid">'
+    +   '<div class="dgcard"><div class="dgch"><span class="dgdot ' + kd.dot + '" style="width:8px;height:8px"></span>金山抓取（价格/型号） <b>' + kd.s + '/20</b></div><div style="font-size:12px;margin:4px 0">' + kd.txt + '</div>' + (j.kd || []).slice(0, 5).map(runRow).join('') + '</div>'
+    +   '<div class="dgcard"><div class="dgch"><span class="dgdot ' + yy.dot + '" style="width:8px;height:8px"></span>用友抓取（实时库存） <b>' + yy.s + '/20</b></div><div style="font-size:12px;margin:4px 0">' + yy.txt + '</div>' + (j.yy || []).slice(0, 5).map(runRow).join('') + '</div>'
+    + '</div>'
+    + '<div class="dgcard"><div class="dgch">🩺 诊断</div>'
+    +   dg.map(function(d){ return '<div class="dgdg ' + d[0] + '">' + d[1] + '</div>'; }).join('') + '</div>'
+    + '<div class="dgcard"><div class="dgch">CF 派班流水（最近 ' + Math.min(15, cronLg.length) + ' 条）</div>'
+    +   (cronLg.length ? cronLg.slice(-15).reverse().map(cronRow).join('') : '<div style="color:#98a2b3">还没有流水</div>') + '</div>'
+    + '<div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end">'
+    +   '<button class="exmini" data-diagref="1">↻ 重新体检</button>'
+    +   '<button class="exmini" data-diagkick="1">▶ 重新派发云端抓取</button></div>';
+  return h;
+}
+function diagKick(btn){                       // 一键重派（服务端已有 60 秒节流 + 权限门）
+  btn.disabled = true; btn.textContent = '派发中…';
+  exPost({ act: 'citrigger', wf: 'all' }).then(function(j){
+    btn.disabled = false; btn.textContent = '▶ 重新派发云端抓取';
+    alert(j && j.ok ? '已派发！金山+用友马上开始跑，跑完各机器自动同步。' : ((j && j.msg) || '派发失败'));
+  });
+}
+
 /* ---------------- 图片墙（一窗看全部图） ---------------- */
 function openWall(){
   var m = exModal('图片墙 · 所有出过的图', '<div style="color:#98a2b3">读图…</div>', true);
@@ -8043,6 +8267,9 @@ function exSnap(){
   exPost({ act: 'snap', prices: pr, stocks: st }).then(function(j){
     if (!j || !j.ok) return;
     var pc = (j.price && j.price.changed) || [], sc = (j.stock && j.stock.changed) || [];
+    /* 2026-11-02 用户令「库存变的不用通知我，除非没库存；我要的是价格变了通知我」：
+       库存突变一律不弹，只有变到 0（没库存了）才说；价格变动照常全报 */
+    sc = sc.filter(function(x){ return +x.n <= 0; });
     if (!pc.length && !sc.length) return;
     exAlert(pc, sc);
   });
@@ -8052,7 +8279,7 @@ function exAlert(pc, sc){
   if (!box) return;
   var bits = [];
   if (pc.length) bits.push('价格变动 <b>' + pc.length + '</b> 台');
-  if (sc.length) bits.push('库存突变 <b>' + sc.length + '</b> 台');
+  if (sc.length) bits.push('没库存 <b>' + sc.length + '</b> 台');
   var detail = [];
   pc.slice(0, 6).forEach(function(x){
     detail.push('<a class="pubwarn-chip" href="javascript:void(0)" data-exsearch="' + esc(x.m) + '">'
@@ -8177,6 +8404,7 @@ function exBoot(){
     /* 侧栏工具按钮 + 菜单触发的隐藏按钮，一律走 addEventListener（innerHTML 里禁内联事件） */
     var BIND = { wallbtn: openWall, extwall: openWall, jobsbtn: openJobs, extjobs: openJobs,
                  extsus: openSuspect, extchg: openChg, exttbl: openTable, extver: openVerLog,
+                 /* extdiag 走顶层委托 data-exdiag（2026-11-01），不依赖 exBoot 时序 */
                  waterbtn: openWater, extwater: openWater, exttag: openTagPanel, exttbl2: openTable };
     for (var id in BIND){
       (function(el, fn){
@@ -8194,6 +8422,7 @@ document.addEventListener('click', function(e){
   if ((el = q('data-exhist'))){ e.preventDefault(); openHistPanel(el.getAttribute('data-exhist')); return; }
   if ((el = q('data-extag'))){ e.preventDefault(); openTagPanel(el.getAttribute('data-extag')); return; }
   if ((el = q('data-excmp'))){ e.preventDefault(); openCmpPanel(el.getAttribute('data-excmp')); return; }
+  if ((el = q('data-exdiag'))){ e.preventDefault(); openDiag(); return; }
   if ((el = q('data-exparam'))){ e.preventDefault(); openParamPanel(el.getAttribute('data-exparam')); return; }
   if ((el = q('data-excands'))){ e.preventDefault(); openCands(el.getAttribute('data-excands')); return; }
   if ((el = q('data-exvers'))){ e.preventDefault(); openVersPanel(el.getAttribute('data-exvers')); return; }
