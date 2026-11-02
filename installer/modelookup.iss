@@ -1,5 +1,5 @@
 ﻿; ============================================================
-;  型号查询 · 隆阳电器（公布版）—— Windows 安装包
+;  型号查询（公布版）—— Windows 安装包
 ;  用 Inno Setup 6 编译：
 ;     ISCC.exe modelookup.iss
 ;     ISCC.exe /DMyAppVer=2.1 /DMyAppVerNum=2.1.0.0 modelookup.iss    ← CI 用这个注入版本号
@@ -15,10 +15,11 @@
 #endif
 
 #define AppName     "型号查询"
-#define AppNameFull "型号查询 · 隆阳电器"
+#define AppNameFull "型号查询"
 #define AppVer      MyAppVer
 #define AppVerNum   MyAppVerNum
-#define AppPublisher "隆阳电器"
+; 2026-11-02 用户令：安装/卸载界面只写「型号查询 v3.0.xx」，不带公司名（发布者同步去掉）
+#define AppPublisher "型号查询"
 #define ExeName     "ModelLookup.exe"
 
 [Setup]

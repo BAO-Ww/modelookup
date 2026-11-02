@@ -1868,6 +1868,9 @@ function authFetch(path, opts, withRetry){
     /* /puball 是大接口（整包 25KB，服务端 3 个子用户 × 2 次 KV 读串行，实测 4s～60s 浮动）：
        主域给它留 28 秒，别把「慢」误判成「断」→ 关黑屋 → 后面全部降级 */
     if (h === AUTH_HOSTS[0] && path.indexOf('/puball') === 0) tmo = 28000;
+    /* /diag 云端体检也是重查询（worker 要实时去 GitHub 拉两条 workflow 流水，实测 2s+，
+       GitHub 慢一下就超 4s 默认值被误报「网络不通」——2026-11-02 实锤）→ 给 20 秒 */
+    if (h === AUTH_HOSTS[0] && path === '/diag') tmo = 20000;
     if (ctl){
       o.signal = ctl.signal;
       timer = setTimeout(function(){ try { ctl.abort(); } catch(e){} }, tmo);
@@ -6509,8 +6512,8 @@ listEl.addEventListener('click', function(e){
       }
       updateLossBanner();                  // 取消发布后亏钱名单可能变短，横幅跟着收
     } else {
-      /* 2026-10-31 发布前三查：图齐不齐 / 有没有文案 / 填没填价 / 链接回填，缺了先提示，能照样发 */
-      exPrecheck(k, function(){ openPickKind(k); });
+      /* 2026-11-02 用户令：发布前三查弹窗整个去掉——别再拦，点标记发布直接进弹窗 */
+      openPickKind(k);
     }
     return;
   }
@@ -8268,8 +8271,11 @@ function exSnap(){
     if (!j || !j.ok) return;
     var pc = (j.price && j.price.changed) || [], sc = (j.stock && j.stock.changed) || [];
     /* 2026-11-02 用户令「库存变的不用通知我，除非没库存；我要的是价格变了通知我」：
-       库存突变一律不弹，只有变到 0（没库存了）才说；价格变动照常全报 */
-    sc = sc.filter(function(x){ return +x.n <= 0; });
+       库存突变一律不弹，只有变到 0（没库存了）才说；价格变动照常全报。
+       2026-11-02 用户再令「这个库存没了也不需要提醒，我要的是我发布的库存没了再提醒」：
+       没库存也只报自己标记发布了的（MARKED 里有记录的），没发布的库存归零不出黄条
+       （已发布型号的没库存另有 pubStockWarn 横幅盯，这条是数据变动快报的口径） */
+    sc = sc.filter(function(x){ return +x.n <= 0 && MARKED[x.m]; });
     if (!pc.length && !sc.length) return;
     exAlert(pc, sc);
   });
@@ -8300,27 +8306,8 @@ function exAlert(pc, sc){
   if (x) x.addEventListener('click', function(){ box.hidden = true; });
 }
 
-/* ---------------- 发布前三查 ---------------- */
-function exPrecheck(c, go){
-  exGet('precheck', '?model=' + encodeURIComponent(c) + '&price=' + encodeURIComponent(PRICES[c] || '')).then(function(j){
-    if (!j || !j.ok){ go(); return; }
-    var items = j.items || [];
-    var bad = items.filter(function(x){ return !x.ok; });
-    if (!bad.length){ go(); return; }
-    var html = '<div style="font-size:12.5px;color:#8a93a3;margin-bottom:8px">发布前过一眼，缺的能补就补；不补也能发，只是发出去体验差。</div>'
-      + '<table>' + items.map(function(x){
-          return '<tr><td style="width:64px"><b>' + esc(x.k) + '</b></td>'
-            + '<td style="width:40px" class="' + (x.ok ? 'ok' : 'bad') + '">' + (x.ok ? '✓' : '缺') + '</td>'
-            + '<td style="font-size:12.5px">' + esc(x.x) + '</td></tr>';
-        }).join('') + '</table>'
-      + '<div style="margin-top:14px;text-align:right">'
-      + '<a id="expc_go" role="button" style="display:inline-block;background:#2e6be6;color:#fff;border-radius:9px;padding:8px 20px;font-weight:600;cursor:pointer">照样发布</a>'
-      + '<a id="expc_no" role="button" style="display:inline-block;margin-left:12px;color:#6b7280;padding:8px 4px;cursor:pointer">先去补</a></div>';
-    var m = exModal('发布前三查 · ' + c, html);
-    m.querySelector('#expc_go').addEventListener('click', function(){ m.remove(); go(); });
-    m.querySelector('#expc_no').addEventListener('click', function(){ m.remove(); });
-  });
-}
+/* ---------------- 发布前三查（2026-11-02 用户令整个下线，函数留空壳防外部引用） ---------------- */
+function exPrecheck(c, go, draft){ if (typeof go === 'function') go(); }
 
 /* ---------------- 打字候选（2026-10-31 晚改版：自绘下拉，对齐搜索框） ----------------
    原生 datalist 弹层宽度跟输入框对不上、样式也管不了——自绘：宽度=输入框，
