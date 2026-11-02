@@ -16,6 +16,10 @@ import state
 import winref
 from cloud import stock_pull_cloud, yy_alert_poll
 from config import APP_NAME, APP_VERSION, HOST, ONLINE_SHARE, PRICE_SHARE, RUN_KEY
+try:
+    from config import APP_TITLE
+except ImportError:                       # 老版本 config（理论上不会有）兜底
+    APP_TITLE = APP_NAME
 from paths import is_frozen, rp, wp
 from payload import get_payload
 from state import _tick, has_perm, read_state, set_state
@@ -399,8 +403,6 @@ def build_menu(sub=False):
             # 2026-10-31 用户令「剩下全改」：这些页内面板也从菜单能开
             MenuAction("图片墙（全部成片）", lambda: js_click("extwall")),
             MenuAction("后台任务（出图/文案排队）", lambda: js_click("extjobs")),
-            # 2026-11-01 云端体检：数据新鲜度/抓取流水/健康分，页内面板（worker /diag，管理号）
-            MenuAction("云端体检（干没干活一眼看全）", lambda: js_click("extdiag")),
             # 2026-10-31 22:03 用户令：价格嫌疑清单 / 表格视图 / 变更日志 三个菜单入口去掉
         ]),
         Menu("账号(&A)", [
@@ -416,6 +418,11 @@ def build_menu(sub=False):
             MenuAction("图片存储位置", stor_root),
             MenuAction("定价设置", price_cfg),
             MenuAction("出图水印", ext_water),
+        ]),
+        # 2026-11-02 用户令：云端体检单独成菜单，放在「帮助」前面（数据新鲜度/抓取流水/
+        # 健康分，页内面板 worker /diag，只有管理号这份菜单会建，子账号天然看不到）
+        Menu("云端体检(&T)", [
+            MenuAction("干没干活一眼看全", lambda: js_click("extdiag")),
         ]),
         Menu("帮助(&H)", [
             MenuAction("软件更新", upd_app),
@@ -607,7 +614,7 @@ def run_app(httpd, port, startup_xlsx=None):
 
     t_cw = time.time()
     winref.MAIN_WIN = webview.create_window(
-        APP_NAME,
+        APP_TITLE,                          # 2026-11-02 用户令：窗口标题 = 型号查询 v3.0.xx
         url=url,
         width=w, height=h, x=x, y=y,
         # maximized 不开（2026-10-13 用户改口：打开不要默认全屏，用记忆尺寸即可）

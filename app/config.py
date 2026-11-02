@@ -11,6 +11,9 @@ try:
     from _buildver import BUILD_VERSION as APP_VERSION
 except ImportError:
     pass
+# 2026-11-02 用户令：窗口标题就叫「型号查询 v3.0.xx」，不带任何公司名。
+# APP_NAME 保持纯名不动（注册表自启键、托盘、弹窗都在用它，改名会让老自启项失效）。
+APP_TITLE = "%s v%s" % (APP_NAME, APP_VERSION)
 APP_ID = "ModelLookup"
 
 # payload 结构版本：与 parse_kdocs.py 产出 meta.pv 对齐。
