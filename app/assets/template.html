@@ -1188,8 +1188,11 @@ function pubQueue(tasks){
   }
   step();
 }
-function syncMarks(){
+function syncMarks(tries){
   if (!AUTH || !AUTH.token) return;
+  /* 2026-11-02 补保险：开机同步一旦失败（冷启动 >25s / 断网闪一下），原来就永远不补了——
+     已发布视图一直是空的，用户看到的就是「云端同步不了」。改成失败 10 秒后自动重试，
+     最多 6 次（一分钟窗口），成了就正常覆盖本地。 */
   /* 2026-10-10 修「串号阴魂不散」：登录合并原来是本地整包推 + 云端按时间戳只增不删，
      串号时代推进 pub_B 的 TB 记录躺在本地 MARK_KEY 里，每次登录都会被原样推回去，
      云端清了也白清。改定：**云端为准**——登录只上推定价（全量收价不变），
@@ -1213,6 +1216,8 @@ function syncMarks(){
         var pruned = prunePrices();
         if (filled || pruned) savePrices();
         if (changed || filled || pruned){ run(); pubStockWarn(); }
+      } else if (j && j._st === 0 && (tries || 0) < 6){
+        setTimeout(function(){ try { syncMarks((tries || 0) + 1); } catch(e){} }, 10000);
       }
     });
 }
@@ -1723,9 +1728,11 @@ function calcUpdate(box){
    权限由管理号在「账号管理」里逐项勾选。 */
 var AUTH = null;
 try { AUTH = JSON.parse(localStorage.getItem('ml_auth') || 'null'); } catch(e){ AUTH = null; }
-/* 2026-10-15 全迁新账号（老账号 zone 被 CF ToS 封锁，老域名/老 workers.dev 已废弃）：
-   de5.net 在前；workers.dev 国内被墙垫底兜底 */
+/* 2026-11-03 加 ccwu.cc 备线（DigitalPlat 新免费域，直连实测 /appcheck 803ms /pub 718ms
+   比 de5.net 慢 3~4 倍但 0 失败 —— 不当主域只当第一备线）：
+   de5.net 在前；ccwu.cc 备线；workers.dev 国内被墙垫底兜底 */
 var AUTH_HOSTS = ['https://auth.tingjiabaobao.de5.net',
+                  'https://auth.tingjiabaobao.ccwu.cc',
                   'https://modelookup-auth.tingjiabaobao.workers.dev'];
 /* 权限逐项化（2026-10 五次改版）：价格格 / 计算器成本下拉 / 按钮 全部拆开，
    管理号在「账号管理」里逐个勾。第三列是分组（管理面板分组显示，只影响 UI 不影响权限 key）。
@@ -1828,16 +1835,21 @@ function hostGood(h){
   if (m[h]){ delete m[h]; _badSave(m); }
 }
 function hostOrder(){
-  var m = _badMap(), now = Date.now(), cooled = {}, out = [], i, k;
+  var m = _badMap(), now = Date.now(), cooled = {}, out = [], back = [], i, k;
   for (k in m) if (m[k] > now) cooled[k] = 1;
-  function push(h){ if (h && AUTH_HOSTS.indexOf(h) >= 0 && out.indexOf(h) < 0) out.push(h); }
+  function push(h){
+    if (h && AUTH_HOSTS.indexOf(h) >= 0 && out.indexOf(h) < 0 && back.indexOf(h) < 0)
+      (cooled[h] ? back : out).push(h);
+  }
   var saved = localStorage.getItem('ml_auth_host');
   /* 只有主域能占「优先位」：备线（workers.dev）国内实测 15s 挂死，
      哪怕历史上被记成 saved 也一律排后面，绝不先打 */
   if (saved === AUTH_HOSTS[0] && !cooled[saved]) push(saved);
   if (!cooled[AUTH_HOSTS[0]]) push(AUTH_HOSTS[0]);
-  for (i = 0; i < AUTH_HOSTS.length; i++) push(AUTH_HOSTS[i]);  // 黑屋的留最后一条命
-  return out;
+  for (i = 0; i < AUTH_HOSTS.length; i++) push(AUTH_HOSTS[i]);
+  /* 2026-11-03 修：黑屋线路排最后一条命（注释一直这么写，旧码却按原序排最前，
+     主域挂了照样每次先撞 12 秒；现在有真备线 ccwu.cc 必须让位） */
+  return out.concat(back);
 }
 function authFetch(path, opts, withRetry){
   opts = opts || {};
@@ -1865,9 +1877,18 @@ function authFetch(path, opts, withRetry){
     for (var k in opts) o[k] = opts[k];
     /* 每条线路必超时：fetch 挂死时不能把整页（/perm → start）一起拖死 */
     var tmo = _HOST_TMO[h] || 4000;
+    /* 黑屋线路只给 4s：只是「最后一条命」，别让它拖整轮 */
+    if (_badMap()[h] > Date.now()) tmo = 4000;
     /* /puball 是大接口（整包 25KB，服务端 3 个子用户 × 2 次 KV 读串行，实测 4s～60s 浮动）：
        主域给它留 28 秒，别把「慢」误判成「断」→ 关黑屋 → 后面全部降级 */
     if (h === AUTH_HOSTS[0] && path.indexOf('/puball') === 0) tmo = 28000;
+    /* 2026-11-02 治「已发布云端同步不了」：/pubsync 要读发布+定价、还要回写全量定价
+       （worker 侧原来逐条写 170+ 条，实测 4s～10s，偶发顶穿 12s 默认值被 Abort →
+       当成断网 → 主域被关黑屋 10 分钟 → 全部请求转去国内不通的备用域）。
+       同步类接口一律给 25 秒；/pub 单条标记同样会连带写价，一起放宽 */
+    if (h === AUTH_HOSTS[0] && path.indexOf('/pubsync') === 0) tmo = 25000;
+    if (h === AUTH_HOSTS[0] && (path === '/pub' || path.indexOf('/pub?') === 0
+        || path.indexOf('/pubp') === 0)) tmo = 25000;
     /* /diag 云端体检也是重查询（worker 要实时去 GitHub 拉两条 workflow 流水，实测 2s+，
        GitHub 慢一下就超 4s 默认值被误报「网络不通」——2026-11-02 实锤）→ 给 20 秒 */
     if (h === AUTH_HOSTS[0] && path === '/diag') tmo = 20000;
@@ -1884,8 +1905,11 @@ function authFetch(path, opts, withRetry){
     }).catch(function(e){
       clearTimeout(timer);
       var nm = String((e && e.name) || '');
-      /* 只有真网络层故障才关黑屋；5xx / JSON 异常是服务端的事，不牵连线路判定 */
-      if (nm === 'AbortError' || nm === 'TypeError') hostBad(h);
+      /* 只有真网络层故障才关黑屋；5xx / JSON 异常是服务端的事，不牵连线路判定。
+         2026-11-02 修：**超时（AbortError）也算不上线路死**——只是这次慢。
+         原来超时就把主域关 10 分钟黑屋，备用域在国内又连不上，用户看到的就是
+         「连不上数据 / 已发布同步不了」，而且会连累后面所有请求。 */
+      if (nm === 'TypeError') hostBad(h);
       return tryOne(i + 1);
     });
   }
@@ -4771,7 +4795,10 @@ function openPickKind(k, recKey){
   var _cards = document.querySelectorAll('.card');
   for (var _i = 0; _i < _cards.length; _i++){
     if (_cards[_i].getAttribute('data-key') === k){
-      _inp = _cards[_i].querySelector('.calc input[type=number]');
+      /* 2026-11-03 修「弹窗不识别我的价」：这里必须 :not(.gnum)——目标价框排在定价框
+         前面且同在 .calc 容器里，漏了它就读到目标价框（联动后常被清空）→ _iv=NaN
+         → 弹窗空。全代码取定价框统一口径见 1664/1688/3980/6701 */
+      _inp = _cards[_i].querySelector('.calc input[type=number]:not(.gnum)');
       break;
     }
   }

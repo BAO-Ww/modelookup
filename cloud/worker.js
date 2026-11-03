@@ -267,8 +267,12 @@ const DEF_XY = "默认";
 async function pubGet(env, u) {
   if (!(await marksInit(env))) return {};
   const out = {};
-  const ms = await env.DB.prepare("SELECT c, xy, k, t, p, xid FROM marks WHERE u = ?").bind(u).all();
-  const mt = await env.DB.prepare("SELECT c, k, t, cs_l, cs_v, bn_lb, bn_sb, nat FROM markmeta WHERE u = ?").bind(u).all();
+  // 2026-11-02 治「已发布同步不了」：原来两条查询串行（marks 全表 + markmeta 全表），
+  // 单次 /pubsync 光读就 2 个往返。改成并发，少一个 RTT。
+  const [ms, mt] = await Promise.all([
+    env.DB.prepare("SELECT c, xy, k, t, p, xid FROM marks WHERE u = ?").bind(u).all(),
+    env.DB.prepare("SELECT c, k, t, cs_l, cs_v, bn_lb, bn_sb, nat FROM markmeta WHERE u = ?").bind(u).all(),
+  ]);
   const meta = {};
   for (const m of mt.results || []) meta[m.c] = m;
   for (const r of ms.results || []) {
@@ -298,6 +302,25 @@ async function pubpSet(env, u, c, p) {              // 单价镜像 upsert；p �
   if (!(await marksInit(env))) return;
   if (p == null || !isFinite(+p)) { await env.DB.prepare("DELETE FROM prices WHERE u = ? AND c = ?").bind(u, c).run(); return; }
   await env.DB.prepare("INSERT INTO prices (u,c,p) VALUES (?,?,?) ON CONFLICT(u,c) DO UPDATE SET p = excluded.p").bind(u, c, +p).run();
+}
+/* 2026-11-02 治「已发布同步不了」：/pubsync 带全量 prices（170+ 条），原来逐条 await
+   一条一个往返，实测 4~10 秒直接顶穿前端超时被中断。改成一次 batch（D1 单往返）。
+   语义不变：仍是 upsert，只是合并成一批发。 */
+async function pubpSetMany(env, u, pairs) {         // pairs = [[c, p], ...]
+  if (!pairs || !pairs.length) return 0;
+  if (!(await marksInit(env))) return 0;
+  const stmts = [];
+  for (const [c, p] of pairs) {
+    if (!c) continue;
+    if (p == null || !isFinite(+p)) {
+      stmts.push(env.DB.prepare("DELETE FROM prices WHERE u = ? AND c = ?").bind(u, c));
+    } else {
+      stmts.push(env.DB.prepare("INSERT INTO prices (u,c,p) VALUES (?,?,?) ON CONFLICT(u,c) DO UPDATE SET p = excluded.p").bind(u, c, +p));
+    }
+  }
+  if (!stmts.length) return 0;
+  await env.DB.batch(stmts);
+  return stmts.length;
 }
 async function markRowUpsert(env, u, c, xy, e) {    // 一条发布记录 upsert
   if (!(await marksInit(env))) return;
@@ -1001,8 +1024,9 @@ async function route(request, env, path, ctx) {
   if (path === "/pubsync" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     if (Array.isArray(b.prices)) return jerr("prices 格式错误（应为对象）");   // 审计：数组下标会被当型号
-    const marks = await getPub(who);                   // 行级组装（读便宜，写按行原子）
-    const pp0 = await getPubP(who);
+    // 2026-11-02：两读并发（原来串行，单次同步多花一个 RTT）
+    const [marks, pp0] = await Promise.all([getPub(who), getPubP(who)]);
+    const pendP = {};        // 待写单价镜像（最后一次性 batch，别再逐条 await）
     const inc = b.marks && typeof b.marks === "object" && !Array.isArray(b.marks) ? b.marks : {};
     for (const [c0, v] of Object.entries(inc)) {
       const c = safeKey(c0, 100);
@@ -1098,7 +1122,7 @@ async function route(request, env, path, ctx) {
       // 2026-10-14 修「手机端价格漂移」：镜像 = 该型号最新一条记录的价
       for (const c of Object.keys(xypC)) {
         const lt = Object.values(marks[c].xys || {}).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
-        if (lt && isFinite(+lt.p) && pp0[c] !== +lt.p) { pp0[c] = +lt.p; await pubpSet(env, who, c, +lt.p); chPP = true; }
+        if (lt && isFinite(+lt.p) && pp0[c] !== +lt.p) { pp0[c] = +lt.p; pendP[c] = +lt.p; chPP = true; }
       }
     }
     if (b.prices && typeof b.prices === "object" && !Array.isArray(b.prices)) {
@@ -1116,7 +1140,7 @@ async function route(request, env, path, ctx) {
           if (lt && isFinite(+lt.p)) rp = +lt.p;
         }
         const fin = rp != null ? rp : (isFinite(+p) ? +p : null);
-        if (fin != null && pp0[c] !== fin) { pp0[c] = fin; await pubpSet(env, who, c, fin); chPP = true; }
+        if (fin != null && pp0[c] !== fin) { pp0[c] = fin; pendP[c] = fin; chPP = true; }
       }
     }
     // 2026-10-16 连根修（B）：全量对账——已发布且有价的型号，定价表一律对齐最新记录价。
@@ -1125,8 +1149,11 @@ async function route(request, env, path, ctx) {
     for (const [c, mrc] of Object.entries(marks)) {
       if (!mrc || !mrc.xys) continue;
       const lt = Object.values(mrc.xys).sort((a, z) => (+z.t || 0) - (+a.t || 0))[0];
-      if (lt && isFinite(+lt.p) && pp0[c] !== +lt.p) { pp0[c] = +lt.p; await pubpSet(env, who, c, +lt.p); chPP = true; }
+      if (lt && isFinite(+lt.p) && pp0[c] !== +lt.p) { pp0[c] = +lt.p; pendP[c] = +lt.p; chPP = true; }
     }
+    // 2026-11-02：上面三处收集的单价一次性写（原来逐条 await，170 条 = 170 个往返）
+    const _pendList = Object.keys(pendP).map((c) => [c, pendP[c]]);
+    if (_pendList.length) await pubpSetMany(env, who, _pendList);
     // 2026-10-14 体检 P1-4：返回直接用内存组装（marks/pp0 都在手上），
     // 省掉结尾 getPubN+getPubP 的 2 次重复读——免费版 KV 读额度的大头之一
     const outM = {};
