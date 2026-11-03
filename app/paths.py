@@ -179,3 +179,15 @@ def reveal(p):
         subprocess.Popen(["open", p])
     else:
         os.startfile(p)  # noqa 仅 Windows 分支
+
+
+def open_url(u):
+    """用系统默认浏览器打开网页（2026-11-03 官网按钮：开官网产品页而不是图）。"""
+    u = str(u or "").strip()
+    if not (u.startswith("http://") or u.startswith("https://")):
+        raise ValueError("非 http(s) 链接：%r" % u[:80])
+    if sys.platform == "darwin":
+        import subprocess
+        subprocess.Popen(["open", u])
+    else:
+        os.startfile(u)  # noqa 仅 Windows 分支

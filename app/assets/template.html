@@ -314,10 +314,12 @@ main{padding:22px 0 60px}
 a.markbtn{text-decoration:none}
 a.markbtn.web{color:var(--brand);border-color:#d5e2ff;background:var(--brand-l)}
 a.markbtn.web:hover{border-color:var(--brand);background:#dde9ff}
+.markbtn.gw{color:var(--brand);border-color:#d5e2ff;background:var(--brand-l);cursor:pointer}
+.markbtn.gw:hover{border-color:var(--brand);background:#dde9ff}
 .copy:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-l)}
 .copy.done{border-color:#bfe3cd;color:var(--ok);background:var(--ok-l)}
 .markbtn:hover{border-color:var(--ok);color:var(--ok);background:var(--ok-l)}
-.card.marked .markbtn:not(.web){border-color:#c9e8d6;color:#0f7a45;background:var(--ok-l)}
+.card.marked .markbtn:not(.web):not(.gw){border-color:#c9e8d6;color:#0f7a45;background:var(--ok-l)}
 .tags{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:4px}
 .tag{
   font-size:11.5px;padding:2px 9px;border-radius:6px;background:#f2f5fa;color:var(--ink2);border:1px solid var(--line2);
@@ -358,6 +360,14 @@ a.markbtn.web:hover{border-color:var(--brand);background:#dde9ff}
 .pill{
   display:inline-block;padding:2px 10px;border-radius:999px;font-size:12.5px;font-weight:600;
   background:#f2f5fa;color:var(--ink2);border:1px solid var(--line2);font-variant-numeric:tabular-nums;
+}
+/* 点胶囊展开明细（2026-11-03 用户令）：带 title 的胶囊（发货区域/覆盖城市/仓库等）
+   点一下弹气泡显示明细——触屏/不悬停也能看全，点别处或再点一下收起 */
+.pill[title]{cursor:pointer}
+.pilltip{
+  position:fixed;z-index:95;max-width:320px;padding:8px 12px;border-radius:8px;
+  background:#1f2328;color:#fff;font-size:12.5px;line-height:1.6;
+  box-shadow:0 4px 16px rgba(15,23,42,.25);pointer-events:none;
 }
 .pill.ok{background:var(--ok-l);color:var(--ok);border-color:#c9e8d6}
 .pill.no{background:#f5f6f9;color:var(--ink3)}
@@ -734,6 +744,8 @@ var CFG  = DATA
   ? { fetch: false, imgBase: '',      dataUrl: '' }
   : { fetch: true,  imgBase: '/img/', dataUrl: '/api/data' };
 var META = {}, ALL = [], IMGS = {}, IMGHAS = null;
+var KITMAIN = null;              /* 抓取链选好机图的型号表：卡片缩略图优先用 kitset 主图（2026-11-03，
+                                    老图库里的促销宣传图实锤让位——XQG100-HBEU38A5U1） */
 var WEB = null;                  /* 型号 → 官网产品详情页直链（catalog 命中的才有；没有就退回官网搜索页） */
 var FEE  = 0.016;                // 闲鱼平台费率 1.6%
 /* exe 版后台更新状态：price_at/stock_at = 最近一次金山/用友更新时间（侧栏显示）；
@@ -1318,6 +1330,9 @@ applyFontScale();
 
 function imgOf(core){
   if (MYIMGS[core]) return MYIMGS[core];            // 自己补的图优先（'hide'=管理号隐藏标记，2026-10-24，调用方各自处理）
+  if (KITMAIN && KITMAIN[core]) return '/api/kitimg/' + encodeURIComponent(core) + '/product.png';
+                                                    // 抓取链选好的机图（官网干净整机图，2026-11-03 用户令：
+                                                    // 官网有图的用官网图——老图库的促销宣传图让位）
   if (IMGS[core]) return IMGS[core];                // 内联的 dataURL（离线版）
   // exe 版：图片不内联，交给浏览器按需取，看得见才解码
   if (CFG.imgBase && IMGHAS && IMGHAS[core]) return CFG.imgBase + encodeURIComponent(core);
@@ -1882,6 +1897,9 @@ function authFetch(path, opts, withRetry){
     /* /puball 是大接口（整包 25KB，服务端 3 个子用户 × 2 次 KV 读串行，实测 4s～60s 浮动）：
        主域给它留 28 秒，别把「慢」误判成「断」→ 关黑屋 → 后面全部降级 */
     if (h === AUTH_HOSTS[0] && path.indexOf('/puball') === 0) tmo = 28000;
+    /* /diag（云端体检+侧栏抓取时间 2026-11-03）：worker 侧要现查 GitHub workflow，
+       4s 常掐死 → 主域给 20 秒 */
+    if (h === AUTH_HOSTS[0] && path.indexOf('/diag') === 0) tmo = 20000;
     /* 2026-11-02 治「已发布云端同步不了」：/pubsync 要读发布+定价、还要回写全量定价
        （worker 侧原来逐条写 170+ 条，实测 4s～10s，偶发顶穿 12s 默认值被 Abort →
        当成断网 → 主域被关黑屋 10 分钟 → 全部请求转去国内不通的备用域）。
@@ -3564,9 +3582,10 @@ function renderItem(it){
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
     + (pok('copy') ? '<button class="copy" data-copydoc="' + esc(it.c) + '" data-copykind="' + esc(it.k || 'z') + '" title="打开闲鱼配文 PRO：抓真实参数写文案 + AI 出发布图（15:59 用户要的常驻入口）">写文案</button>' : '')
     + (pok('tbyp') ? '<button class="copy" data-tbdoc="' + esc(it.c) + '" data-tbkind="' + esc(it.k || 'z') + '" title="打开配文：型号一键出图出文案（独立权限，管理号决定给谁用）">配文</button>' : '')
+    + (pok('kitset') ? '<button class="copy" data-whiteview="' + esc(it.c) + '" title="白字首图（独立工具）：同一张首图换底色/字色——蓝底白字、紫底白字两个，不动本家蓝底">白字</button>' : '')
     + (pok('kitset') ? '<button class="copy" data-kitdoc="' + esc(it.c) + '" title="蓝底套图（独立工具）：四张1080图+三档标题+两段文案，与写文案/配文零关系">蓝底</button>' : '')
     + (pok('kitset') ? '<button class="copy" data-spotdoc="' + esc(it.c) + '" title="暗角聚光（独立工具）：深色聚光风格 6 张 + 标题/卖点/售后文案，跟蓝底同一权限">聚光</button>' : '')
-    + (webUrl ? '<a class="markbtn web" href="' + esc(webUrl) + '" target="_blank" rel="noopener" title="打开品牌官网（对应型号）">官网</a>' : '')
+    + '<button class="markbtn gw" data-gwview="' + esc(it.c) + '" title="打开这台机器对应的官网产品页（没记录就用必应搜型号）">官网</button>'
     + '</span></div>'
     + '<div class="tags">'
     + '<span class="sellbadge s-' + _ss + '" title="' + (it._md ? '美的/容声表：只看有没有报价（不走用友库存）' : '按用友实时库存 + 报价：绿=有货有价能卖 / 黄=缺一头 / 灰=三无') + '">' + _ssTxt + '</span>'
@@ -4343,6 +4362,26 @@ document.addEventListener('change', function(e){
     if (t && t.id === 'xysjbtn') return;
     if (t && t.closest && t.closest('[data-xyview]')) return;
     window.closeXyFeat();
+  }, true);
+  /* 点胶囊展开明细（2026-11-03 用户令「收起来的要点击展开显示」）：带 title 的胶囊
+     （发货区域/工贸覆盖城市/仓库明细等）点一下弹气泡看全，再点一下或点别处收起 */
+  var _pilltip = null;
+  document.addEventListener('click', function(e){
+    var p = e.target && e.target.closest ? e.target.closest('.pill[title]') : null;
+    if (_pilltip){ _pilltip.remove(); _pilltip = null; }
+    if (!p) return;
+    e.stopPropagation();
+    var r = p.getBoundingClientRect();
+    _pilltip = document.createElement('div');
+    _pilltip.className = 'pilltip';
+    _pilltip.textContent = p.getAttribute('title') || '';
+    document.body.appendChild(_pilltip);
+    var tw = _pilltip.offsetWidth, th = _pilltip.offsetHeight;
+    var x = Math.min(Math.max(8, r.left + r.width / 2 - tw / 2), window.innerWidth - tw - 8);
+    var y = r.top - th - 8;
+    if (y < 8) y = r.bottom + 8;
+    _pilltip.style.left = x + 'px';
+    _pilltip.style.top = y + 'px';
   }, true);
   var kj = document.getElementById('xysjbtn');
   if (kj) kj.addEventListener('click', function(){
@@ -5263,6 +5302,204 @@ function pollJob(key, onDone, onErr, tick){
 }
 
 /* ================= 蓝底套图（2026-10-21，独立第三工具） ================= */
+/* 白字首图（2026-11-03 用户令：卡片按钮行独立入口，不塞配文窗）——
+   同蓝底机图与文字，只换首图胶囊/下划线底色：蓝底白字（同本家）、紫底白字。
+   走 /api/kitwhite（jobman），产物在 peiwork/<型号>/白字/，图走 /pubimg 预览 */
+function openWhiteView(k){
+  var old = document.getElementById('whiteview'); if (old) old.remove();
+  var wrap = document.createElement('div'); wrap.id = 'whiteview';
+  wrap.style.cssText = 'position:fixed;inset:0;background:#f7f7f5;z-index:70;display:flex;flex-direction:column;font-size:13px;color:#1c1e22';
+  wrap.innerHTML =
+    '<div style="display:flex;align-items:baseline;gap:10px;padding:8px 16px;background:#1c1e22;color:#e8eaee;flex:0 0 auto">'
+    +   '<b style="font-size:14px">白字套图</b>'
+    +   '<span style="font-size:12px;color:#8a929e">' + esc(k) + '</span>'
+    +   '<span style="font-size:11.5px;color:#8a929e">同蓝底机图与文案，胶囊微改换色；不动本家蓝底</span>'
+    +   '<span style="flex:1"></span>'
+    +   '<button id="wv_folder" title="打开这个型号的图片总文件夹" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">型号文件夹</button>'
+    +   '<span id="wv_msg" style="font-size:11.5px;color:#9fe0a8"></span>'
+    +   '<button id="wv_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
+    + '</div>'
+    + '<div style="flex:1;overflow:auto;padding:12px 16px"><div style="max-width:1280px;margin:0 auto;display:flex;gap:10px;align-items:stretch;min-height:100%">'
+    +   '<div style="flex:0 0 auto;width:max-content;display:flex;flex-direction:column;gap:10px">'
+    +     '<div style="flex:1;min-height:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px;display:flex;flex-direction:column;text-align:left">'
+    +       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
+    +         '<div style="font-weight:700;font-size:13px">蓝底白字 <span style="font-weight:400;font-size:11.5px;color:#8a929e">微改版 · 点图看大图</span></div>'
+    +         '<span style="flex:1"></span>'
+    +         '<button data-wvopen="blue" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+    +         '<button data-wvregen="blue" style="border:1px solid #93c5fd;background:#dbeafe;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
+    +       '</div>'
+    +       '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,max-content);grid-template-rows:repeat(2,1fr);justify-content:center;gap:6px" id="wv_grid_blue"></div>'
+    +     '</div>'
+    +     '<div style="flex:1;min-height:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px;display:flex;flex-direction:column;text-align:left">'
+    +       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
+    +         '<div style="font-weight:700;font-size:13px">紫底白字 <span style="font-weight:400;font-size:11.5px;color:#8a929e">胶囊换紫 · 点图看大图</span></div>'
+    +         '<span style="flex:1"></span>'
+    +         '<button data-wvopen="purple" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+    +         '<button data-wvregen="purple" style="border:1px solid #c4b5fd;background:#ede9fe;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
+    +       '</div>'
+    +       '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,max-content);grid-template-rows:repeat(2,1fr);justify-content:center;gap:6px" id="wv_grid_purple"></div>'
+    +     '</div>'
+    +   '</div>'
+    +   '<div style="flex:1;min-width:400px;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 16px;display:flex;flex-direction:column">'
+    +     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">文案（同配文一套）</b>'
+    +       '<span style="font-size:11px;color:#9a9ea6">话术版本 · 标题三选一 · 商品描述</span></div>'
+    +     '<div id="wv_copy" style="font-size:11.5px;color:#8a929e;flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column">加载中…</div>'
+    +   '</div>'
+    + '</div></div>';
+  document.body.appendChild(wrap);
+  wrap.querySelector('#wv_close').addEventListener('click', function(){ wrap.remove(); });
+  function wvImg(tone, n){ return '/pubimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('白字') + '/' + encodeURIComponent(tone === 'blue' ? '蓝底' : '紫底') + '/img_' + n + '.jpg'; }
+  var NUMS = ['①','②','③','④'], LBS = ['主图','参数','卖点','尺寸'];
+  /* 图片区（2026-11-03 用户令：参考配文窗图片区——四张方形缩略图网格 + 左上角序号角标，点图看大图） */
+  function wvShow(){
+    ['blue', 'purple'].forEach(function(tone){
+      var g = wrap.querySelector('#wv_grid_' + tone);
+      if (!g) return;
+      g.innerHTML = '';
+      var _c = (tone === 'purple' ? '#6d28d9' : '#1d4ed8');
+      for (var n = 1; n <= 4; n++){
+        (function(nn){
+          /* 2026-11-03 用户令：格子缩到图片实际大小（正方形=行高），不留空底；
+             多余空间留在格子外面（列间距），格子内不再有大片空白 */
+          var cell = document.createElement('div');
+          cell.style.cssText = 'position:relative;align-self:stretch;aspect-ratio:1/1;justify-self:center;background:#f7f8fa;border:1px solid #eceef2;border-radius:10px;overflow:hidden;cursor:zoom-in';
+          cell.title = (tone === 'blue' ? '蓝底白字' : '紫底白字') + ' · ' + LBS[nn-1] + '（点开看大图）';
+          var badge = document.createElement('div');
+          badge.textContent = nn;
+          badge.style.cssText = 'position:absolute;left:6px;top:6px;z-index:2;min-width:20px;height:20px;padding:0 5px;border-radius:6px;background:' + _c + ';color:#fff;font-size:11.5px;font-weight:700;line-height:20px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.25)';
+          cell.appendChild(badge);
+          var miss = document.createElement('div');
+          miss.textContent = '未生成';
+          miss.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;color:#b4b9c2';
+          cell.appendChild(miss);
+          var im = document.createElement('img');
+          im.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none';
+          im.onload = function(){ miss.style.display = 'none'; im.style.display = 'block'; };
+          im.onerror = function(){ im.style.display = 'none'; miss.style.display = 'flex'; };
+          im.src = wvImg(tone, nn) + '?t=' + Date.now();
+          cell.appendChild(im);
+          var cap = document.createElement('div');
+          cap.textContent = LBS[nn-1];
+          cap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:3px 0;background:linear-gradient(transparent,rgba(0,0,0,.55));color:#fff;font-size:10.5px;text-align:center;letter-spacing:.5px';
+          cell.appendChild(cap);
+          cell.addEventListener('click', function(){ wvZoom(tone, nn); });
+          g.appendChild(cell);
+        })(n);
+      }
+    });
+  }
+  function wvZoom(tone, n){
+    var old = document.getElementById('wv_zoom'); if (old) old.remove();
+    var z = document.createElement('div'); z.id = 'wv_zoom';
+    z.style.cssText = 'position:fixed;inset:0;background:rgba(14,18,26,.8);z-index:90;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+    z.innerHTML = '<div style="display:flex;flex-direction:column;gap:8px;align-items:center">'
+      + '<div style="color:#e8eaee;font-size:12.5px;font-weight:600">' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + ' · ' + NUMS[n-1] + ' ' + LBS[n-1] + '<span style="font-weight:400;color:#9aa3b0;margin-left:10px">点任意处关闭</span></div>'
+      + '<img src="' + wvImg(tone, n) + '?t=' + Date.now() + '" style="max-width:84vw;max-height:82vh;border-radius:12px;display:block;background:#fff"></div>';
+    z.addEventListener('click', function(){ z.remove(); });
+    document.body.appendChild(z);
+  }
+  function wvOpenFolder(tone){
+    /* 2026-11-03 用户令：蓝/紫分文件夹——带 tone 开对应子文件夹，不带开 白字\ 根 */
+    try { fetch('/api/kitwhite?model=' + encodeURIComponent(k) + (tone ? '&tone=' + tone : '') + '&open=1'); } catch (e) {}
+  }
+  var TB = null, shipMode = 'nat';
+  function renderTbCopyEmpty(){
+    wrap.querySelector('#wv_copy').innerHTML = '<span style="color:#9a9ea6">这个型号还没有配文文案——生成跑完（或到「配文」里打开一次）这里就有。</span>';
+  }
+  function renderTbCopy(){
+    var box = wrap.querySelector('#wv_copy');
+    if (!TB){ renderTbCopyEmpty(); return; }
+    var h2 = '<div style="flex:0 0 auto">';
+    h2 += '<div style="display:flex;gap:8px;margin-bottom:10px">'
+      + '<div data-wship="nat" style="flex:1;text-align:center;padding:6px;border:1px solid ' + (shipMode==='nat'?'#185fa5':'#d1d5db') + ';border-radius:8px;background:' + (shipMode==='nat'?'#185fa5':'#fff') + ';color:' + (shipMode==='nat'?'#fff':'#1f2328') + ';font-weight:600;cursor:pointer">全国版<br><span style="font-size:11.5px;font-weight:400;opacity:.85">可发货地区：全国</span></div>'
+      + '<div data-wship="rep" style="flex:1;text-align:center;padding:6px;border:1px solid ' + (shipMode==='rep'?'#185fa5':'#d1d5db') + ';border-radius:8px;background:' + (shipMode==='rep'?'#185fa5':'#fff') + ';color:' + (shipMode==='rep'?'#fff':'#1f2328') + ';font-weight:600;cursor:pointer">报备版<br><span style="font-size:11.5px;font-weight:400;opacity:.85">深圳 · 东莞 · 惠州 · 广州</span></div>'
+      + '</div>';
+    h2 += '<div style="font-weight:700;font-size:12.5px;margin-bottom:6px">标题（三选一）</div>';
+    (TB.titles || []).forEach(function(t){
+      h2 += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">'
+        + '<div style="flex:1;background:#fafbfc;border:1px solid #eef0f4;border-radius:6px;padding:5px 9px;line-height:1.5;font-size:12px">' + esc(t) + '</div>'
+        + '<button data-wtcopy="' + esc(t) + '" style="border:1px solid #d1d5db;background:#fff;color:#185fa5;border-radius:6px;padding:4px 10px;font-size:11.5px;flex:0 0 auto;cursor:pointer">复制</button></div>';
+    });
+    if (!(TB.titles || []).length) h2 += '<div style="color:#b42318;font-size:12px;margin-bottom:8px">标题还没生成出来</div>';
+    h2 += '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px"><b style="font-size:12.5px">商品描述</b>'
+      + '<button id="wv_descCopy" style="border:none;background:#185fa5;color:#fff;border-radius:6px;padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer">一键复制文案</button></div>';
+    h2 += '</div>';
+    h2 += '<textarea id="wv_desc" style="flex:1;min-height:160px;width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:7px;padding:7px 10px;font-size:12.5px;line-height:1.6;font-family:inherit;background:#fafbfc;color:#1f2328;resize:none"></textarea>';
+    box.innerHTML = h2;
+    box.querySelector('#wv_desc').value = shipMode === 'nat' ? (TB.desc_nat || '') : (TB.desc_rep || '');
+    box.querySelectorAll('[data-wship]').forEach(function(el){
+      el.onclick = function(){ shipMode = el.getAttribute('data-wship'); renderTbCopy(); };
+    });
+    box.querySelectorAll('[data-wtcopy]').forEach(function(el){
+      el.onclick = function(){
+        navigator.clipboard.writeText(el.getAttribute('data-wtcopy')).then(function(){ el.textContent = '已复制'; setTimeout(function(){ el.textContent = '复制'; }, 1200); });
+      };
+    });
+    var dc = box.querySelector('#wv_descCopy');
+    if (dc) dc.onclick = function(){ doCopy(box.querySelector('#wv_desc').value, dc); };
+  }
+  function loadTbCopy(){
+    var msg = wrap.querySelector('#wv_msg');
+    fetch('/api/copy?model=' + encodeURIComponent(k) + '&kind=z&bg=1')
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (j && j.ok){
+          pollJob('copy:' + k + ':z', function(res){ TB = res; renderTbCopy(); },
+                  function(){ renderTbCopyEmpty(); },
+                  function(sec, st){ if (msg && st && st.prog) msg.textContent = '文案·' + st.prog; });
+        } else {
+          /* 已在生成中（配文窗正跑同一个 key）：直接跟着轮询 */
+          pollJob('copy:' + k + ':z', function(res){ TB = res; renderTbCopy(); },
+                  function(){ renderTbCopyEmpty(); });
+        }
+      })
+      .catch(function(){ renderTbCopyEmpty(); });
+  }
+  function wvStart(tone, btn){
+    var msg = wrap.querySelector('#wv_msg');
+    var _t = btn.textContent;
+    btn.disabled = true; btn.textContent = '生成中…';
+    if (msg) msg.textContent = (tone === 'blue' ? '蓝底白字' : '紫底白字') + '已开始…';
+    fetch('/api/kitwhite', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model: k, tone: tone})})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
+        pollJob('kitwhite:' + k + ':' + tone, function(res){
+          btn.disabled = false; btn.textContent = _t;
+          if (msg) msg.textContent = '✓ ' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + '四张完成';
+          wvShow();
+          wvOpenFolder(tone);   /* 2026-11-03 用户令：生成完了直接打开对应文件夹 */
+        }, function(err){
+          btn.disabled = false; btn.textContent = _t;
+          alert((err && err.message) || '白字套图失败');
+        }, function(sec, st){
+          if (msg && st && st.prog) msg.textContent = st.prog;
+        });
+      })
+      .catch(function(e){ btn.disabled = false; btn.textContent = _t; alert('请求失败：' + e); });
+  }
+  /* 2026-11-03 用户令：底部「生成蓝/紫底白字」两键撤掉——开窗缺哪套自动生成，
+     手动补跑用卡右上「重新生成」；「打开文件夹」开对应 蓝/紫 子文件夹 */
+  wrap.querySelectorAll('[data-wvregen]').forEach(function(el){
+    el.addEventListener('click', function(){ wvStart(el.getAttribute('data-wvregen'), el); });
+  });
+  wrap.querySelectorAll('[data-wvopen]').forEach(function(el){
+    el.addEventListener('click', function(){ wvOpenFolder(el.getAttribute('data-wvopen')); });
+  });
+  wrap.querySelector('#wv_folder').addEventListener('click', function(){
+    try { fetch('/api/kitwhite?model=' + encodeURIComponent(k) + '&open=model'); } catch (e) {}
+  });
+  wvShow(); loadTbCopy();
+  /* 开窗自动生成（2026-11-03 用户令「点进来直接生成」）：缺哪套补哪套，
+     两种色调 job key 分开（kitwhite:<型号>:<tone>）可并行，互不抢锁 */
+  ['blue', 'purple'].forEach(function(tone){
+    fetch(wvImg(tone, 1), {method: 'HEAD'}).then(function(r){
+      if (!r.ok) wvStart(tone, wrap.querySelector('[data-wvregen="' + tone + '"]'));
+    }).catch(function(){});
+  });
+}
+
 function openKitView(k){
   var old = document.getElementById('kitview'); if (old) old.remove();
   var wrap = document.createElement('div'); wrap.id = 'kitview';
@@ -5629,21 +5866,21 @@ function openCopyView(k, kind, force, tb, host){
       +   '<div id="pv_msg" style="font-size:11px;color:#16a34a;min-height:14px;line-height:1.4"></div>'
       + '</div>'
       + '<div style="flex:1;display:flex;gap:8px;padding:4px 12px 8px;min-height:0">'
-      +   '<div style="width:41%;min-width:300px;background:#fff;border:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0">'
-      +     '<div style="padding:6px 10px 3px;font-weight:700;font-size:12.5px">图片 <span style="font-weight:400;color:#5b6572;font-size:11px">（点击勾选发布顺序，默认前 6 张）</span><span id="cv_imgn" style="font-weight:400;font-size:11px;color:#94a3b8;margin-left:6px"></span></div>'
+      +   '<div style="width:35%;min-width:270px;background:#fff;border:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0">'
+      +     '<div style="padding:6px 10px 3px;font-weight:700;font-size:12.5px">图片 <span style="font-weight:400;color:#5b6572;font-size:11px">（点击勾选发布顺序，默认前 6 张；点分组名收起/展开）</span><span id="cv_imgn" style="font-weight:400;font-size:11px;color:#94a3b8;margin-left:6px"></span></div>'
       +     '<div style="flex:1;overflow:auto;padding:0 8px 3px;min-height:0">'
-      +       '<div id="cv_imgs" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px"></div>'
+      +       '<div id="cv_imgs" style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px"></div>'
       +       '<div id="cv_pickmsg" style="font-size:11px;color:#15803d;margin-top:4px;display:none"></div></div>'
-      +     '<div style="padding:5px 8px 6px;border-top:1px solid #e5e7eb;flex:0 0 auto">'
-      +       '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">'
-      +         '<button id="pv_selrail" style="border:1px solid #d1d5db;background:#fff;color:#1f2328;border-radius:6px;padding:4px 2px;font-size:11.5px;cursor:pointer">保存精选</button>'
-      +         '<button data-pubstyle="studio" style="border:1px solid #86efac;background:#dcfce7;color:#16a34a;border-radius:6px;padding:4px 2px;font-size:11.5px;font-weight:600;cursor:pointer">发布图</button>'
-      +         '<button data-pubstyle="spot" style="border:1px solid #a5b4fc;background:#e0e7ff;color:#4338ca;border-radius:6px;padding:4px 2px;font-size:11.5px;font-weight:600;cursor:pointer">发布图·显眼版</button>'
-      +         '<button id="pv_six" style="border:1px solid #f59e0b;background:#fef3c7;color:#92400e;border-radius:6px;padding:4px 2px;font-size:11.5px;font-weight:600;cursor:pointer">生成6张</button>'
-      +         '<button id="pv_hero" style="border:1px solid #f59e0b;background:#fde68a;color:#92400e;border-radius:6px;padding:4px 2px;font-size:11.5px;font-weight:600;cursor:pointer">生成首图</button>'
-      +         '<button id="pv_openrail" style="border:1px solid #d1d5db;background:#fff;color:#1f2328;border-radius:6px;padding:4px 2px;font-size:11.5px;cursor:pointer">打开图片</button>'
-      +       '</div></div>'
       +   '</div>'
+      +   '<div style="width:86px;flex:0 0 auto;display:flex;flex-direction:column;gap:6px;padding-top:26px">'
+      +     '<button id="pv_selrail" style="border:1px solid #d1d5db;background:#fff;color:#1f2328;border-radius:6px;padding:6px 2px;font-size:11.5px;cursor:pointer">保存精选</button>'
+      +     '<button data-pubstyle="studio" style="border:1px solid #86efac;background:#dcfce7;color:#16a34a;border-radius:6px;padding:6px 2px;font-size:11.5px;font-weight:600;cursor:pointer">发布图</button>'
+      +     '<button data-pubstyle="spot" style="border:1px solid #a5b4fc;background:#e0e7ff;color:#4338ca;border-radius:6px;padding:6px 2px;font-size:11.5px;font-weight:600;cursor:pointer">发布图·显眼版</button>'
+      +     '<button id="pv_six" style="border:1px solid #f59e0b;background:#fef3c7;color:#92400e;border-radius:6px;padding:6px 2px;font-size:11.5px;font-weight:600;cursor:pointer">生成6张</button>'
+      +     '<button id="pv_hero" style="border:1px solid #f59e0b;background:#fde68a;color:#92400e;border-radius:6px;padding:6px 2px;font-size:11.5px;font-weight:600;cursor:pointer">生成首图</button>'
+      +     '<button id="pv_openrail" style="border:1px solid #d1d5db;background:#fff;color:#1f2328;border-radius:6px;padding:6px 2px;font-size:11.5px;cursor:pointer">打开图片</button>'
+      +   '</div>'
+
       +   '<div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">'
       +     '<div id="cv_main" style="flex:1;display:flex;flex-direction:column;min-height:0"></div>'
       +   '</div>'
@@ -5834,14 +6071,26 @@ function openCopyView(k, kind, force, tb, host){
     }
     var ih = '';
     for (var g2 = 0; g2 < gs.length; g2++){
-      ih += '<div style="grid-column:1/-1;display:flex;align-items:center;gap:6px;margin:6px 0 2px">'
+      var _gk = gs[g2].sub || gs[g2].label;
+      var _open = !LIBFOLD[_gk];
+      ih += '<div data-ghead="' + esc(_gk) + '" style="grid-column:1/-1;display:flex;align-items:center;gap:6px;margin:6px 0 2px;cursor:pointer;user-select:none">'
         + '<span style="width:3px;height:13px;background:#4f46e5;border-radius:2px"></span>'
+        + '<span style="font-size:10px;color:#6b7280">' + (_open ? '▾' : '▸') + '</span>'
         + '<b style="font-size:12.5px">' + esc(gs[g2].label) + '</b>'
-        + '<span style="font-size:11.5px;color:#8a94a6">' + gs[g2].files.length + ' 张 · 点击查看大图</span>'
+        + '<span style="font-size:11.5px;color:#8a94a6">' + gs[g2].files.length + ' 张 · ' + (_open ? '点击收起' : '点击展开') + '</span>'
         + '<button data-gopen="' + esc(gs[g2].sub || '') + '" style="margin-left:auto;border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:7px;padding:2px 9px;font-size:11.5px;cursor:pointer">打开文件夹</button></div>';
-      for (var i2 = 0; i2 < gs[g2].files.length; i2++) ih += pubCell(gs[g2].files[i2]);
+      if (_open) for (var i2 = 0; i2 < gs[g2].files.length; i2++) ih += pubCell(gs[g2].files[i2]);
     }
     box.innerHTML = ih;
+    var gh2 = box.querySelectorAll('[data-ghead]');
+    for (var g4 = 0; g4 < gh2.length; g4++){
+      gh2[g4].addEventListener('click', function(ev){
+        if (ev.target.closest && ev.target.closest('[data-gopen]')) return;
+        var gk = this.getAttribute('data-ghead');
+        LIBFOLD[gk] = !LIBFOLD[gk];
+        renderImgs();
+      });
+    }
     /* 每个分组标题行挂「打开文件夹」：直达该组在磁盘上的子目录（2026-10-17） */
     var gobs = box.querySelectorAll('[data-gopen]');
     for (var g3 = 0; g3 < gobs.length; g3++){
@@ -6084,6 +6333,7 @@ function openCopyView(k, kind, force, tb, host){
      5 风格 AI 套图（深灰影棚/暗角聚光/亮白影棚/纯白/实景合成，各 6 张精修）+ 促销首图
      + AI 自检/自动优化 + 导入图片（2026-10-26 推 GitHub 功能已删）。素材在 素材/<型号>/，图走 /pubimg/ */
   var pubLib = null, pubPicked = [], pubTimer = null;
+  var LIBFOLD = {};   /* 素材库分组折叠状态（2026-11-03 用户令） */
   var cvChain = null;                    // 「生成6张」接力队列：普通风(studio)跑完自动接显眼风(spot)
   var tbAutoPick = !!tb;                 // 婷宝版：素材库首次加载完自动按顺序勾前 6 张（写文案版维持原样）
   var PUB_STYLES = [
@@ -6583,11 +6833,24 @@ listEl.addEventListener('click', function(e){
     openCopyView(cw.getAttribute('data-copydoc'), cw.getAttribute('data-copykind') || 'z', false);
     return;
   }
+  var gw = e.target.closest('[data-gwview]');
+  if (gw){
+    /* 官网图库入口（2026-11-03 用户令「按键对应的是我的机型，不是打开官网」）：
+       看这台机器从官网/欣盛/中关村抓回来的图，点一张可设为主图 */
+    openGwView(gw.getAttribute('data-gwview'));
+    return;
+  }
   var kb = e.target.closest('[data-kitdoc]');
   if (kb){
     /* 蓝底套图入口（2026-10-21 用户定稿）：完全独立的第三工具——四张1080图+三档标题
        +两段文案。与写文案/配文零共用窗口零共用引擎，数据走爬虫→官网→欣盛抓取链 */
     openKitView(kb.getAttribute('data-kitdoc'));
+    return;
+  }
+  var wb = e.target.closest('[data-whiteview]');
+  if (wb){
+    /* 白字首图入口（2026-11-03 用户令：卡片按钮行独立入口，不塞配文窗） */
+    openWhiteView(wb.getAttribute('data-whiteview'));
     return;
   }
   var sb = e.target.closest('[data-spotdoc]');
@@ -7139,17 +7402,46 @@ function _freshHTML(label, v){
 }
 function metaHTML(){
   var n = ALL.length.toLocaleString('zh-CN');
-  if (location.protocol === 'http:' && (UPSTATE.price_at || UPSTATE.stock_at)){
+  /* 2026-11-03 用户令「按每次抓取成功的时间显示」：侧栏 数据/库存 两行改用
+     worker /diag 的抓取工作流最近一次成功时间（金山=数据、用友=库存），
+     每次抓取成功就往前走，不再等「表格内容变化」才动；/diag 拿不到回退旧值 */
+  var kdT = (DIAGW && DIAGW.kd && DIAGW.kd.con === 'success') ? _fmtBJ(DIAGW.kd.at) : '';
+  var yyT = (DIAGW && DIAGW.yy && DIAGW.yy.con === 'success') ? _fmtBJ(DIAGW.yy.at) : '';
+  if (location.protocol === 'http:' && (UPSTATE.price_at || UPSTATE.stock_at || kdT || yyT)){
     /* 2026-10-09 用户定稿：三行 —— 型号个数 / 数据：时间 / 库存：时间，
        谁更新了显示谁的最近更新时间，没更新过的显示「—」 */
     return '型号 <b>' + n + '</b> 个'
-         + _freshHTML('数据', UPSTATE.price_at)
-         + _freshHTML('库存', UPSTATE.stock_at);
+         + _freshHTML('数据', kdT || UPSTATE.price_at)
+         + _freshHTML('库存', yyT || UPSTATE.stock_at);
   }
   return '型号 <b>' + n + '</b> 个'
        + '<span class="mt">数据：<b>' + esc(META.built || '—') + '</b></span>'
        + '<span class="mt">库存：—</span>';
 }
+/* 抓取成功时间（2026-11-03）：worker /diag 的两个抓取工作流最近一跑 */
+var DIAGW = null, _diagPullTmr = null;
+function _fmtBJ(ts){
+  if (!ts) return '';
+  try {
+    var d = new Date(typeof ts === 'number' ? ts : String(ts));
+    if (isNaN(d.getTime())) return '';
+    var p = function(x){ return (x < 10 ? '0' : '') + x; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+         + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  } catch(e){ return ''; }
+}
+function diagPull(){
+  if (typeof authFetch !== 'function') return;
+  authFetch('/diag').then(function(j){
+    if (!j || !j.ok) return;
+    DIAGW = { kd: (j.kd || [])[0] || null, yy: (j.yy || [])[0] || null };
+    var el = document.getElementById('meta');
+    if (el) el.innerHTML = metaHTML();
+  }).catch(function(){});
+}
+if (_diagPullTmr) clearInterval(_diagPullTmr);
+_diagPullTmr = setInterval(diagPull, 60000);
+setTimeout(diagPull, 3000);
 function initUI(){
   /* 无感重载会重跑 initUI：chips 重画前记住当前选中，重画后恢复（后台刷数据不能把筛选归零） */
   function snapOn(el, attr){
@@ -7508,6 +7800,12 @@ function start(d){
   IMGS = (d && d.imgs) || {};
   WEB  = (d && d.web) || null;
   IMGHAS = null;
+  KITMAIN = null;
+  var km = (d && d.kitmain) || [];
+  if (km.length){
+    KITMAIN = {};
+    for (var _ki = 0; _ki < km.length; _ki++) KITMAIN[km[_ki]] = 1;
+  }
   var keys = (d && d.imgkeys) || null;
   if (keys){
     IMGHAS = {};
@@ -7855,6 +8153,27 @@ function openParamPanel(c){
     html += '</div></div>';
     m.querySelector('.exmb').innerHTML = html;
   });
+}
+
+/* ---------------- 官网图库（2026-11-03：卡片「官网」按钮 → 看本型号抓取图，不开官网） ---------------- */
+/* 官网按钮（2026-11-03 用户令：开该型号对应的官网产品页，不是抓取图）——
+   抓取时记录了产品页 URL 就直开；没记录/只有站点根就用必应搜「型号 + haier.com 官网」 */
+function openGwView(c){
+  /* 2026-11-03 用户令：开的是「型号对应的官网详细页」，不许开搜索页。
+     后端 /api/pagelink 先去三站搜型号拿产品页深链（带 7 天缓存），拿不到就提示。 */
+  toastMsg('正在找 ' + c + ' 的官网详情页…');
+  fetch('/api/pagelink?model=' + encodeURIComponent(c))
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      var u = String((j && j.url) || '');
+      if (!u){
+        toastMsg('官网没这台型号的详情页（可能是线下渠道型号）');
+        return;
+      }
+      toastMsg('打开官网详情页…');
+      fetch('/api/openweb?u=' + encodeURIComponent(u));
+    })
+    .catch(function(){ toastMsg('查官网详情页失败，稍后再点'); });
 }
 
 /* ---------------- 挑主图（出图前） ---------------- */

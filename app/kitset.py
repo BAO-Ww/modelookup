@@ -14,6 +14,8 @@ import json
 import os
 import re
 import shutil
+import sys
+import time
 import urllib.parse
 from collections import Counter
 
@@ -36,6 +38,7 @@ else:
     F_REG = "/System/Library/Fonts/STHeiti Medium.ttc"
     F_BOLD = "/System/Library/Fonts/STHeiti Medium.ttc"
 BLUE = (46, 107, 230)
+PURPLE = (124, 58, 237)   # 白字·紫底白字（2026-11-03 配文入口复制蓝底，不动本家蓝底）
 INK = (28, 30, 34)
 GRAY = (138, 142, 150)
 LGRAY = (196, 200, 206)
@@ -126,6 +129,45 @@ def _font(p, s):
     return ImageFont.truetype(p, s)
 
 
+def _brand_logo(cfg, white=False, h=34, max_w=200):
+    """白字套图品牌 logo（2026-11-03 用户令「左上角用对应品牌的 logo」）：
+    海尔/卡萨帝/统帅各一张透明底 PNG（app/assets/logos/），white=True 取白色变体
+    （深蓝横幅上用）。返回 RGBA 或 None（非三品牌/文件缺失时 None，调用方退回文字）。
+    宽度不超 max_w（卡萨帝字标很扁，按宽反缩）。"""
+    b = str(cfg.get("brand") or "").strip()
+    key = {"海尔": "haier", "卡萨帝": "casarte", "统帅": "leader", "Leader": "leader",
+           "LEADER": "leader"}.get(b) or ("leader" if "leader" in b.lower() else None)
+    if not key:
+        return None
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    p = os.path.join(base, "assets", "logos", "%s_%s.png" % (key, "white" if white else "dark"))
+    if not os.path.isfile(p):
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logos",
+                         "%s_%s.png" % (key, "white" if white else "dark"))
+        if not os.path.isfile(p):
+            return None
+    try:
+        im = Image.open(p).convert("RGBA")
+        w = im.width * h / float(im.height)
+        if w > max_w:
+            h = int(max_w * im.height / im.width)
+        else:
+            h = int(h)
+        return im.resize((max(1, int(w)) if w <= max_w else max_w, max(1, h)), Image.LANCZOS)
+    except Exception:
+        return None
+
+
+def _paste_logo(d, C, cfg, xy, white=False, h=34, max_w=200):
+    """左上角贴品牌 logo，返回贴图宽度（0=没贴，调用方退回原文字排版）。"""
+    im = _brand_logo(cfg, white=white, h=h, max_w=max_w)
+    if im is None:
+        return 0
+    x, y = xy
+    C.paste(im, (int(x), int(y - im.height / 2.0)), im)
+    return im.width
+
+
 def _tw(d, s, f):
     b = d.textbbox((0, 0), s, font=f)
     return b[2] - b[0]
@@ -166,11 +208,11 @@ def _pill_left(d, x, y, s, f, pad=14, h=36):
     return w
 
 
-def _pill_center(od, cx, y, s, f, pad_x=34, pad_y=20):
+def _pill_center(od, cx, y, s, f, pad_x=34, pad_y=20, fill=(46, 107, 230, 242)):
     w = _tw(od, s, f) + pad_x * 2
     asc, desc = f.getmetrics()
     h = asc + desc + pad_y * 2
-    od.rounded_rectangle([cx - w / 2, y, cx + w / 2, y + h], radius=h / 2, fill=(46, 107, 230, 242))
+    od.rounded_rectangle([cx - w / 2, y, cx + w / 2, y + h], radius=h / 2, fill=fill)
     od.text((cx, y + h / 2), s, font=f, fill=(255, 255, 255), anchor="mm")
     return h
 
@@ -253,12 +295,30 @@ def _header(d, cn):
     _spaced(d, (60, 116), cn, _font(F_REG, 34), INK, tracking=10)
 
 
-def _render_img1(cfg, prod, out, safe=False):
+def _render_img1(cfg, prod, out, safe=False, tone=None):
+    # tone（2026-11-03 配文入口「白字」复制蓝底）：None=本家蓝底原样；
+    # 'blue'=蓝底白字·微改版（深蓝胶囊，2026-11-03 用户令「微改不要跟本家同款」）；
+    # 'purple'=紫底白字。tone 模式下胶囊允许比机身宽（用户令：字别跟机图一样大）——
+    # 短句胶囊按最小宽 520px 放大字号（上限 78 号），窄机身机型胶囊明显宽出机身。
+    _tone_purple = (str(tone or "").lower().startswith("p") or "紫" in str(tone or ""))
+    _tone_on = bool(str(tone or "").strip())
+    if _tone_purple:
+        _pill_fill = (124, 58, 237, 242)
+        _accent = PURPLE
+    elif _tone_on:
+        _pill_fill = (29, 78, 216, 242)
+        _accent = (29, 78, 216)
+    else:
+        _pill_fill = (46, 107, 230, 242)
+        _accent = BLUE
     C = Image.new("RGB", (1080, 1080), (255, 255, 255))
     d = ImageDraw.Draw(C)
-    _spaced(d, (60, 88), cfg.get("brand_en", "HAIER"), _font(F_LIGHT, 30), INK, tracking=14)
+    # 白字套图（tone 模式）左上角用品牌 logo（2026-11-03 用户令）；本家蓝底仍走文字，不动
+    _lw = _paste_logo(d, C, cfg, (60, 88), white=False, h=36) if _tone_on else 0
+    if _lw <= 0:
+        _spaced(d, (60, 88), cfg.get("brand_en", "HAIER"), _font(F_LIGHT, 30), INK, tracking=14)
     _spaced(d, (60, 132), cfg["series"], _font(F_LIGHT, 24), GRAY, tracking=8)
-    d.rectangle([60, 186, 108, 189], fill=BLUE)
+    d.rectangle([60, 186, 108, 189], fill=_accent)
     th = cfg.get("img1_h", 860)
     # 电视等 16:9 横图实际渲染高远小于 th，按 th 定位会沉底/偏移——用实际高定位（2026-10-22）
     # 大方块（洗碗机等高宽都大的深色机身）再整体缩到 680 高，别顶页眉别压字（CWY15 实锤）
@@ -273,6 +333,26 @@ def _render_img1(cfg, prod, out, safe=False):
     except Exception:
         h_act = th
     bottom, centered = _place(h_act, 916)
+    # 2026-11-03 XQGL120-L732EH 实锤：高且满幅的正面图会盖住左上品牌字（LEADER 的 R
+    # 被机身吃掉；AI 复检的 text_clip 只查画布截断，查不到这种机图覆盖）。规矩：机图
+    # 顶边高过页眉（bottom-h_act<210）且左缘越过品牌字安全区（540-w/2<280）时，按
+    # 宽度缩到刚好让出安全区——窄机身/矮机型不受影响，布局不变。
+    try:
+        _ar = _pw / float(_ph)
+        if bottom - h_act < 210 and h_act * _ar > 520:
+            h_act = 520.0 / _ar
+    except Exception:
+        pass
+    # 2026-11-03 用户令（白字 tone）：胶囊字一定要宽过机图——
+    # 最小宽 = 机图实际渲染宽 × 1.06（窄机身保底 520，封顶 1000 留边）。
+    # 字号照旧反推（上限 78），不够宽的部分用胶囊左右内边距补足，保证必超机图。
+    _wv_pill_minw = 520
+    if _tone_on:
+        try:
+            _pw_sc = h_act * (_pw / float(_ph))
+            _wv_pill_minw = min(1000, max(520, int(_pw_sc * 1.06) + 20))
+        except Exception:
+            pass
     d.ellipse([540 - 280, bottom - 28, 540 + 280, bottom + 2], fill=(238, 240, 243))
     _paste_product(C, prod, 540, bottom, h_act, max_w=960)
     ov = Image.new("RGBA", C.size, (0, 0, 0, 0))
@@ -294,12 +374,34 @@ def _render_img1(cfg, prod, out, safe=False):
         # 不含型号却超宽的老兜底：对半拆（走到这里说明型号已不在尾部）
         half = len(lines[1]) // 2
         lines = [lines[0], lines[1][:half], lines[1][half:]]
+    # 白字模式：胶囊不许缩成机身宽——短句按最小宽 520 反推字号（2026-11-03 用户令）。
+    # 字号先定死再算 total_h，居中定位才不会偏。
+    _line_fonts = []
+    for i, s_ in enumerate(lines):
+        _f = f1 if i == 0 else f2
+        if _tone_on:
+            try:
+                _w0 = _tw(od, s_, _f) + 68
+                if _w0 < _wv_pill_minw:
+                    _base = getattr(_f, "size", 50)
+                    _fs = min(78, int(_base * _wv_pill_minw / float(_w0)))
+                    _f = _font(F_BOLD, max(_base, _fs))
+            except Exception:
+                pass
+        _line_fonts.append(_f)
     y0 = 420
-    total_h = sum(_ph(f1 if i == 0 else f2) for i in range(len(lines))) + 18 * (len(lines) - 1)
+    total_h = sum(_ph(_f) for _f in _line_fonts) + 18 * (len(lines) - 1)
     if centered:
         y0 = int(bottom - h_act / 2 - total_h / 2)
     for i, s_ in enumerate(lines):
-        h = _pill_center(od, 540, y0, s_, f1 if i == 0 else f2)
+        _px = 34
+        if _tone_on:
+            try:
+                _twv = _tw(od, s_, _line_fonts[i])
+                _px = max(34, int((_wv_pill_minw - _twv) / 2.0))
+            except Exception:
+                pass
+        h = _pill_center(od, 540, y0, s_, _line_fonts[i], pad_x=_px, fill=_pill_fill)
         y0 += h + 18
     C = Image.alpha_composite(C.convert("RGBA"), ov).convert("RGB")
     d = ImageDraw.Draw(C)
@@ -398,7 +500,7 @@ def _render_img3(cfg, points, out, safe=False):
     d.text((166, vy0 + len(vt) * 122 + 34), "H I G H L I G H T S", font=_serif(18, False), fill=(201, 168, 102), anchor="mm")
     d.text((66, 1020), cfg.get("model") or "", font=_font(F_REG, 20), fill=(190, 196, 204), anchor="lm")
     d.line([262, 96, 262, 1006], fill=(232, 236, 242), width=1)
-    pts = _v8_points(points, cfg.get("params_rows"))
+    pts = _v8_points(points, _wv_fix_rows(cfg.get("params_rows")))
     if not pts:
         C.save(out, quality=95)
         return
@@ -651,6 +753,315 @@ def _render_img4(cfg, out, prod=None, safe=False):
                font=_font(F_BOLD, _b4), fill=INK, anchor="mm")
         d.text((540, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格",
                font=_font(F_REG, _d4), fill=GRAY, anchor="mm")
+    C.save(out, quality=95)
+
+
+# ---------------- 白字 tone 专用②③④（2026-11-03 用户令：白字功能里的蓝底跟紫底
+# 三张全部重新设计，蓝≠紫≠本家蓝底；数据同源 params_rows/points/sizeimg，只换设计。
+# 本家蓝底 _render_img2/3/4 一个字不动） ----------------
+
+def _wv_ac(tone):
+    """白字 tone 配色：purple=紫系，否则蓝系（深蓝）。"""
+    if str(tone or "").lower().startswith("p") or "紫" in str(tone or ""):
+        return {"ac": PURPLE, "deep": (91, 33, 182), "tint": (243, 236, 255),
+                "tint2": (250, 247, 255), "banner": (124, 58, 237)}
+    return {"ac": (29, 78, 216), "deep": (30, 58, 138), "tint": (233, 242, 255),
+            "tint2": (242, 247, 255), "banner": (29, 78, 216)}
+
+
+def _wv_fit(d, s, fam, size, maxw, minsz=20):
+    """字号自适应：超宽就缩，保底 minsz。"""
+    f = _font(fam, size)
+    while size > minsz and _tw(d, s, f) > maxw:
+        size -= 2
+        f = _font(fam, size)
+    return f
+
+
+def _wv_pill_r(d, xr, y, s, f, A, h=44, pad=16):
+    """右对齐圆角胶囊（白字专用配色）。"""
+    w = _tw(d, s, f) + pad * 2
+    d.rounded_rectangle([xr - w, y, xr, y + h], radius=h // 2, fill=A["tint"])
+    d.text((xr - w + pad, y + h // 2), s, font=f, fill=A["deep"], anchor="lm")
+    return w
+
+
+def _wv_fix_rows(rows):
+    """白字专用：抓取链的 params_rows 是错位配对（真身是 k1,':v1',v1,k2,':v2'…
+    平铺两两成对），本家蓝底行式排版看不出来，白字大值版式一眼假。
+    这里按「值以冒号开头」重新配成真 (k,v)，只影响白字渲染。"""
+    toks = []
+    for k, v in (rows or []):
+        toks.append(str(k).strip())
+        toks.append(str(v).strip())
+    out, seen = [], set()
+    for i, t in enumerate(toks):
+        if t[:1] in (":", "：") and i > 0:
+            k, v = toks[i - 1], t.lstrip("：:").strip()
+            if k and v and k not in seen:
+                seen.add(k)
+                out.append((k, v))
+    return out or list(rows or [])
+
+
+def _wv_img2(cfg, prod, out, tone):
+    """白字·蓝底 ②参数：顶部深蓝横幅 + 2×3 参数大数字卡片网格（跟本家行式完全两样）。"""
+    A = _wv_ac(tone)
+    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    d = ImageDraw.Draw(C)
+    d.rectangle([0, 0, 1080, 148], fill=A["banner"])
+    _lw2 = _paste_logo(d, C, cfg, (60, 74), white=True, h=36, max_w=180)
+    if _lw2 > 0:
+        d.text((60 + _lw2 + 28, 74), "核 心 参 数", font=_font(F_BOLD, 44), fill=(255, 255, 255), anchor="lm")
+    else:
+        d.text((64, 74), "核 心 参 数", font=_font(F_BOLD, 44), fill=(255, 255, 255), anchor="lm")
+        d.text((1016, 74), (cfg.get("brand") or "") + (cfg.get("cat") or ""),
+               font=_font(F_LIGHT, 22), fill=(226, 236, 255), anchor="rm")
+    rows = _wv_fix_rows(cfg.get("params_rows"))[:6]
+    x0, cw, ch, gx, gy, y0 = 60, 470, 206, 20, 18, 188
+    for i, (k, v) in enumerate(rows):
+        r, c = divmod(i, 2)
+        x = x0 + c * (cw + gx)
+        y = y0 + r * (ch + gy)
+        d.rounded_rectangle([x, y, x + cw, y + ch], radius=18, fill=A["tint"])
+        d.rounded_rectangle([x, y, x + 8, y + ch], radius=4, fill=A["ac"])
+        d.text((x + 34, y + 46), k, font=_font(F_LIGHT, 24), fill=(110, 118, 130), anchor="lm")
+        vf = _wv_fit(d, v, F_BOLD, 46, cw - 68)
+        d.text((x + 34, y + 132), v, font=vf, fill=A["deep"], anchor="lm")
+    yb = y0 + 3 * ch + 2 * gy + 36
+    d.text((60, yb + 26), cfg.get("size_label") or "尺寸（宽×高×深）",
+           font=_font(F_LIGHT, 26), fill=(110, 118, 130), anchor="lm")
+    sp = cfg.get("size_pills") or []
+    _fp = _font(F_REG, 23)
+    if sp:
+        w2 = _wv_pill_r(d, 1020, yb, sp[1], _fp, A)
+        _wv_pill_r(d, 1020 - w2 - 12, yb, sp[0], _fp, A)
+    else:
+        _wv_pill_r(d, 1020, yb, "以实物为准", _fp, A)
+    d.rectangle([60, yb + 78, 1020, yb + 79], fill=A["tint"])
+    C.save(out, quality=95)
+
+
+def _wv_img3(cfg, points, out, tone):
+    """白字·蓝底 ③卖点：标题「为什么选它」+ 圆徽章行 + 隔行浅蓝斑马条。"""
+    A = _wv_ac(tone)
+    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    d = ImageDraw.Draw(C)
+    _lw3 = _paste_logo(d, C, cfg, (62, 52), white=False, h=30, max_w=150)
+    d.text((64, 116), "为什么选它", font=_font(F_BOLD, 46), fill=INK, anchor="lm")
+    d.rounded_rectangle([64, 160, 184, 166], 3, fill=A["ac"])
+    d.text((1016, 128), "W H Y   U S", font=_serif(20, False), fill=A["ac"], anchor="rm")
+    pts = _v8_points(points, _wv_fix_rows(cfg.get("params_rows")))
+    y0, y1 = 208, 986
+    m = max(1, len(pts))
+    rh = (y1 - y0) / float(m)
+    for i, t in enumerate(pts or []):
+        if "：" in t or ":" in t:
+            k, _, v = t.replace("：", ":").partition(":")
+            main, sub = v.strip(), k.strip()
+        else:
+            seg = t.replace("，", "\x01").replace(",", "\x01").split("\x01")
+            main, sub = seg[0].strip(), (seg[1].strip() if len(seg) > 1 else "")
+        yy = y0 + rh * (i + 0.5)
+        if i % 2 == 0:
+            d.rounded_rectangle([48, yy - rh / 2 + 6, 1032, yy + rh / 2 - 6], radius=16, fill=A["tint2"])
+        d.ellipse([92, yy - 27, 146, yy + 27], fill=A["ac"])
+        d.text((119, yy), "%d" % (i + 1), font=_font(F_BOLD, 26), fill=(255, 255, 255), anchor="mm")
+        ff = _wv_fit(d, main, F_BOLD, 36, 1080 - 190 - 120)
+        d.text((176, yy - 16), main, font=ff, fill=INK, anchor="lm")
+        if sub:
+            d.text((176, yy + 26), sub, font=_font(F_REG, 20), fill=(130, 138, 150), anchor="lm")
+    d.text((64, 1020), cfg.get("model") or "", font=_font(F_REG, 20), fill=(190, 196, 204), anchor="lm")
+    C.save(out, quality=95)
+
+
+def _wv_img4(cfg, prod, out, tone):
+    """白字·蓝底 ④尺寸：顶部深蓝横幅 + 官方线稿 + 底部宽/高/深三颗胶囊。"""
+    A = _wv_ac(tone)
+    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    d = ImageDraw.Draw(C)
+    d.rectangle([0, 0, 1080, 118], fill=A["banner"])
+    _paste_logo(d, C, cfg, (60, 59), white=True, h=34, max_w=170)
+    d.text((540, 59), "产 品 尺 寸", font=_font(F_BOLD, 40), fill=(255, 255, 255), anchor="mm")
+    sp = cfg.get("size_pills") or []
+    nums = re.findall(r"\d+", " ".join(sp))
+    simg = None
+    if cfg.get("sizeimg"):
+        try:
+            simg = _rescue_prod(_autocrop_white(_flat_white(Image.open(cfg["sizeimg"])), margin=6), None)
+        except Exception:
+            simg = None
+    if simg is not None:
+        w, h = simg.size
+        sc = min(840.0 / w, 560.0 / h)
+        im2 = simg.resize((max(1, int(w * sc)), max(1, int(h * sc))), Image.LANCZOS)
+        im2 = im2.filter(ImageFilter.UnsharpMask(radius=2, percent=60, threshold=2))
+        if len(nums) >= 3:
+            try:
+                im3 = _label_size_drawing(im2, int(nums[0]), int(nums[1]), int(nums[2]))
+                if im3.size != im2.size:
+                    sc3 = min(840.0 / im3.size[0], 560.0 / im3.size[1])
+                    im2 = im3.resize((max(1, int(im3.size[0] * sc3)), max(1, int(im3.size[1] * sc3))), Image.LANCZOS)
+                else:
+                    im2 = im3
+            except Exception:
+                pass
+        C.paste(im2, (int(540 - im2.size[0] / 2), 158 + max(0, int((560 - im2.size[1]) / 2))))
+    else:
+        sk = _sketch_rgba(prod, color=(28, 30, 34)) if prod else None
+        if sk is not None:
+            sc4 = min(840.0 / max(1, sk.width), 560.0 / max(1, sk.height))
+            sk = sk.resize((max(1, int(sk.width * sc4)), max(1, int(sk.height * sc4))), Image.LANCZOS)
+            C.paste(sk, (int(540 - sk.size[0] / 2), 158 + max(0, int((560 - sk.size[1]) / 2))), sk)
+    dims = cfg.get("dims") or ([int(n) for n in nums[:3]] if len(nums) >= 3 else None)
+    if dims and all(dims):
+        labels = ["宽 %d mm" % dims[0], "高 %d mm" % dims[1], "深 %d mm" % dims[2]]
+        fp = _font(F_BOLD, 30)
+        ws = [_tw(d, s, fp) + 80 for s in labels]
+        total = sum(ws) + 2 * 24
+        x = 540 - total / 2
+        for s_, w_ in zip(labels, ws):
+            d.rounded_rectangle([x, 790, x + w_, 790 + 64], radius=32, fill=A["tint"])
+            d.text((x + w_ / 2, 790 + 32), s_, font=fp, fill=A["deep"], anchor="mm")
+            x += w_ + 24
+        d.text((540, 918), "%s  %s" % (cfg.get("brand", ""), cfg.get("model", "")),
+               font=_font(F_BOLD, 28), fill=INK, anchor="mm")
+        d.text((540, 966), "实际尺寸以实物为准", font=_font(F_REG, 22), fill=(170, 177, 188), anchor="mm")
+    else:
+        d.text((540, 840), "%s  %s" % (cfg.get("brand", ""), cfg.get("model", "")),
+               font=_font(F_BOLD, 28), fill=INK, anchor="mm")
+        d.text((540, 894), "外形尺寸以实物为准 · 可咨询客服获取详细规格",
+               font=_font(F_REG, 23), fill=(130, 138, 150), anchor="mm")
+    C.save(out, quality=95)
+
+
+def _wp_img2(cfg, prod, out, tone):
+    """白字·紫底 ②参数：左机图 + 右侧点线参数（值紫粗右对齐），编辑目录风。"""
+    A = _wv_ac(tone)
+    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    d = ImageDraw.Draw(C)
+    _paste_logo(d, C, cfg, (62, 60), white=False, h=30, max_w=150)
+    d.text((64, 116), "核 心 参 数", font=_font(F_BOLD, 42), fill=INK, anchor="lm")
+    d.rounded_rectangle([64, 158, 154, 164], 3, fill=A["ac"])
+    d.text((1016, 118), "S P E C S", font=_serif(18, False), fill=A["ac"], anchor="rm")
+    prod2 = _crop_prod(prod)
+    try:
+        _pw3, _ph3 = prod2.size
+        h3 = _ph3 * min(520.0 / _ph3, 380.0 / _pw3)
+    except Exception:
+        h3 = 520.0
+    bottom3, _ = _place(h3, 880, top_min=240)
+    d.ellipse([250 - 160, bottom3 - 24, 250 + 160, bottom3 + 6], fill=A["tint"])
+    _paste_product(C, prod2, 250, bottom3, 520, max_w=380)
+    rows = _wv_fix_rows(cfg.get("params_rows"))[:6]
+    x0, x1, y0, rh = 470, 1020, 208, 84
+    for i, (k, v) in enumerate(rows):
+        y = y0 + i * rh
+        d.text((x0, y), k, font=_font(F_LIGHT, 26), fill=(110, 118, 130), anchor="lm")
+        vf = _wv_fit(d, v, F_BOLD, 30, 270)
+        d.text((x1, y), v, font=vf, fill=A["deep"], anchor="rm")
+        d.line([x0, y + 46, x1, y + 46], fill=A["tint"], width=2)
+        d.ellipse([x0 - 4, y + 42, x0 + 4, y + 50], fill=A["ac"])
+        d.ellipse([x1 - 4, y + 42, x1 + 4, y + 50], fill=A["ac"])
+    d.text((64, 952), cfg.get("size_label") or "尺寸（宽×高×深）",
+           font=_font(F_LIGHT, 26), fill=(110, 118, 130), anchor="lm")
+    sp = cfg.get("size_pills") or []
+    _fp = _font(F_REG, 23)
+    if sp:
+        w2 = _wv_pill_r(d, 1020, 936, sp[1], _fp, A)
+        _wv_pill_r(d, 1020 - w2 - 12, 936, sp[0], _fp, A)
+    else:
+        _wv_pill_r(d, 1020, 936, "以实物为准", _fp, A)
+    C.save(out, quality=95)
+
+
+def _wp_img3(cfg, points, out, tone):
+    """白字·紫底 ③卖点：标题居中 + 2×3 浅紫 chip 卡（顶紫条+衬线序号）。"""
+    A = _wv_ac(tone)
+    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    d = ImageDraw.Draw(C)
+    _paste_logo(d, C, cfg, (62, 108), white=False, h=32, max_w=160)
+    d.text((540, 108), "核 心 卖 点", font=_font(F_BOLD, 44), fill=INK, anchor="mm")
+    d.rounded_rectangle([480, 152, 600, 158], 3, fill=A["ac"])
+    pts = (_v8_points(points, cfg.get("params_rows")) or [])[:6]
+    x0, cw, chh, gx, gy, y0 = 60, 470, 232, 20, 18, 200
+    for i, t in enumerate(pts):
+        r, c = divmod(i, 2)
+        x = x0 + c * (cw + gx)
+        y = y0 + r * (chh + gy)
+        d.rounded_rectangle([x, y, x + cw, y + chh], radius=20, fill=A["tint2"])
+        d.rounded_rectangle([x, y, x + cw, y + 8], radius=4, fill=A["ac"])
+        d.text((x + 30, y + 56), "%02d" % (i + 1), font=_serif(30), fill=A["ac"], anchor="lm")
+        if "：" in t or ":" in t:
+            k, _, v = t.replace("：", ":").partition(":")
+            main, sub = v.strip(), k.strip()
+        else:
+            seg = t.replace("，", "\x01").replace(",", "\x01").split("\x01")
+            main, sub = seg[0].strip(), (seg[1].strip() if len(seg) > 1 else "")
+        mf = _wv_fit(d, main, F_BOLD, 32, cw - 60)
+        d.text((x + 30, y + 122), main, font=mf, fill=INK, anchor="lm")
+        if sub:
+            d.text((x + 30, y + 172), sub, font=_font(F_REG, 19), fill=(130, 138, 150), anchor="lm")
+    d.text((540, 1004), cfg.get("model") or "", font=_font(F_REG, 20), fill=(190, 196, 204), anchor="mm")
+    C.save(out, quality=95)
+
+
+def _wp_img4(cfg, prod, out, tone):
+    """白字·紫底 ④尺寸：标题居中 + 线稿 + 底部宽/高/深三张浅紫数字大卡。"""
+    A = _wv_ac(tone)
+    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    d = ImageDraw.Draw(C)
+    _paste_logo(d, C, cfg, (62, 100), white=False, h=32, max_w=160)
+    d.text((540, 100), "产 品 尺 寸", font=_font(F_BOLD, 44), fill=INK, anchor="mm")
+    d.rounded_rectangle([490, 144, 590, 150], 3, fill=A["ac"])
+    sp = cfg.get("size_pills") or []
+    nums = re.findall(r"\d+", " ".join(sp))
+    simg = None
+    if cfg.get("sizeimg"):
+        try:
+            simg = _rescue_prod(_autocrop_white(_flat_white(Image.open(cfg["sizeimg"])), margin=6), None)
+        except Exception:
+            simg = None
+    if simg is not None:
+        w, h = simg.size
+        sc = min(840.0 / w, 520.0 / h)
+        im2 = simg.resize((max(1, int(w * sc)), max(1, int(h * sc))), Image.LANCZOS)
+        im2 = im2.filter(ImageFilter.UnsharpMask(radius=2, percent=60, threshold=2))
+        if len(nums) >= 3:
+            try:
+                im3 = _label_size_drawing(im2, int(nums[0]), int(nums[1]), int(nums[2]))
+                if im3.size != im2.size:
+                    sc3 = min(840.0 / im3.size[0], 520.0 / im3.size[1])
+                    im2 = im3.resize((max(1, int(im3.size[0] * sc3)), max(1, int(im3.size[1] * sc3))), Image.LANCZOS)
+                else:
+                    im2 = im3
+            except Exception:
+                pass
+        C.paste(im2, (int(540 - im2.size[0] / 2), 180 + max(0, int((520 - im2.size[1]) / 2))))
+    else:
+        sk = _sketch_rgba(prod, color=(28, 30, 34)) if prod else None
+        if sk is not None:
+            sc4 = min(840.0 / max(1, sk.width), 520.0 / max(1, sk.height))
+            sk = sk.resize((max(1, int(sk.width * sc4)), max(1, int(sk.height * sc4))), Image.LANCZOS)
+            C.paste(sk, (int(540 - sk.size[0] / 2), 180 + max(0, int((520 - sk.size[1]) / 2))), sk)
+    dims = cfg.get("dims") or ([int(n) for n in nums[:3]] if len(nums) >= 3 else None)
+    if dims and all(dims):
+        cards = [("宽", "%d" % dims[0]), ("高", "%d" % dims[1]), ("深", "%d" % dims[2])]
+        x0, cw2, gx = 75, 290, 25
+        for i, (lb, vv) in enumerate(cards):
+            x = x0 + i * (cw2 + gx)
+            d.rounded_rectangle([x, 736, x + cw2, 736 + 170], radius=18, fill=A["tint2"])
+            d.rounded_rectangle([x, 736, x + cw2, 736 + 8], radius=4, fill=A["ac"])
+            d.text((x + cw2 / 2, 736 + 52), lb, font=_font(F_LIGHT, 26), fill=(130, 138, 150), anchor="mm")
+            d.text((x + cw2 / 2, 736 + 118), vv, font=_font(F_BOLD, 54), fill=A["deep"], anchor="mm")
+        d.text((x0 + 3 * cw2 + 2 * gx - 14, 736 + 154), "mm", font=_font(F_REG, 20), fill=(170, 177, 188), anchor="rm")
+        d.text((540, 962), "%s  %s" % (cfg.get("brand", ""), cfg.get("model", "")),
+               font=_font(F_BOLD, 28), fill=INK, anchor="mm")
+    else:
+        d.text((540, 790), "%s  %s" % (cfg.get("brand", ""), cfg.get("model", "")),
+               font=_font(F_BOLD, 28), fill=INK, anchor="mm")
+        d.text((540, 844), "外形尺寸以实物为准 · 可咨询客服获取详细规格",
+               font=_font(F_REG, 23), fill=(130, 138, 150), anchor="mm")
     C.save(out, quality=95)
 
 
@@ -1339,6 +1750,22 @@ def _sat_frac(im):
     return n / float(tot)
 
 
+def _bottom_strip_sat(im, frac=0.18):
+    """底部 18% 高度条的高饱和占比——促销海报的价签横幅（红底白字大价格）固定贴在
+    底部。2026-11-03 实测分离度：欣盛海报=0.855；电视 55A30/65A30（屏幕花卉壁纸
+    拉高全图但底部是中色边框/支架）≤0.214；干净产品照=0.000。"""
+    try:
+        w, h = im.convert("RGB").size
+        im2 = im.convert("RGB").crop((0, int(h * (1 - frac)), w, h)).resize((160, 40))
+        n = 0
+        for r, g, b in im2.getdata():
+            if max(r, g, b) - min(r, g, b) > 60:
+                n += 1
+        return n / 6400.0
+    except Exception:
+        return 0.0
+
+
 def _library_img(model, min_side=350):
     """软件图库优先（2026-10-21 用户实锤：官网抓链候选太差）：payload imgs = 卡片上显示的
     同款审过图；没有再看欣盛 ximg（缺图补的渲染图，yonyoucloud 直链无防盗链）。
@@ -1694,7 +2121,7 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
     if os.path.isfile(picked) and have_size:
         return picked
     # ① AI 选图先行（2026-10-29 用户令「蓝底也跟聚光一样会选好的图」）：
-    # 复用聚光/发布图同款视觉选图（pei_core.zhipu_pick_images，缓存 _ai_pick_v4.json
+    # 复用聚光/发布图同款视觉选图（pei_core.zhipu_pick_images，缓存 _ai_pick_v5.json
     # 与聚光共享——同一台机器两边不重复烧视觉额度），取 front（正面整机）抠底。
     # 顺序教训（CWB12-27BKU1 实锤）：原来「软件图库」排在 AI 前面，图库里的开门
     # 内部照直接当选，AI 根本轮不到——聚光用官网关门整机照、蓝底却拿开门图。
@@ -1709,24 +2136,58 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 _src = os.path.join(_pw.sroot(), norm_model(model) or model)
                 if os.path.isdir(_src):
                     _pick = _pc.zhipu_pick_images(_key, _src, kind or "", log=log)
-                    if _pick and _pick.get("front"):
-                        _fp = os.path.join(_src, _pick["front"])
-                        if os.path.isfile(_fp):
-                            _rescue_prod(Image.open(_fp), log).save(picked)
-                            have_prod = True
+                    # front 被把关拦掉时退 angle（prompt 契约里 angle 同样是关门整机照，
+                    # 2026-11-03 XQGL120-L732EH：front=海报被拦后启发式锁了开门透明图，
+                    # 不如 AI 选好的关门角度照）
+                    for _role in ("front", "angle"):
+                        if not (_pick and _pick.get(_role)):
+                            continue
+                        _fp = os.path.join(_src, _pick[_role])
+                        if not os.path.isfile(_fp):
+                            continue
+                        # 把关（2026-11-03 用户实锤 XQGL120-L732EH：AI 把欣盛带价签的
+                        # 促销海报选成 front 直接落 product.png，启发式根本没轮到跑）。
+                        # 判定用双条件：全图高饱和>0.08 且 底部价签条>0.4 才是海报——
+                        # 电视/广告机的彩屏壁纸会拉高全图（55A30 全图 0.31）但底条中性
+                        # （≤0.21），单看全图会误杀（该海报全图 0.162、底条 0.855，
+                        # 干净产品照全图 ≤0.001）。不过关弃用，front 拦了退 angle 再试。
+                        try:
+                            _imf = Image.open(_fp)
+                            _sf = _sat_frac(_imf)
+                            _bs = _bottom_strip_sat(_imf)
+                        except Exception:
+                            _sf, _bs = 0.0, 0.0
+                        if _sf > 0.08 and _bs > 0.4:
                             if log:
-                                log("机图用 AI 选图（front=%s，与聚光同源）" % _pick["front"])
+                                log("AI 选图 %s=%s 彩色占比 %.0f%%/底条 %.0f%%——促销海报/价签类，弃用%s"
+                                    % (_role, _pick[_role], _sf * 100, _bs * 100,
+                                       "，退试 angle" if _role == "front" else "走启发式重选"))
+                            continue
+                        _rescue_prod(Image.open(_fp), log).save(picked)
+                        have_prod = True
+                        _picked_one = _pick[_role]
+                        if log:
+                            log("机图用 AI 选图（%s=%s，与聚光同源）" % (_role, _pick[_role]))
+                        break
         except Exception as _e:
             if log:
                 log("AI 选图跳过：%r" % (_e,))
-    # ② 软件图库兜底（与卡片同源的审过图；AI 没给出 front 时才用）
+    # ② 软件图库兜底（与卡片同源的审过图；AI 没给出 front 时才用）。
+    # 质量门（2026-11-03 XQGL120-L732EH 实锤）：图库图常只有 400px，超分再锐化也糊；
+    # 小图先记着当备胎，让后面的启发式先挑抓取大图（欣盛 2000px 干净整机照），
+    # 启发式全军覆没才轮到小图库图（循环后 fallback）。
+    _lib_fallback = None
     if not have_prod:
         lib = _library_img(model)
-        if lib:
+        if lib and min(lib.size) >= 600:
             _rescue_prod(lib, log).save(picked)
             have_prod = True
             if log:
                 log("机图用软件图库（与卡片同款）")
+        elif lib:
+            _lib_fallback = lib
+            if log:
+                log("图库图只有 %dpx，先记着备胎，启发式先挑抓取大图" % min(lib.size))
     # ② 候选源：写文案已生成的官方图（copy/<型号>/img_*.jpg）优先入队，再接抓取链 URL。
     # 没机图就选机图；有机图只找官网尺寸线框图
     srcs = []
@@ -1744,12 +2205,17 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             pdir = os.path.join(_pw.sroot(), nm2)
             # kitset 自己家的抓取图优先（2026-10-29 聚光独立体系：ensure_data 硬链的
             # 官网\ 副本就在 kitset/<型号>/官网/——写文案目录就算删了蓝底照样有图源）
-            _kown = (glob.glob(os.path.join(kit_root(), nm2, "官网", "*.png")) +
-                     glob.glob(os.path.join(kit_root(), nm2, "官网", "*.jpg")))
+            # 2026-11-03：抓取图按来源落 官网/欣盛/中关村/其他 四个子目录（10-31 改），
+            # 但候选只 glob 了 官网/——统帅型号只有 欣盛/（2000px 干净整机照），
+            # 把关弃掉 AI 海报后启发式根本见不着它，只能拿 400px 图库小图超分。全扫。
+            _kown = [p for _d in _SRC_TAG_DIRS
+                     for p in (glob.glob(os.path.join(kit_root(), nm2, _d, "*.png")) +
+                               glob.glob(os.path.join(kit_root(), nm2, _d, "*.jpg")))]
             _pc = (glob.glob(os.path.join(pdir, "*.png")) +
-                   glob.glob(os.path.join(pdir, "*.jpg")) +
-                   glob.glob(os.path.join(pdir, "官网", "*.png")) +
-                   glob.glob(os.path.join(pdir, "官网", "*.jpg")))
+                   glob.glob(os.path.join(pdir, "*.jpg")))
+            for _d in _SRC_TAG_DIRS:
+                _pc += (glob.glob(os.path.join(pdir, _d, "*.png")) +
+                        glob.glob(os.path.join(pdir, _d, "*.jpg")))
             _pc = _kown + [p for p in _pc if p not in set(_kown)]
             _pc.sort(key=lambda p: -os.path.getsize(p))
             srcs += [("file", p) for p in _pc[:24]]
@@ -1874,6 +2340,12 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
         if not best:
             if _trans_fallback[0]:
                 _rescue_prod(Image.open(_trans_fallback[0]), log).save(picked)
+                return picked
+            if _lib_fallback is not None:
+                # 启发式没挑到大图，才轮到小图库图备胎（超分救清晰度）
+                _rescue_prod(_lib_fallback, log).save(picked)
+                if log:
+                    log("启发式无果，机图回退软件图库小图（%dpx）" % min(_lib_fallback.size))
                 return picked
             if os.path.isfile(picked):
                 return picked      # 预置机图（人工救回的成品），直接用
@@ -2700,7 +3172,7 @@ def ensure_data(model, log=None):
             # ① 参数 + AI 缓存（info.json 一份进根，一份硬链进 官网\——同 inode 内容永远同步）
             _link_or_copy(os.path.join(pd, "info.json"), os.path.join(kd, "info.json")) and \
                 _link_or_copy(os.path.join(pd, "info.json"), os.path.join(kd, "官网", "info.json"))
-            for fn in ("_ai_pick_v4.json", "_ai_pick.json", "_ai_read_v2.json"):
+            for fn in ("_ai_pick_v5.json", "_ai_pick_v4.json", "_ai_pick.json", "_ai_read_v2.json"):
                 if _link_or_copy(os.path.join(pd, fn), os.path.join(kd, "官网", fn)):
                     n += 1
             # ② 抓取图：peiwork 根 + 官网/ 子目录 → kitset/<型号>/官网/
@@ -2729,6 +3201,34 @@ def ensure_data(model, log=None):
     except Exception as e:
         log("聚光数据搬入失败（不阻塞，后面还有抓取兜底）：%r" % (e,))
     return n
+
+
+def fetch_candidates(model, log=None):
+    """只抓图不渲染（2026-11-03 用户令「官网按键看的是我的机型，不是开官网」）：
+    卡片「官网」按钮打开本型号抓取图库（extras.candidates 同一份数据）；
+    一次都没抓过的型号现场跑一遍抓取链（爬虫→官网三站→欣盛→中关村兜底），
+    图落 官网/欣盛/中关村/其他 子文件夹，顺带把 product.png 选出来（AI 选图同款）。
+    返回 True=有图可看 / False=全网没抓到。"""
+    log = log or (lambda s: None)
+    mdir = model_dir(model)
+    for sub in _SRC_TAG_DIRS:
+        d = os.path.join(mdir, sub)
+        if os.path.isdir(d):
+            try:
+                if any(f.lower().endswith((".jpg", ".jpeg", ".png")) for f in os.listdir(d)):
+                    return True
+            except Exception:
+                pass
+    info, img_urls = _gather_info(model, log)
+    if not img_urls:
+        log("常规渠道缺图，试中关村…")
+        zimgs, _zp = _zol_data(model, (info or {}).get("brand") or "", log)
+        img_urls = [(u, "中关村") for u in zimgs if u]
+    if not img_urls:
+        return False
+    _pick_prod(model, img_urls, mdir, log, page_url=(info or {}).get("url") or None,
+               kind=(info or {}).get("kind") or (info or {}).get("cat") or "")
+    return True
 
 
 def spot_dir(model):
@@ -2999,6 +3499,129 @@ def generate(model, force=0, log=None):
 
 
 # ---------------- 单张重出 / 水印 / 糊图预警（2026-10-31 用户令「剩下全改」） ----------------
+def _pagelink_cache(save=None):
+    """官网详情页链接缓存（2026-11-03）：型号 → {u, brand, t}。搜一次存一次，7 天过期。"""
+    fp = os.path.join(kit_root(), "_pagelinks.json")
+    if save is None:
+        try:
+            with io.open(fp, encoding="utf-8") as f:
+                return json.load(f) or {}
+        except Exception:
+            return {}
+    try:
+        with io.open(fp, "w", encoding="utf-8") as f:
+            json.dump(save, f, ensure_ascii=False)
+    except Exception:
+        pass
+    return save
+
+
+def _index_link(nm, brand=""):
+    """本地三站官网索引（assets/pei/*_index.json，型号→产品页）查深链，秒回不走网络。
+    先查本品牌索引，再查另外两站；精确 → 去符号全等 → 长前缀（≥6 字符）三级匹配。"""
+    order = ["haier", "casarte", "leader"]
+    bmap = {"海尔": "haier", "卡萨帝": "casarte", "统帅": "leader", "Leader": "leader"}
+    bk = bmap.get(brand or "")
+    if bk in order:
+        order.remove(bk)
+        order.insert(0, bk)
+
+    def _norm(s):
+        return re.sub(r"[^0-9A-Za-z]", "", str(s or "")).upper()
+
+    for sk in order:
+        try:
+            p = pei_core.res_path("%s_index.json" % sk)
+            with io.open(p, encoding="utf-8") as f:
+                idx = json.load(f)
+        except Exception:
+            continue
+        if not isinstance(idx, dict):
+            continue
+        ent = idx.get(nm)
+        if not ent:
+            tgt = _norm(nm)
+            for k, v in idx.items():
+                if _norm(k) == tgt:
+                    ent = v
+                    break
+        if not ent:
+            # 型号带后缀/颜色码时按长前缀命中（XQGL100-J532W → XQGL100-J532）
+            best = None
+            for k, v in idx.items():
+                kk = _norm(k)
+                if len(kk) >= 6 and (_norm(nm).startswith(kk) or kk.startswith(_norm(nm))):
+                    if best is None or len(kk) > len(_norm(best[0])):
+                        best = (k, v)
+            ent = best[1] if best else None
+        u = str((ent or {}).get("url") or "").strip()
+        if re.match(r"^https?://[^/]+/.+", u):
+            return u, (ent or {}).get("model") or nm
+    return None, ""
+
+
+def page_link(model, log=None):
+    """型号对应的**官网产品详情页**深链（2026-11-03 用户令：官网按钮不许开搜索页）。
+
+    顺序：①set.json 里存过的深链（多级路径才算产品页）→ ②海尔/卡萨帝/统帅三站搜索
+    按型号精确匹配 → ③缓存。找不到返回 (None, brand)，调用方提示「官网没这台」，
+    绝不再拿搜索页糊弄。
+    """
+    log = log or (lambda s: None)
+    nm = norm_model(model) or re.sub(r"\s+", "", str(model or ""))
+    if not nm:
+        return None, ""
+    cj, md = _cfg_of(model)
+    brand = str(((cj or {}).get("cfg") or {}).get("brand") or (cj or {}).get("brand") or "")
+    # ① 已存深链（必须是三站之一的产品页，站点根不算）
+    for u in (str((cj or {}).get("url") or ""), str(((cj or {}).get("cfg") or {}).get("url") or "")):
+        if not re.match(r"^https?://[^/]+/.+", u or ""):
+            continue
+        if any(h in u for h in ("haier.com", "casarte.com", "leader.com.cn")):
+            return u, brand
+    # ② 本地三站官网索引（assets/pei，秒回）
+    u2, _m2 = _index_link(nm, brand)
+    if u2:
+        ck = _pagelink_cache()
+        ck[nm] = {"u": u2, "brand": brand, "t": time.time()}
+        _pagelink_cache(ck)
+        return u2, brand
+
+    # ③ 缓存（在线搜索过的结果留 7 天）
+    ck = _pagelink_cache()
+    ce = ck.get(nm) or {}
+    if ce.get("u") and (time.time() - float(ce.get("t") or 0) < 7 * 86400):
+        return ce["u"], (ce.get("brand") or brand)
+    # ④ 三站在线搜索（统帅 WAF 常 403，兜底而已）
+    try:
+        import copywriter as _cw
+    except Exception:
+        return None, brand
+    keys = [nm]
+    if model and model.strip() != nm:
+        keys.append(model.strip())
+    for sk in ("haier", "casarte", "leader"):
+        s = _cw.SITES[sk]
+        for w in keys:
+            try:
+                rows = _cw.site_search(sk, w)
+            except Exception:
+                continue
+            row = _cw.match_row(rows, nm)
+            if not row:
+                continue
+            u = str(row.get("docPubUrl") or row.get("docPuburl") or row.get("url") or "").strip()
+            if not u:
+                continue
+            if not u.startswith("http"):
+                u = s["home"] + "/" + u.lstrip("/")
+            log("官网[%s]详情页：%s" % (s["name"], u))
+            ck[nm] = {"u": u, "brand": s["name"], "t": time.time()}
+            _pagelink_cache(ck)
+            return u, s["name"]
+    return None, brand
+
+
 def _cfg_of(model, mdir=None):
     """从 set.json 取上次生成的参数快照（含 cfg）。没有就返回 (None, None)。"""
     mdir = mdir or model_dir(model)
@@ -3052,6 +3675,76 @@ def regen_one(model, n, log=None):
     except Exception as e:
         log("单张复检跳过：%r" % (e,))
     return {"ok": True, "n": n, "file": out, "blur": blur_warn(bdir)}
+
+
+def white_hero(model, tone="blue", log=None):
+    """白字套图（2026-11-03 用户令「跟蓝底一样配够四张 + 文案搬过来 + 微改不跟本家同款」）：
+    用蓝底同一套 cfg/机图/AI 选图结果，整套四张按 tone 出变体——
+    tone='blue' 蓝底白字（深蓝胶囊微改版，不跟本家同款）、tone='purple' 紫底白字。
+    产物落 peiwork/<型号>/白字/蓝底/img_1..4.jpg 与 白字/紫底/img_1..4.jpg（2026-11-03 分文件夹），
+    配文窗图片库按「首图 · 白字」组带出。没有参数快照时自动先跑一遍蓝底。"""
+    log = log or (lambda s: None)
+    _tone_purple = (str(tone or "").lower().startswith("p") or "紫" in str(tone or ""))
+    _tone = "purple" if _tone_purple else "blue"
+    _pre = "紫底白字" if _tone_purple else "蓝底白字"
+    j, mdir = _cfg_of(model)
+    if not j or not j.get("cfg"):
+        log("没有参数快照，先跑一遍蓝底（1-2 分钟）…")
+        generate(model, 0, log=log)
+        j, mdir = _cfg_of(model)
+        if not j or not j.get("cfg"):
+            raise RuntimeError("蓝底参数快照拿不到——先在蓝底里给这个型号出一次图")
+    cfg = j["cfg"]
+    prod = os.path.join(mdir, "product.png")
+    if not os.path.isfile(prod):
+        raise RuntimeError("主图丢了（product.png 不在），先在蓝底里重出一次")
+    try:
+        import pubwork
+        wroot = os.path.join(pubwork.mdir(model), "白字")
+    except Exception:
+        wroot = os.path.join(mdir, "白字")
+    # 2026-11-03 用户令：蓝/紫分文件夹（白字\蓝底\ 与 白字\紫底\），文件名统一 img_1..4
+    _sub = "紫底" if _tone_purple else "蓝底"
+    wdir = os.path.join(wroot, _sub)
+    os.makedirs(wdir, exist_ok=True)
+    # 老版单张文件清掉（升级成四张套后留着只会让图片库出现孤儿）；
+    # 旧版混在 白字\ 根下的四张套搬进对应子文件夹（幂等：目标已有就删源不覆盖）
+    for _old in ("蓝底白字.jpg", "紫底白字.jpg"):
+        _op = os.path.join(wroot, _old)
+        if os.path.isfile(_op):
+            try:
+                os.remove(_op)
+            except Exception:
+                pass
+    for _pfx, _dst in (("蓝底白字", "蓝底"), ("紫底白字", "紫底")):
+        for _n in (1, 2, 3, 4):
+            _op = os.path.join(wroot, "%s_%d.jpg" % (_pfx, _n))
+            if os.path.isfile(_op):
+                try:
+                    _dd = os.path.join(wroot, _dst)
+                    os.makedirs(_dd, exist_ok=True)
+                    if not os.path.isfile(os.path.join(_dd, "img_%d.jpg" % _n)):
+                        shutil.move(_op, os.path.join(_dd, "img_%d.jpg" % _n))
+                    else:
+                        os.remove(_op)
+                except Exception:
+                    pass
+    points = j.get("points") or []
+    outs = []
+    for n in (1, 2, 3, 4):
+        out = os.path.join(wdir, "img_%d.jpg" % n)
+        log("渲染白字第 %d/4 张…" % n)
+        if n == 1:
+            _render_img1(cfg, Image.open(prod), out, tone=_tone)
+        elif n == 2:
+            # 2026-11-03 用户令：白字蓝/紫的②③④全部用专属版式，绝不跟本家蓝底同款
+            (_wp_img2 if _tone_purple else _wv_img2)(cfg, Image.open(prod), out, _tone)
+        elif n == 3:
+            (_wp_img3 if _tone_purple else _wv_img3)(cfg, points, out, _tone)
+        else:
+            (_wp_img4 if _tone_purple else _wv_img4)(cfg, Image.open(prod), out, _tone)
+        outs.append(out)
+    return {"ok": True, "tone": _tone, "files": outs}
 
 
 def apply_water(bdir):

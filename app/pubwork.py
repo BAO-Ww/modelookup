@@ -647,10 +647,12 @@ def lib(model):
             _ks.ensure_data(model, log=lambda s: _logf()(s))
     except Exception as e:
         _logf()("聚光老图搬入失败（不影响其它）：%s" % e)
-    for sub in ("AI6张", SPOT_SUB, "AI6张_亮白", "AI6张_纯白", "AI6张_实景", "发布图"):
+    for sub in ("AI6张", SPOT_SUB, "AI6张_亮白", "AI6张_纯白", "AI6张_实景", "白字/蓝底", "白字/紫底", "发布图"):
         label = {"AI6张": "发布图 · 深灰影棚", SPOT_SUB: "发布图 · 暗角聚光",
                  "AI6张_亮白": "发布图 · 亮白影棚", "AI6张_纯白": "发布图 · 纯白",
-                 "AI6张_实景": "发布图 · 实景合成", "发布图": "保存精选 / 促销首图"}.get(sub, sub)
+                 "AI6张_实景": "发布图 · 实景合成",
+                 "白字/蓝底": "首图 · 白字（蓝底）", "白字/紫底": "首图 · 白字（紫底）",
+                 "发布图": "保存精选 / 促销首图"}.get(sub, sub)
         fs = _img_files(dir_of(model, sub))   # 聚光走 kitset（2026-10-30），其余走 peiwork
         if fs:
             groups.append({"label": label, "sub": sub,

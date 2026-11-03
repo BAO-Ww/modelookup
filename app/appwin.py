@@ -421,9 +421,9 @@ def build_menu(sub=False):
         ]),
         # 2026-11-02 用户令：云端体检单独成菜单，放在「帮助」前面（数据新鲜度/抓取流水/
         # 健康分，页内面板 worker /diag，只有管理号这份菜单会建，子账号天然看不到）
-        Menu("云端体检(&T)", [
-            MenuAction("干没干活一眼看全", lambda: js_click("extdiag")),
-        ]),
+        # 2026-11-03 用户令：点了就开始，别再弹一层「干没干活一眼看全」——
+        # pywebview 顶层 MenuAction 在 WinForms 下就是直点直跑的菜单项
+        MenuAction("云端体检(&T)", lambda: js_click("extdiag")),
         Menu("帮助(&H)", [
             MenuAction("软件更新", upd_app),
             MenuAction("更新日志", lambda: js_click("extver")),

@@ -32,6 +32,13 @@ datas = [
     (os.path.join(A, "pei", "site_urls_casarte.txt"), "assets/pei"),
     (os.path.join(A, "pei", "site_urls_leader.txt"), "assets/pei"),
     (os.path.join(A, "pei", "site_urls_xdjdy.txt"), "assets/pei"),
+    # 白字套图品牌 logo（2026-11-03）：海尔/卡萨帝/统帅，dark=白底图用 white=深蓝横幅用
+    (os.path.join(A, "logos", "haier_dark.png"), "assets/logos"),
+    (os.path.join(A, "logos", "haier_white.png"), "assets/logos"),
+    (os.path.join(A, "logos", "casarte_dark.png"), "assets/logos"),
+    (os.path.join(A, "logos", "casarte_white.png"), "assets/logos"),
+    (os.path.join(A, "logos", "leader_dark.png"), "assets/logos"),
+    (os.path.join(A, "logos", "leader_white.png"), "assets/logos"),
 ]
 
 a = Analysis(
