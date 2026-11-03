@@ -1690,15 +1690,58 @@ def is_junk_cut(f):
             _best = max(_best, hue_n.get(_i, 0) + hue_n.get((_i + 1) % 18, 0))
         if _best > n * 0.5 and dark < n * 0.05:
             return True
-    # ⑤ 扁平灰方块标（智家白标实锤：gray_top3=0.96 vs 机器 ≤0.84）：
-    #   无饱和色、无暗部、灰阶集中在 3 桶内 —— 实物照片有光影层次，灰阶必然散
+    # ⑤ 近无色图细分（2026-11-03 二次实锤 JSQ31-16CK5FQRGU1：旧 top3>0.93 一刀把
+    #   白机身产品照也杀了——白机+浅灰光影+白底，灰阶必然集中在 3 桶内（01.png top3=0.989），
+    #   正面照全被过滤后 AI 只能拿背面管路图充 front。改为三维细分，只杀真垃圾：
+    #   · 扁平灰标：soft≈0（无任何柔和灰阶过渡，实测全为 0；实体图 ≥0.074）
+    #   · 线稿图/尺寸图：256px 实体占比 <0.06（细线只占极小面积，实测 ≤0.041；白机照 ≥0.080）
+    #   · 白幽灵小图标：不透明区 <0.15（线框幽灵实测 ≤0.081；白机抠图 ≥0.33）"""
     if dark < n * 0.02 and sum(hue_n.values()) < n * 0.02:
-        _gh = [0] * 16
-        for _v in gray:
-            _gh[min(15, _v // 16)] += 1
-        if sum(sorted(_gh, reverse=True)[:3]) > n * 0.93:
+        try:
+            _a = rgba.getchannel("A").resize((64, 64))
+            _op = sum(1 for v in _a.getdata() if v > 128) / 4096.0
+            _b = Image.alpha_composite(
+                Image.new("RGBA", rgba.size, (255, 255, 255, 255)), rgba
+            ).convert("RGB").resize((256, 256))
+            _body = sum(1 for r, g, b in _b.getdata()
+                        if (r * 299 + g * 587 + b * 114) // 1000 <= 235) / 65536.0
+            _g64 = [(r * 299 + g * 587 + b * 114) // 1000
+                    for r, g, b in im2.getdata()]
+            _soft = (sum(1 for y in range(64) for x in range(1, 64)
+                         if 6 <= abs(_g64[y * 64 + x] - _g64[y * 64 + x - 1]) <= 48)
+                     + sum(1 for y in range(1, 64) for x in range(64)
+                           if 6 <= abs(_g64[y * 64 + x] - _g64[(y - 1) * 64 + x]) <= 48))
+        except Exception:
+            return False
+        if _soft < 4096 * 0.02:        # 扁平灰方块标（无光影层次）
+            return True
+        if _body < 0.06:               # 尺寸线稿/白底细线图
+            return True
+        if _op < 0.15:                 # 白幽灵小图标
             return True
     return False
+
+
+def is_poster(f):
+    """促销海报判定（2026-11-03 用户实锤 XQGL120-L732EH）：欣盛渠道的素材常是带
+    「1899×85折=1614」价签的促销海报，AI 视觉把它选成 front 后蓝底首图就成了海报。
+    双条件：全图高饱和 >0.08（海报 0.162）且 底部 18% 价签条 >0.4（海报 0.855）。
+    单看全图会误杀电视——55A30/65A30 屏幕里的花卉壁纸把全图拉到 0.31，但底部是
+    中色边框/支架（≤0.21），加底条这一刀就干净分开。干净产品照两值都 ≈0。"""
+    try:
+        im = Image.open(f).convert("RGB")
+        w, h = im.size
+        if w < 200 or h < 200:
+            return False
+        small = im.resize((160, 160))
+        n = sum(1 for r, g, b in small.getdata() if max(r, g, b) - min(r, g, b) > 60)
+        if n / 25600.0 <= 0.08:
+            return False
+        strip = im.crop((0, int(h * 0.82), w, h)).resize((160, 40))
+        m = sum(1 for r, g, b in strip.getdata() if max(r, g, b) - min(r, g, b) > 60)
+        return m / 6400.0 > 0.4
+    except Exception:
+        return False
 
 
 def _h_deg(r, g, b):
@@ -1749,17 +1792,34 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
         return None
     p = Path(src_dir)
     cands_all = _src_cands(p)
+    _rel = {f: r for f, r in cands_all}     # 路径 → 相对路径
     cands = [f for f, _r in cands_all]
-    names = [r for _f, r in cands_all]
     # 2026-10-24：废图（二维码/logo/能效标识/白幽灵）根本不进拼版 —— AI 只看真图，
     # 编号也是纯真图序列，模型再误返列表号也只会落在真图上
     cands = [f for f in cands if not is_junk_cut(f)]
+    # 2026-11-03：促销海报（欣盛带价签那种）同样不是产品图，也不能给 AI 看——
+    # 实测它会被选成 front，正面的干净整机照连机会都没有（XQGL120-L732EH 实锤）。
+    _poster = set()
+    for f in cands:
+        if is_poster(f):
+            _poster.add(f)
+    if _poster:
+        cands = [f for f in cands if f not in _poster]
     if len(cands) < 3:
         return None
-    cache = p / "_ai_pick_v4.json"   # v4：2026-10-24 废图先过滤+单编号契约+logo 铁律，旧缓存作废
+    # 2026-11-03 修错位：names 原来按【未过滤】的 cands_all 建，而拼版用的是过滤后的
+    # cands——只要中间剔掉一张废图/海报，AI 报的编号就会映射到别的文件（选错图帮凶）。
+    # 编号必须与最终候选严格一一对应，就按 cands 现取。
+    names = [_rel[f] for f in cands]
+    cache = p / "_ai_pick_v5.json"   # v5：2026-11-03 白机身照不再被当垃圾过滤+背面图铁律，旧缓存作废
     try:
         if cache.exists():
-            return json.loads(cache.read_text(encoding="utf-8"))
+            _obj = json.loads(cache.read_text(encoding="utf-8"))
+            # 缓存校验：front/angle/open 指向的图现在是海报 → 旧答案不可信，重选
+            _bad = any(_obj.get(_k) and (p / _obj[_k]) in _poster
+                       for _k in ("front", "angle", "open"))
+            if not _bad:
+                return _obj
     except Exception:
         pass
     sheet = _build_contact_sheet(cands)
@@ -1768,6 +1828,8 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
         "这是%s的商品图拼版，每张左上角有红色编号。请按角色选出编号：\n"
         "1) front：产品整机正面（白底/透明/干净背景，能看到完整机器正面）。"
         "门/盖必须处于关闭状态——门开着的图只能填 open，绝不填 front\n"
+        "   背面图/底部接口图（看到进出水接头、燃气接头、螺丝背板、散热孔背面的）"
+        "是机器背面，绝不能填 front——正面没有合适图就填 null\n"
         "2) angle：这台机器本身的立体角度或侧面实拍（门也关着，能看到机器厚度或斜视角，与正面不同）\n"
         "3) open：这台机器本身的开门/内部实拍（门打开/看到内胆或内部结构的图）\n"
         "4) scene：真实家居/阳台/卫生间/厨房的实景照片（人生活的环境里摆着这台机器）。\n"
@@ -1776,7 +1838,9 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
         "哪怕某类实在没有合适的图也宁可填 null，绝不用它们充数：\n"
         "· 二维码图片；· 品牌 logo、圆形图标、文字标（如 Haier/CASARTE/智家 字样，"
         "无论白字灰字蓝字）；· 中国能效标识/能源效率标识（白底带彩色能效等级表格或二维码的那张）；"
-        "· 参数表/规格表；· 尺寸线稿图；· 纯文字公告图。\n"
+        "· 参数表/规格表；· 尺寸线稿图；· 纯文字公告图；"
+        "· 促销海报（图上带价格、折扣、补贴、优惠券、价签横幅的宣传图，"
+        "哪怕整机拍得很好看也不能选，那是有字有价的广告图）。\n"
         "只回答一个 JSON，每个编号值必须是【单个数字】（如 \"front\":3），"
         "绝不要输出数组/列表：\n"
         "{\"front\":编号,\"angle\":编号,\"open\":编号,\"scene\":编号或null,"

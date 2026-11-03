@@ -109,6 +109,20 @@ class ApiGetMixin:
                 except Exception as e:
                     self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
                 return
+            if (q.get("read") or ["0"])[0] in ("1", "true"):
+                # 只读文案（白字窗 2026-11-03）：绝不触发生成，有 set.json 就回文案，没有就回空
+                import kitset
+                _j, _md = kitset._cfg_of(model)
+                if _j and _j.get("cfg"):
+                    self._send(200, json.dumps({"ok": True, "model": _j.get("model") or model,
+                                                "titles": _j.get("titles") or [],
+                                                "points": _j.get("points") or [],
+                                                "aftersale": _j.get("aftersale") or "",
+                                                "url": (_j.get("cfg") or {}).get("url") or _j.get("src") or ""},
+                                               ensure_ascii=False))
+                else:
+                    self._send(200, json.dumps({"ok": False, "empty": True}, ensure_ascii=False))
+                return
             if (q.get("bg") or ["0"])[0] in ("1", "true"):
                 # Mac WKWebView fetch ~60s 超时（"Load failed" 实锤）→ 生成走后台，前端轮询 /api/jobget
                 import jobman
@@ -147,6 +161,60 @@ class ApiGetMixin:
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": "蓝底套图生成失败：%s" % e},
                                            ensure_ascii=False))
+            return
+
+        # ---------- 官网按钮：型号对应的官网产品详情页（2026-11-03 用户令「不要搜索页」） ----------
+        if path == "/api/pagelink":
+            q = urllib.parse.parse_qs(u.query)
+            model = (q.get("model") or [""])[0].strip()
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            try:
+                import kitset
+                link, brand = kitset.page_link(model)
+                self._send(200, json.dumps({"ok": bool(link), "url": link or "", "brand": brand or ""},
+                                           ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+            return
+
+        # ---------- 官网按钮：开该型号对应的官网产品页（2026-11-03 用户令「不是对应图」） ----------
+        if path == "/api/openweb":
+            q = urllib.parse.parse_qs(u.query)
+            tgt = (q.get("u") or [""])[0].strip()
+            try:
+                from paths import open_url
+                open_url(tgt)
+                self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+            return
+
+        # ---------- 白字套图 · 打开产物文件夹（2026-11-03 用户令「生成完了直接打开文件夹」） ----------
+        # open=1 → 白字\（带 tone=blue/purple → 白字\蓝底\ / 白字\紫底\）；open=model → 型号根（peiwork\<型号>）
+        if path == "/api/kitwhite":
+            q = urllib.parse.parse_qs(u.query)
+            model = (q.get("model") or [""])[0].strip()
+            tone = (q.get("tone") or [""])[0]
+            op = (q.get("open") or ["0"])[0]
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            try:
+                import pubwork
+                from paths import reveal
+                base = pubwork.mdir(model)
+                if op == "model":
+                    wd = base
+                else:
+                    wd = os.path.join(base, "白字")
+                    if tone in ("blue", "purple"):
+                        wd = os.path.join(wd, "蓝底" if tone == "blue" else "紫底")
+                reveal(wd if os.path.isdir(wd) else base)
+                self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
             return
 
         if path.startswith("/api/kitimg/"):
@@ -521,6 +589,29 @@ class ApiGetMixin:
             self._send(200, json.dumps({"ok": True, "started": True, "key": key}, ensure_ascii=False))
             return
 
+        if path == "/api/kitfetch":
+            # 只抓不渲染（2026-11-03 用户令「官网按键看我的机型图」）：
+            # 卡片「官网」按钮的图库为空时，后台跑一遍抓取链补候选图
+            q = urllib.parse.parse_qs(u.query)
+            model = (q.get("model") or [""])[0].strip()
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            import jobman
+            import kitset
+            key = "kitfetch:%s" % model
+
+            def _do():
+                ok = kitset.fetch_candidates(model, log=lambda s: (
+                    state.LOG.append("[官网图库] " + s), jobman.prog(key, s)))
+                return {"ok": bool(ok), "msg": "" if ok else "官网/欣盛/中关村都没抓到这台的图"}
+            if not jobman.submit(key, _do, _log=lambda s: state.LOG.append("[官网图库] " + s)):
+                self._send(200, json.dumps({"ok": True, "key": key, "busy": True},
+                                           ensure_ascii=False))
+                return
+            self._send(200, json.dumps({"ok": True, "key": key}, ensure_ascii=False))
+            return
+
         if path == "/api/jobget":
             # 通用后台任务状态（2026-10-25，配合 jobman）：?key=kitset:<型号> / copy:<型号>:<kind> / pubqa:<型号>
             q = urllib.parse.parse_qs(u.query)
@@ -561,7 +652,8 @@ class ApiGetMixin:
             import pubwork
             core = urllib.parse.unquote(path[len("/pubimg/"):])
             parts = core.split("/")
-            if not (2 <= len(parts) <= 3) or not all(parts) or any(
+            # 2026-11-03 白字分文件夹后最深 4 段：<型号>/白字/<蓝底|紫底>/img_N.jpg
+            if not (2 <= len(parts) <= 4) or not all(parts) or any(
                     (".." in p) or ("/" in p) or ("\\" in p) for p in parts):
                 self._send(403, b"forbidden", "text/plain; charset=utf-8")
                 return

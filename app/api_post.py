@@ -408,7 +408,7 @@ class ApiPostMixin:
         # ---------- 发布图工厂（2026-10-17，闲鱼配文 Pro 并入） ----------
         if u.path in ("/api/pubgen", "/api/pubhero", "/api/pubsel", "/api/pubqa",
                       "/api/pubauto", "/api/pubimport", "/api/pubopen",
-                      "/api/pubxy"):
+                      "/api/pubxy", "/api/kitwhite"):
             import pubwork
             try:
                 n = int(self.headers.get("Content-Length") or 0)
@@ -446,6 +446,25 @@ class ApiPostMixin:
                     threading.Thread(target=pubwork.gen_hero,
                                      args=(model, price, ver), daemon=True).start()
                     self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
+                    return
+                if u.path == "/api/kitwhite":
+                    # 白字首图（2026-11-03 配文入口复制蓝底）：tone=blue/purple，
+                    # jobman 后台跑（没参数快照时会先整套跑一遍蓝底，可能 1-2 分钟）。
+                    # key 带 tone（2026-11-03 用户令「点进来直接生成」：两种色调开窗自动并行跑，互不抢锁）
+                    tone = str(d.get("tone") or "blue")
+                    if tone not in ("blue", "purple"):
+                        self._send(400, json.dumps({"ok": False, "msg": "tone 只能是 blue/purple"}, ensure_ascii=False))
+                        return
+                    import jobman
+                    import kitset
+                    key = "kitwhite:%s:%s" % (model, tone)
+
+                    def _do():
+                        return kitset.white_hero(model, tone, log=lambda s: jobman.prog(key, s))
+                    if not jobman.submit(key, _do):
+                        self._send(200, json.dumps({"ok": True, "key": key, "busy": True}, ensure_ascii=False))
+                        return
+                    self._send(200, json.dumps({"ok": True, "key": key}, ensure_ascii=False))
                     return
                 if u.path == "/api/pubsel":
                     rels = [str(x).replace("\\", "/") for x in (d.get("files") or [])

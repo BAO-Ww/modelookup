@@ -92,8 +92,22 @@ def api_data_bytes():
     if _DATA_JSON is None:
         p = get_payload()
         keys = [k for k, v in (p.get("imgs") or {}).items() if isinstance(v, str)]
+        # kitmain：抓取链已选好机图的型号（kitset/<型号>/product.png 存在）。
+        # 2026-11-03 用户实锤 XQG100-HBEU38A5U1：内置图库 images_cache 里存的是带
+        # 促销横幅的老宣传图，官网抓取链的干净整机图反而轮不上——前端 imgOf
+        # 拿这张表把 kitset 主图排在老图库前面。
+        kitmain = []
+        try:
+            import kitset as _ks
+            _kr = _ks.kit_root()
+            if os.path.isdir(_kr):
+                for _n in os.listdir(_kr):
+                    if os.path.isfile(os.path.join(_kr, _n, "product.png")):
+                        kitmain.append(_n)
+        except Exception:
+            kitmain = []
         body = json.dumps({"meta": p.get("meta") or {}, "rows": p.get("rows") or [],
-                           "imgkeys": keys,
+                           "imgkeys": keys, "kitmain": kitmain,
                            "web": p.get("web") or {}}, ensure_ascii=False, separators=(",", ":"))
         _DATA_JSON = body.encode("utf-8")
     return _DATA_JSON
