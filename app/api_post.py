@@ -192,55 +192,6 @@ class ApiPostMixin:
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
             return
 
-        if u.path in ("/api/xycookie", "/api/xyprice", "/api/xyoff"):
-            # 闲鱼直连（2026-10-14 用户需求：软件里直接改价/下架，不打开网页）。
-            # Cookie 只存本机 wp("xy_cookies.json")（不进云端，粘一次用一阵子）；
-            # mtop 调用阻塞几秒——ThreadingHTTPServer 每请求各线程，不卡别的页面请求。
-            import xyops
-            try:
-                n = int(self.headers.get("Content-Length") or 0)
-                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
-            except Exception:
-                d = {}
-            acc = str(d.get("acc") or "").strip()[:24]
-            if u.path == "/api/xycookie":
-                if not acc:
-                    self._send(400, json.dumps({"ok": False, "msg": "缺闲鱼号名"}, ensure_ascii=False))
-                    return
-                r = xyops.save_cookie(acc, d.get("cookie") or "")
-            elif u.path == "/api/xyprice":
-                r = xyops.set_price(acc, d.get("id"), d.get("p"))
-            else:
-                r = xyops.off_shelf(acc, d.get("id"))
-            state.LOG.append("[闲鱼] %s id=%s acc=%s → %s" % (
-                u.path, d.get("id"), acc, (r or {}).get("msg") or (r or {}).get("ok")))
-            self._send(200, json.dumps(r, ensure_ascii=False))
-            return
-
-        if u.path == "/api/cdp_switch":
-            # 闲鱼页自动化（CDP 调试口）开关（2026-10-24）：本机 wp("xy_cdp_off.txt")，
-            # 存在=关。改的是下次启动的生效状态（WebView2 调试口启动时定死），重启软件生效。
-            try:
-                n = int(self.headers.get("Content-Length") or 0)
-                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
-            except Exception:
-                d = {}
-            on = bool(d.get("on"))
-            p = wp("xy_cdp_off.txt")
-            try:
-                if on:
-                    try: os.remove(p)
-                    except FileNotFoundError: pass
-                else:
-                    with open(p, "w", encoding="utf-8") as f:
-                        f.write("off")
-            except Exception as e:
-                self._send(200, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
-                return
-            state.LOG.append("[设置] 闲鱼页自动化（CDP）→ %s（重启软件生效）" % ("开" if on else "关"))
-            self._send(200, json.dumps({"ok": True, "on": on, "need_restart": True}, ensure_ascii=False))
-            return
-
         if u.path == "/api/autostart":
             # 开机自启开关（2026-10-25）：页面「软件设置（本机）」用——Mac 没有原生菜单，
             # 页面是双平台统一入口。立即生效（写/删配置 + autostart_off.txt 标记）。
@@ -429,7 +380,7 @@ class ApiPostMixin:
                 if u.path == "/api/pubgen":
                     # 套图生成走后台线程（AI 背景要十几秒），前端轮询 /api/pubjob
                     if pubwork.job_state()["running"]:
-                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
+                        self._send(200, json.dumps({"ok": False, "busy": True, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
                         return
                     style = str(d.get("style") or "studio")
                     if style not in pubwork.STYLE_DIRS:
@@ -445,7 +396,7 @@ class ApiPostMixin:
                     return
                 if u.path == "/api/pubhero":
                     if pubwork.job_state()["running"]:
-                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
+                        self._send(200, json.dumps({"ok": False, "busy": True, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
                         return
                     threading.Thread(target=pubwork.gen_hero,
                                      args=(model, price, ver), daemon=True).start()
@@ -498,7 +449,7 @@ class ApiPostMixin:
                 elif u.path == "/api/pubxy":
                     # 一键发布闲鱼：playwright 半自动，阻塞在后台线程（用户在浏览器点发布）
                     if pubwork.job_state()["running"]:
-                        self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
+                        self._send(200, json.dumps({"ok": False, "busy": True, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
                         return
                     threading.Thread(target=pubwork.pub_xy,
                                      args=(model, ver), daemon=True).start()

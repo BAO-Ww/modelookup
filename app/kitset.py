@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
 from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch
 from normalize import norm_model
+from renderlock import serialized
 import paths
 import pei_core
 from net import urlopen_ssl
@@ -3476,6 +3477,7 @@ def sync_spot_size(model, info, log=None):
         log("聚光尺寸图对账失败：%r" % (e,))
 
 
+@serialized
 def generate(model, force=0, log=None):
     log = log or (lambda s: None)
     if not os.path.isfile(F_REG):
@@ -3796,6 +3798,7 @@ def regen_one(model, n, log=None):
     return {"ok": True, "n": n, "file": out, "blur": blur_warn(bdir)}
 
 
+@serialized
 def white_hero(model, tone="blue", log=None):
     """白字套图（2026-11-03 用户令「跟蓝底一样配够四张 + 文案搬过来 + 微改不跟本家同款」）：
     用蓝底同一套 cfg/机图/AI 选图结果，整套四张按 tone 出变体——
