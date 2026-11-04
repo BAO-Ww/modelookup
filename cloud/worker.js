@@ -707,7 +707,7 @@ async function route(request, env, path, ctx) {
   // 2026-10-13 手机端真软件化：CI 打 APK 时用 X-Cloud-Key 烤数据快照进包
   // （正常用户走下面登录态的同路径，互不影响）
   if (path === "/mpayload" && request.method === "GET") {
-    const ck = env.CLOUD_KEY || env.SECRET;
+    const ck = env.CLOUD_KEY;
     if (ck && (request.headers.get("X-Cloud-Key") || "") === ck) {
       const v0 = await env.KV.get("mpayload");
       if (!v0) return jerr("手机端数据还没上云", 404);
@@ -720,7 +720,7 @@ async function route(request, env, path, ctx) {
   // 故意不用登录态：要用它的场景恰恰是「账本坏了谁都登不进去」，要求先登录等于
   // 把钥匙锁在屋里。配套 GET /admin/backup（登录态，在下面门禁之后）导出快照。
   if (path === "/admin/restore" && request.method === "POST") {
-    const ck = env.CLOUD_KEY || env.SECRET;
+    const ck = env.CLOUD_KEY;
     if (!ck || (request.headers.get("X-Cloud-Key") || "") !== ck) return jerr("没有权限", 403);
     const snap = await request.json().catch(() => null);
     if (!snap || typeof snap !== "object" || Array.isArray(snap))
@@ -863,7 +863,10 @@ async function route(request, env, path, ctx) {
       if (cur.role === "admin") continue;      // 管理号不可改
       if (it.pw) {                              // 传了密码 = 新建/改密
         if (String(it.pw).length < 4) return jerr(u + " 的密码至少 4 位");
-        cur.ph = await sha256hex(cur.salt + String(it.pw));
+        // 2026-11-04 P1-3：管理号新建/改密改 PBKDF2（原来裸 SHA-256，与登录路径不一致）
+        const s2 = crypto.randomUUID().replaceAll("-", "");
+        cur.salt = s2;
+        cur.ph = "pbkdf2$" + PBKDF2_ITER + "$" + s2 + "$" + (await pbkdf2hex(String(it.pw), s2, PBKDF2_ITER));
       }
       if (!cur.ph) return jerr(u + " 还没设密码");
       cur.note = String(it.note || "").slice(0, 50);
@@ -1404,7 +1407,7 @@ async function route(request, env, path, ctx) {
     return J({ ok: true });
   }
   if (path === "/clientlog" && request.method === "GET") {
-    const ck = env.CLOUD_KEY || env.SECRET;
+    const ck = env.CLOUD_KEY;
     const byKey = ck && (request.headers.get("X-Cloud-Key") || "") === ck;
     const users = await getUsers(env);
     const isAdmin = who && users[who] && users[who].role === "admin";
@@ -1426,7 +1429,7 @@ async function route(request, env, path, ctx) {
   // 2026-10-25 实锤：仓库 secrets 没配 KX_SECRET，CI 只带 CLOUD_TOKEN → 只认 X-Cloud-Key 必 403，
   // up 永远不刷。改为 X-Cloud-Key **或**有效登录态（能走到这里的 who 已过全局 token 门）均可。
   if (path === "/xlsxping" && request.method === "POST") {
-    const ck = env.CLOUD_KEY || env.SECRET;
+    const ck = env.CLOUD_KEY;
     const byKey = ck && (request.headers.get("X-Cloud-Key") || "") === ck;
     if (!byKey && !who) return jerr("没有权限", 403);
     const obj = await getJSON(env, "xlsxlive", null);
@@ -1444,7 +1447,7 @@ async function route(request, env, path, ctx) {
   if (path === "/xlsxcloud" && request.method === "POST") {
     const users = await getUsers(env);
     // 审计（优化2）：X-Cloud-Key 建议配独立 CLOUD_KEY；没配时兼容沿用 SECRET（CI 在用，不弄断）
-    const ck = env.CLOUD_KEY || env.SECRET;
+    const ck = env.CLOUD_KEY;
     const isCloud = !!ck && (request.headers.get("X-Cloud-Key") || "") === ck;
     if ((users[who] || {}).role !== "admin" && !isCloud) return jerr("没有上传权限", 403);
     const b = await request.json().catch(() => ({}));
@@ -1493,7 +1496,7 @@ async function route(request, env, path, ctx) {
     // 云端定时任务（GitHub Actions）也走这个口——它用管理号 token，401 时退 X-Cloud-Key，
     // 所以两条通道都要放行，否则云端拉表会断。
     const users = await getUsers(env);
-    const ck = env.CLOUD_KEY || env.SECRET;
+    const ck = env.CLOUD_KEY;
     const isCloud = !!ck && (request.headers.get("X-Cloud-Key") || "") === ck;
     if ((users[who] || {}).role !== "admin" && !isCloud) return jerr("只有管理号能读金山登录态", 403);
     const obj = await getJSON(env, "kdauth", null);

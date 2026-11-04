@@ -451,17 +451,22 @@ function cardHTML(it){
   if (it.nats) tags += '<span class="tag nat">样机全国发</span>';
   if (it.natl) tags += '<span class="tag nat">滞销全国发</span>';
   tags += stockTag(it);
-  return '<div class="card" data-c="' + it.c.replace(/"/g, "&quot;") + '">'
+  return '<div class="card" data-c="' + esc(it.c) + '">'
        +   thumbHTML(it)
        +   '<div class="cbody">'
-       +     '<div class="crow1"><span class="brand">' + (it.b || "—") + '</span><span class="cat">' + (it.cat || "") + "</span></div>"
-       +     '<div class="mo">' + (it.mo || it.c) + "</div>"
-       +     '<div class="nm">' + (it.n || "") + "</div>"
+       +     '<div class="crow1"><span class="brand">' + esc(it.b || "—") + '</span><span class="cat">' + esc(it.cat || "") + "</span></div>"
+       +     '<div class="mo">' + esc(it.mo || it.c) + "</div>"
+       +     '<div class="nm">' + esc(it.n || "") + "</div>"
        +     '<div class="tags">' + tags + "</div>"
        +     '<div class="prow">' + priceHTML(it) + "</div>"
        +   "</div>"
        + "</div>";
 }
+  function esc(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(m){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m];
+    });
+  }
 function renderList(){
   var q = $("q").value.trim();
   var rows = matchRows(q, FILTER_CAT);
@@ -471,7 +476,7 @@ function renderList(){
     return;
   }
   if (!rows.length){
-    el.innerHTML = '<div id="empty">没搜到「' + q.replace(/</g, "&lt;") + '」<br>试试只输型号主体，如 100Z35</div>';
+    el.innerHTML = '<div id="empty">没搜到「' + esc(q) + '」<br>试试只输型号主体，如 100Z35</div>';
     return;
   }
   var h = "";
@@ -506,8 +511,8 @@ function openDetail(c){
   $("d_title").textContent = it.mo || it.c;
   var url = IMGS[it.c] || it.ximg || "";
   var h = '<div class="dimg">' + (url ? '<img src="' + url + '">' : (it.cat || "机").slice(0, 1)) + "</div>";
-  h += '<div class="dtitle">' + (it.n || it.mo || "") + "</div>";
-  h += '<div class="dsub">' + (it.b || "") + " · " + (it.cat || "") + " · 型号 " + (it.mo || it.c) + "</div>";
+  h += '<div class="dtitle">' + esc(it.n || it.mo || "") + "</div>";
+  h += '<div class="dsub">' + esc(it.b || "") + " · " + esc(it.cat || "") + " · 型号 " + esc(it.mo || it.c) + "</div>";
   h += '<div class="dprice">';
   if (it.lp) h += '<div class="dp"><span class="v">' + it.lp + '</span><span class="k">指导价</span></div>';
   if (it.xp) h += '<div class="dp"><span class="v" style="color:#0a7a4d">' + it.xp + '</span><span class="k">商城价</span></div>';

@@ -376,9 +376,12 @@ def find_page(model, sites=("haier", "casarte", "leader"), log=None):
         if log:
             log("扫描 %s 官网产品页 ..." % BRAND_CN[site])
         urlfile = res_path("site_urls_%s.txt" % site)
+        # 2026-11-04 P1-5：0 字节索引文件（site_urls_haier.txt 实锤）也会挡住 sitemap 兜底——
+        # 只有「存在且非空」才直接用，否则一律走 sitemap 现抓
+        urls = []
         if os.path.exists(urlfile):
             urls = [u.strip() for u in open(urlfile, encoding="utf-8") if u.strip()]
-        else:
+        if not urls:
             urls = [u for u in _sitemap_urls(site) if re.search(r"/\d{8}_\d+\.shtml", u)]
             try:
                 open(urlfile, "w", encoding="utf-8").write("\n".join(urls))
@@ -566,7 +569,7 @@ def spider_locate(model, log=None):
     全程只读；任何异常都吞掉并返回未命中，让调用方安全回退旧路径。
     """
     try:
-        import official_spider as _osp
+        import pei_spider as _osp
     except Exception as e:
         if log:
             log("新爬虫不可用（%s），走旧检索" % e)
@@ -682,7 +685,7 @@ def spider_enrich_info(info, site, url, prod=None, log=None):
     if not info or not url or site not in _SPIDER_SITE_HOSTS:
         return info
     try:
-        import official_spider as _osp
+        import pei_spider as _osp
     except Exception:
         return info
     try:

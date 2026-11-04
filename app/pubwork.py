@@ -159,8 +159,13 @@ def root_move(new_base):
 
 
 def _safe(model):
-    """型号做目录名：去掉文件系统不安全字符"""
-    return re.sub(r'[\\/:*?"<>|]+', "", (model or "").strip()) or "未命名"
+    """型号做目录名：去掉文件系统不安全字符。
+    2026-11-04 P0-2：还要拦「..」「.」点段和开头结尾的点——os.path.join(root, "..")
+    会把后续的清目录/rmtree 顶出图片库根（本地接口无鉴权，型号来自请求参数）。"""
+    nm = re.sub(r'[\\/:*?"<>|]+', "", (model or "").strip())
+    if not nm or re.fullmatch(r"\.*", nm) or ".." in nm:
+        return "未命名"
+    return nm
 
 
 def mdir(model):
@@ -429,7 +434,12 @@ def work(model, prog=None):
         import pei_core as _pc
         _cat = _pc.guess_cat(_pn)   # 品类从商品名猜（空 cat 会让选图/背景风格走不到品类分支）
         # 整目录重来：能走到这说明没有有效 info.json，目录里只可能是上次失败/错型号的残留
-        shutil.rmtree(d, ignore_errors=True)
+        # 2026-11-04 P0-2：删前校验归属——realpath 必须真落在图片库根下才许 rmtree
+        import paths as _paths
+        if os.path.realpath(d).startswith(os.path.realpath(_paths.data_base()) + os.sep):
+            shutil.rmtree(d, ignore_errors=True)
+        else:
+            raise RuntimeError("目录越界，拒绝删除：" + d)
         os.makedirs(d, exist_ok=True)
         try:
             imgs = copywriter.dl_images([(u, "欣盛") for u in album], d, log)

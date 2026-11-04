@@ -523,7 +523,7 @@ function isBlankCard(it){
 function pok(k){
   if (!AUTH) return false;
   if (AUTH.role==='admin') return true;
-  if (!AUTH.perm || !Object.keys(AUTH.perm).length) return true;   // 没拉到权限先全放（同电脑端兜底）
+  if (!AUTH.perm || !Object.keys(AUTH.perm).length) return false;  // 2026-11-04 P0-3：权限没拉到就全关（fail-closed，与电脑端同向；此前全放是漏洞）
   return !!AUTH.perm[k];
 }
 

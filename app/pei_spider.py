@@ -93,11 +93,10 @@ _GROUP_TITLE = re.compile(
 _BRAND_TOKENS = ("Casarte", "casarte", "CASARTE", "Haier", "haier", "HAIER",
                  "Leader", "leader", "LEADER", "卡萨帝", "海尔", "统帅")
 
-# 三站证书都能正常校验；这里保留「关校验」是为了兼容某些站点证书链不全的情况。
-# 想严格一点就把这两行删掉。
-_CTX = ssl.create_default_context()
-_CTX.check_hostname = False
-_CTX.verify_mode = ssl.CERT_NONE
+# 2026-11-04 P1-5：原 _CTX（关校验上下文）已随「context= 死参数」一起删——
+# urlopen_ssl 本身就没有 context 参数，这两行以前每次 import 都会把 _CTX 引用炸掉，
+# 等于整个新爬虫模块一 import 就死（NameError 被上层吞成「新爬虫不可用」）。
+# 现在三站走 net.urlopen_ssl 默认校验，证书链真有问题由它的 SSL 兜底路接管。
 
 
 # ==========================================================================
@@ -130,7 +129,7 @@ def _http(url, referer=None, ajax=False, timeout=None):
         h["Accept"] = "application/json, text/javascript, */*; q=0.01"
         h["X-Requested-With"] = "XMLHttpRequest"
     req = urllib.request.Request(url, headers=h)
-    with urlopen_ssl(req, timeout=timeout or FETCH_TIMEOUT, context=_CTX) as r:
+    with urlopen_ssl(req, timeout=timeout or FETCH_TIMEOUT) as r:
         raw = r.read()
         # 手动解 gzip：urllib 不认站点返回的「Content-Encoding: gzip」时不会自己解
         if r.headers.get("Content-Encoding") == "gzip":
@@ -468,7 +467,7 @@ def web_locate(keyword, source_key, limit=6):
                 "Accept-Language": "zh-CN,zh;q=0.9",
                 "Accept-Encoding": "gzip, deflate",
             })
-            with urlopen_ssl(req, timeout=20, context=_CTX) as r:
+            with urlopen_ssl(req, timeout=20) as r:
                 raw = r.read()
                 if r.headers.get("Content-Encoding") == "gzip":
                     try:
