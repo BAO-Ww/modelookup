@@ -498,8 +498,11 @@ def _auto_qa_spot(model, info, src, out, style, paths, prog=None):
         _logf()("需人工确认：%s（%s）" % (x.get("issue"), x.get("severity")))
 
 
-def gen_style(model, style, sell_price=None, version="N"):
-    """生成一套 6 张精修（后台线程跑，JOB 汇报进度）"""
+def gen_style(model, style, sell_price=None, version="N", entry_title=None):
+    """生成一套 6 张精修（后台线程跑，JOB 汇报进度）。
+    entry_title（2026-11-04 用户令）：软件条目标题，聚光首图大字用它——
+    官网抓取链会把 info.title 覆盖成页面标题（HP-35 实锤变成「大通量前置过滤器」），
+    前端把卡片上那句（如「海尔净水·厨下机HP-35」）传进来优先。"""
     name = STYLE_NAMES.get(style, style)
     _job_begin(model, "发布图 · " + name)
     info = src = out = None          # 复检线程要用，先占位（异常分支里也不能 NameError）
@@ -516,6 +519,8 @@ def gen_style(model, style, sell_price=None, version="N"):
             _ks.ensure_data(model, log=lambda s: _logf()(s))
             _kinfo = _ks.load_kinfo(model) or info
             info = dict(_kinfo)
+            if entry_title:
+                info["title"] = entry_title
             info["dir"] = _ks.model_dir(model)
             src = os.path.join(info["dir"], "官网")
             os.makedirs(src, exist_ok=True)

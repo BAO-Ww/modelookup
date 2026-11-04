@@ -435,8 +435,12 @@ class ApiPostMixin:
                     if style not in pubwork.STYLE_DIRS:
                         self._send(400, json.dumps({"ok": False, "msg": "未知风格"}, ensure_ascii=False))
                         return
+                    # 2026-11-04 用户令：聚光首图标题=软件条目标题（卡片上那句），
+                    # 官网抓取的页面标题（如「大通量前置过滤器」）只是兜底
+                    etitle = str(d.get("title") or "").strip()
                     threading.Thread(target=pubwork.gen_style,
-                                     args=(model, style, price, ver), daemon=True).start()
+                                     args=(model, style, price, ver),
+                                     kwargs={"entry_title": etitle}, daemon=True).start()
                     self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
                     return
                 if u.path == "/api/pubhero":
