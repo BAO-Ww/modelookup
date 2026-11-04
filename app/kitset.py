@@ -3689,8 +3689,12 @@ def white_hero(model, tone="blue", log=None):
     _pre = "紫底白字" if _tone_purple else "蓝底白字"
     j, mdir = _cfg_of(model)
     if not j or not j.get("cfg"):
-        log("没有参数快照，先跑一遍蓝底（1-2 分钟）…")
-        generate(model, 0, log=log)
+        # 2026-11-04 实锤死锁：老数据（白字功能上线前出的）set.json 没有 cfg，而
+        # generate(force=0) 缓存命中直接短路返回，cfg 永远补不上 → 每开窗必弹
+        # 「蓝底参数快照拿不到」。改 force=1 真重出一遍（跟 regen_one 老数据同口径），
+        # 跑完 cfg 落盘，之后白字秒开。
+        log("没有参数快照，先跑一遍蓝底（1-2 分钟，跑一次以后秒开）…")
+        generate(model, 1, log=log)
         j, mdir = _cfg_of(model)
         if not j or not j.get("cfg"):
             raise RuntimeError("蓝底参数快照拿不到——先在蓝底里给这个型号出一次图")

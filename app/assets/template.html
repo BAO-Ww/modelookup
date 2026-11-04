@@ -555,6 +555,10 @@ mark.hlm{background:#fff3bf;color:inherit;padding:0 1px;border-radius:3px}
 .dgbig{font-size:15px;font-weight:600;margin-bottom:2px}
 .dgrun{display:flex;gap:10px;font-size:12px;color:var(--ink2);padding:2px 0;border-top:1px dashed var(--line2)}
 .dgrun span:nth-child(2){width:44px}.dgrun span:nth-child(3){width:70px}
+.dgrun .dgwhy{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#98a2b3;font-size:11.5px}
+.dgwhy2{font-size:12.5px;line-height:1.6;margin:4px 0 2px}
+.dgwhy2.ok{color:#0f7a45}.dgwhy2.warn{color:#b54708}.dgwhy2.bad{color:#b42318}
+.dgimp{font-size:11.5px;color:#98a2b3;line-height:1.55;margin-bottom:4px}
 .dgcron{font-family:Consolas,Menlo,monospace;font-size:11.5px;color:var(--ink2);padding:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dgcron.bad{color:#b42318;font-weight:600}
 .dgdg{font-size:12.5px;padding:5px 8px;border-radius:8px;margin:3px 0}
@@ -3582,9 +3586,8 @@ function renderItem(it){
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
     + (pok('copy') ? '<button class="copy" data-copydoc="' + esc(it.c) + '" data-copykind="' + esc(it.k || 'z') + '" title="打开闲鱼配文 PRO：抓真实参数写文案 + AI 出发布图（15:59 用户要的常驻入口）">写文案</button>' : '')
     + (pok('tbyp') ? '<button class="copy" data-tbdoc="' + esc(it.c) + '" data-tbkind="' + esc(it.k || 'z') + '" title="打开配文：型号一键出图出文案（独立权限，管理号决定给谁用）">配文</button>' : '')
-    + (pok('kitset') ? '<button class="copy" data-whiteview="' + esc(it.c) + '" title="白字首图（独立工具）：同一张首图换底色/字色——蓝底白字、紫底白字两个，不动本家蓝底">白字</button>' : '')
-    + (pok('kitset') ? '<button class="copy" data-kitdoc="' + esc(it.c) + '" title="蓝底套图（独立工具）：四张1080图+三档标题+两段文案，与写文案/配文零关系">蓝底</button>' : '')
-    + (pok('kitset') ? '<button class="copy" data-spotdoc="' + esc(it.c) + '" title="暗角聚光（独立工具）：深色聚光风格 6 张 + 标题/卖点/售后文案，跟蓝底同一权限">聚光</button>' : '')
+    + (pok('kitset') ? '<button class="copy" data-whiteview="' + esc(it.c) + '" title="婷套图（独立工具）：同一张首图换底色/字色——蓝底白字、紫底白字两个，不动本家蓝底">婷</button>' : '')
+    + (pok('kitset') ? '<button class="copy" data-baodoc="' + esc(it.c) + '" title="宝套图（独立工具）：蓝底四张 + 暗角聚光四张，一个窗里全看到">宝</button>' : '')
     + '<button class="markbtn gw" data-gwview="' + esc(it.c) + '" title="打开这台机器对应的官网产品页（没记录就用必应搜型号）">官网</button>'
     + '</span></div>'
     + '<div class="tags">'
@@ -5311,7 +5314,7 @@ function openWhiteView(k){
   wrap.style.cssText = 'position:fixed;inset:0;background:#f7f7f5;z-index:70;display:flex;flex-direction:column;font-size:13px;color:#1c1e22';
   wrap.innerHTML =
     '<div style="display:flex;align-items:baseline;gap:10px;padding:8px 16px;background:#1c1e22;color:#e8eaee;flex:0 0 auto">'
-    +   '<b style="font-size:14px">白字套图</b>'
+    +   '<b style="font-size:14px">婷套图</b>'
     +   '<span style="font-size:12px;color:#8a929e">' + esc(k) + '</span>'
     +   '<span style="font-size:11.5px;color:#8a929e">同蓝底机图与文案，胶囊微改换色；不动本家蓝底</span>'
     +   '<span style="flex:1"></span>'
@@ -5459,7 +5462,7 @@ function openWhiteView(k){
     var msg = wrap.querySelector('#wv_msg');
     var _t = btn.textContent;
     btn.disabled = true; btn.textContent = '生成中…';
-    if (msg) msg.textContent = (tone === 'blue' ? '蓝底白字' : '紫底白字') + '已开始…';
+    if (msg){ msg.textContent = (tone === 'blue' ? '蓝底白字' : '紫底白字') + '已开始…'; msg.style.color = '#9fe0a8'; }
     fetch('/api/kitwhite', {method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({model: k, tone: tone})})
       .then(function(r){ return r.json(); })
@@ -5469,15 +5472,19 @@ function openWhiteView(k){
           btn.disabled = false; btn.textContent = _t;
           if (msg) msg.textContent = '✓ ' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + '四张完成';
           wvShow();
-          wvOpenFolder(tone);   /* 2026-11-03 用户令：生成完了直接打开对应文件夹 */
+          /* 2026-11-04 用户令：生成完不再自动打开文件夹（想开点卡右上「打开文件夹」） */
         }, function(err){
           btn.disabled = false; btn.textContent = _t;
-          alert((err && err.message) || '白字套图失败');
+          /* 2026-11-04 用户令：不弹阻塞大框——错误写进顶栏红字 */
+          if (msg){ msg.textContent = '✗ ' + ((err && err.message) || '婷套图失败'); msg.style.color = '#fca5a5'; }
         }, function(sec, st){
           if (msg && st && st.prog) msg.textContent = st.prog;
         });
       })
-      .catch(function(e){ btn.disabled = false; btn.textContent = _t; alert('请求失败：' + e); });
+      .catch(function(e){
+        btn.disabled = false; btn.textContent = _t;
+        if (msg){ msg.textContent = '✗ 请求失败：' + e; msg.style.color = '#fca5a5'; }
+      });
   }
   /* 2026-11-03 用户令：底部「生成蓝/紫底白字」两键撤掉——开窗缺哪套自动生成，
      手动补跑用卡右上「重新生成」；「打开文件夹」开对应 蓝/紫 子文件夹 */
@@ -5497,6 +5504,341 @@ function openWhiteView(k){
     fetch(wvImg(tone, 1), {method: 'HEAD'}).then(function(r){
       if (!r.ok) wvStart(tone, wrap.querySelector('[data-wvregen="' + tone + '"]'));
     }).catch(function(){});
+  });
+}
+
+/* ================= 宝套图（2026-11-04 用户令：蓝底+聚光合并成一个窗） =================
+   左卡蓝底四张（1080×1080）、右卡暗角聚光四张，各自带 重新生成/打开文件夹，
+   点图放大。生成完不自动开文件夹（2026-11-04 用户令）。缺哪套开窗自动补哪套。 */
+function openBaoView(k){
+  var old = document.getElementById('baoview'); if (old) old.remove();
+  var wrap = document.createElement('div'); wrap.id = 'baoview';
+  wrap.style.cssText = 'position:fixed;inset:0;background:#f7f7f5;z-index:70;display:flex;flex-direction:column;font-size:13px;color:#1c1e22';
+  wrap.innerHTML =
+    '<div style="display:flex;align-items:baseline;gap:10px;padding:8px 16px;background:#1c1e22;color:#e8eaee;flex:0 0 auto">'
+    +   '<b style="font-size:14px">宝套图</b>'
+    +   '<span style="font-size:12px;color:#8a929e">' + esc(k) + '</span>'
+    +   '<span style="font-size:11.5px;color:#8a929e">蓝底四张 + 暗角聚光四张 · 生成完不自动开文件夹</span>'
+    +   '<span style="flex:1"></span>'
+    +   '<button id="bao_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
+    + '</div>'
+    + '<div style="flex:1;overflow:hidden;padding:12px 16px;display:flex"><div style="max-width:1440px;margin:0 auto;width:100%;display:flex;gap:10px;align-items:stretch;min-height:0">'
+    +   '<div style="flex:0 0 auto;width:max-content;display:flex;flex-direction:column;gap:10px;min-height:0">'
+    +     baoCard('k', '蓝底套图', '1080 × 1080 · 无价格', '#1d4ed8', '#eef2ff', '#c7d2fe')
+    +     baoCard('s', '暗角聚光', '1080 × 1080 · 深色聚光', '#b45309', '#fff7e6', '#fcd34d')
+    +   '</div>'
+    +   '<div style="flex:1;min-width:400px;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 16px;display:flex;flex-direction:column;min-height:0">'
+    +     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
+    +       '<button data-baocpy="k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer">蓝底文案</button>'
+    +       '<button data-baocpy="s" style="border:1px solid #e8e8e4;background:#fff;color:#43464c;border-radius:7px;padding:4px 12px;font-size:12px;cursor:pointer">聚光文案</button>'
+    +       '<span style="flex:1"></span>'
+    +       '<span style="font-size:11px;color:#9a9ea6">标题三选一 · 卖点 · 售后</span>'
+    +     '</div>'
+    +     '<div id="bao_cpy_k" style="flex:1;min-height:0;overflow:auto"></div>'
+    +     '<div id="bao_cpy_s" style="flex:1;min-height:0;overflow:hidden;display:none"></div>'
+    +   '</div>'
+    + '</div></div>';
+  document.body.appendChild(wrap);
+  wrap.querySelector('#bao_close').addEventListener('click', function(){ wrap.remove(); });
+  function baoCard(t, title, sub, c, bg, bd){
+    return '<div id="bao_card_' + t + '" style="flex:1;min-height:0;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px;display:flex;flex-direction:column;text-align:left">'
+      +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
+      +     '<div style="font-weight:700;font-size:13px">' + title + ' <span style="font-weight:400;font-size:11.5px;color:#8a929e">' + sub + ' · 点图看大图</span></div>'
+      +     '<span style="flex:1"></span>'
+      +     '<span id="bao_msg_' + t + '" style="font-size:11.5px;color:#9fe0a8"></span>'
+      +     '<button data-baoopen="' + t + '" style="border:1px solid ' + bd + ';background:' + bg + ';color:' + c + ';border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+      +     '<button data-baogen="' + t + '" style="border:1px solid ' + bd + ';background:' + bg + ';color:' + c + ';border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
+      +   '</div>'
+      +   '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,max-content);grid-template-rows:repeat(2,1fr);justify-content:center;gap:6px" id="bao_grid_' + t + '"></div>'
+      + '</div>';
+  }
+  var KLAB = {1: '主图', 2: '参数', 3: '卖点', 4: '尺寸'};
+  var SLAB = {'1_首图': '首图', '2_机器图': '机器展示', '4_核心参数': '机器参数', '5_尺寸图': '尺寸图'};
+  var SFILES = [];
+  function kImg(n){ return '/api/kitimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('蓝底') + '/img_' + n + '.jpg'; }
+  function sImg(f){ return '/pubimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('聚光') + '/' + encodeURIComponent(f); }
+  function msg(t, s, bad){
+    var el = wrap.querySelector('#bao_msg_' + t); if (!el) return;
+    el.textContent = s || '';
+    el.style.color = bad ? '#fca5a5' : '#9fe0a8';
+    if (bad && el.parentElement) el.parentElement.style.color = '';
+  }
+  function zoom(src, title){
+    var old = document.getElementById('bao_zoom'); if (old) old.remove();
+    var z = document.createElement('div'); z.id = 'bao_zoom';
+    z.style.cssText = 'position:fixed;inset:0;background:rgba(14,18,26,.8);z-index:90;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+    z.innerHTML = '<div style="display:flex;flex-direction:column;gap:8px;align-items:center">'
+      + '<div style="color:#e8eaee;font-size:12.5px;font-weight:600">' + title + '<span style="font-weight:400;color:#9aa3b0;margin-left:10px">点任意处关闭</span></div>'
+      + '<img src="' + src + '?t=' + Date.now() + '" style="max-width:84vw;max-height:82vh;border-radius:12px;display:block;background:#fff"></div>';
+    z.addEventListener('click', function(){ z.remove(); });
+    document.body.appendChild(z);
+  }
+  function cell(grid, src, badge, label, title, onclick){
+    var d = document.createElement('div');
+    d.style.cssText = 'position:relative;align-self:stretch;aspect-ratio:1/1;justify-self:center;background:#f7f8fa;border:1px solid #eceef2;border-radius:10px;overflow:hidden;cursor:zoom-in';
+    d.title = title + '（点开看大图）';
+    var b = document.createElement('div');
+    b.textContent = badge;
+    b.style.cssText = 'position:absolute;left:6px;top:6px;z-index:2;min-width:20px;height:20px;padding:0 5px;border-radius:6px;background:' + (grid === 's' ? '#b45309' : '#1d4ed8') + ';color:#fff;font-size:11.5px;font-weight:700;line-height:20px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.25)';
+    d.appendChild(b);
+    var miss = document.createElement('div');
+    miss.textContent = '未生成';
+    miss.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;color:#b4b9c2';
+    d.appendChild(miss);
+    var im = document.createElement('img');
+    im.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none';
+    im.onload = function(){ miss.style.display = 'none'; im.style.display = 'block'; };
+    im.onerror = function(){ im.style.display = 'none'; miss.style.display = 'flex'; };
+    im.src = src + '?t=' + Date.now();
+    d.appendChild(im);
+    var cap = document.createElement('div');
+    cap.textContent = label;
+    cap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:3px 0;background:linear-gradient(transparent,rgba(0,0,0,.55));color:#fff;font-size:10.5px;text-align:center;letter-spacing:.5px';
+    d.appendChild(cap);
+    d.addEventListener('click', function(){ onclick(); });
+    return d;
+  }
+  /* 卡片宽度贴住缩略图（2026-11-04 用户令「要婷窗那种布局」）：
+     按卡片可用高度算出格子边长 → 反推网格宽 → 卡宽=网格宽+内边距，杜绝两侧白边 */
+  function fitGrid(t){
+    var card = document.getElementById('bao_card_' + t);
+    var g = wrap.querySelector('#bao_grid_' + t);
+    if (!card || !g) return;
+    var hd = card.children[0];
+    var availH = card.clientHeight - hd.offsetHeight - 8 - 26; /* 标题行高+间距+内边距24+边框2 */
+    if (availH < 120) return;
+    var cell = Math.floor((availH - 6) / 2);
+    var w = cell * 2 + 6;
+    if (card._fitW === w) return;           /* 已收敛 */
+    card._fitW = w;
+    g.style.width = w + 'px';
+    g.style.margin = '0 auto';
+    card.style.width = (w + 26) + 'px';
+    /* 收窄后标题行可能换行、可用高度变化 → 再算一轮直到不动 */
+    requestAnimationFrame(function(){ fitGrid(t); });
+  }
+  window.addEventListener('resize', function(){ fitGrid('k'); fitGrid('s'); });
+  function showK(){
+    var g = wrap.querySelector('#bao_grid_k'); if (!g) return;
+    g.innerHTML = '';
+    for (var n = 1; n <= 4; n++){
+      (function(nn){
+        g.appendChild(cell('k', kImg(nn), nn, KLAB[nn], '蓝底 · ' + KLAB[nn], function(){ zoom(kImg(nn), '蓝底 · ' + KLAB[nn]); }));
+      })(n);
+    }
+    fitGrid('k');
+  }
+  function showS(){
+    var g = wrap.querySelector('#bao_grid_s'); if (!g) return;
+    g.innerHTML = '';
+    if (!SFILES.length){
+      g.innerHTML = '<div style="grid-column:1/-1;color:#b4b9c2;font-size:12px;padding:18px 0">还没生成——点右上「重新生成」出一套</div>';
+      return;
+    }
+    SFILES.forEach(function(f, i){
+      var lb = SLAB[String(f).replace(/\.(jpg|jpeg|png)$/i, '')] || f;
+      g.appendChild(cell('s', sImg(f), i + 1, lb, '聚光 · ' + lb, function(){ zoom(sImg(f), '聚光 · ' + lb); }));
+    });
+    fitGrid('s');
+  }
+  /* ---------- 蓝底生成（jobman：kitset:<型号>，同老蓝底窗同接口） ---------- */
+  var kGen = false;
+  function genK(force, btn){
+    if (kGen){ msg('k', '蓝底已在生成中…'); return; }
+    kGen = true;
+    if (btn){ btn.disabled = true; btn.textContent = '生成中…'; }
+    var tried = 0;
+    (function go(){
+      fetch('/api/kitset?model=' + encodeURIComponent(k) + (force ? '&force=1' : '') + '&bg=1')
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
+          pollJob('kitset:' + k, function(res){
+            kGen = false;
+            if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
+            msg('k', res && res.cached ? '缓存秒出' : '✓ 蓝底四张完成');
+            showK();
+            KB = res; renderKCopy(res);   // 蓝底跑完文案同步刷（2026-11-04 两套文案回归）
+          }, function(err){
+            kGen = false;
+            if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
+            msg('k', '✗ ' + (err && err.message || '蓝底生成失败'), true);
+          }, function(sec, st){
+            msg('k', ((st && st.prog) || '生成中…') + '（已 ' + sec + ' 秒）');
+          });
+        })
+        .catch(function(err){
+          if (tried++ < 1){ setTimeout(go, 1500); return; }
+          kGen = false;
+          if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
+          msg('k', '✗ 请求失败：' + err, true);
+        });
+    })();
+  }
+  /* ---------- 聚光生成（pubwork 串行槽：/api/pubwork → /api/pubgen style=spot） ---------- */
+  var sGen = false;
+  function pollPub(done){
+    var t = setInterval(function(){
+      fetch('/api/pubjob').then(function(r){ return r.json(); }).then(function(jb){
+        if (jb.running){ msg('s', '生成中…（' + jb.pct + '%）' + (jb.msg || '')); return; }
+        clearInterval(t);
+        done(jb);
+      }).catch(function(){});
+    }, 900);
+  }
+  function genS(btn){
+    if (sGen){ msg('s', '聚光已在生成中…'); return; }
+    sGen = true;
+    if (btn){ btn.disabled = true; btn.textContent = '生成中…'; }
+    msg('s', '正在准备素材…');
+    fetch('/api/pubwork?model=' + encodeURIComponent(k))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j || !j.ok){ throw new Error((j && j.msg) || '素材准备失败'); }
+        if (j.started){
+          pollPub(function(jb){
+            if (!jb.ok){ throw new Error('素材抓取没成功' + (jb && jb.err ? '（' + jb.err + '）' : '')); }
+            startGen();
+          });
+        } else startGen();
+      })
+      .catch(function(e){
+        sGen = false;
+        if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
+        msg('s', '✗ ' + (e.message || e), true);
+      });
+    function startGen(){
+      msg('s', '已开始，等 AI 出图…（首次 1-2 分钟）');
+      fetch('/api/pubgen', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({model: k, style: 'spot'})})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
+          pollPub(function(jb){
+            sGen = false;
+            if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
+            if (jb.ok){
+              msg('s', '✓ 生成完成 · AI 后台复检中');
+              loadLib();
+            } else msg('s', '✗ ' + (jb.err || '聚光生成失败'), true);
+          });
+        })
+        .catch(function(e){
+          sGen = false;
+          if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
+          msg('s', '✗ ' + (e.message || e), true);
+        });
+    }
+  }
+  function loadLib(after){
+    fetch('/api/publib?model=' + encodeURIComponent(k))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        SFILES = [];
+        if (j && j.ok && j.groups){
+          j.groups.forEach(function(g){
+            if (g.sub === '聚光'){
+              (g.files || []).forEach(function(rel){
+                var f = String(rel).replace(/^聚光\//, '');
+                if (f && SLAB[String(f).replace(/\.(jpg|jpeg|png)$/i, '')]) SFILES.push(f);
+              });
+            }
+          });
+        }
+        showS();
+        if (after) after();
+      })
+      .catch(function(){ showS(); if (after) after(); });
+  }
+  /* ---------- 文案栏（2026-11-04 用户令「宝的两套文案没了」）：
+     蓝底文案 = 蓝底套图的 标题三选一/卖点/售后（只读 set.json，绝不触发生成）；
+     聚光文案 = 嵌整个写文案页（跟老聚光窗同规矩，首次切到才挂，省得白跑接口） ---------- */
+  var KB = null, sMounted = false;
+  function renderKCopy(D){
+    var box = wrap.querySelector('#bao_cpy_k');
+    if (!box) return;
+    if (!D || !D.ok){
+      box.innerHTML = '<div style="color:#9a9ea6;font-size:12.5px;line-height:1.9">这台还没有蓝底文案——先出一次蓝底（右边「重新生成」），标题/卖点/售后就有了。</div>';
+      return;
+    }
+    var h = '';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="font-size:12.5px">标题（三选一）</b>'
+      + '<button id="bao_copyall" style="border:none;background:#4f46e5;color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">一键复制全套</button></div>';
+    (D.titles || []).forEach(function(t, i){
+      h += '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px">'
+        + '<div style="flex:1;border:1px solid #e3e8f0;background:#fff;border-radius:8px;padding:7px 10px;line-height:1.55;font-size:12.5px"><b style="margin-right:8px;color:#4f46e5">' + ('ABC'[i] || '') + '</b>' + esc(t) + '</div>'
+        + '<button data-baotc="' + esc(t) + '" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:5px 11px;font-size:11.5px;flex:0 0 auto;cursor:pointer">复制</button></div>';
+    });
+    if (!(D.titles || []).length) h += '<div style="color:#b42318;font-size:12px;margin-bottom:8px">标题还没生成出来</div>';
+    h += '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">① 卖 点（一话一行）</div>'
+      + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc((D.points || []).join('\n')) + '</div>'
+      + '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">② 售 后</div>'
+      + '<div style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33">' + esc(D.aftersale || '—') + '</div>';
+    box.innerHTML = h;
+    box.querySelectorAll('[data-baotc]').forEach(function(el){
+      el.onclick = function(){
+        navigator.clipboard.writeText(el.getAttribute('data-baotc')).then(function(){
+          el.textContent = '已复制'; setTimeout(function(){ el.textContent = '复制'; }, 1200);
+        });
+      };
+    });
+    var ca = box.querySelector('#bao_copyall');
+    if (ca) ca.onclick = function(){
+      navigator.clipboard.writeText((D.points || []).join('\n') + '\n\n' + (D.aftersale || ''));
+      ca.textContent = '已复制全套'; setTimeout(function(){ ca.textContent = '一键复制全套'; }, 1500);
+    };
+  }
+  function loadKCopy(){
+    fetch('/api/kitset?model=' + encodeURIComponent(k) + '&read=1')
+      .then(function(r){ return r.json(); })
+      .then(function(j){ KB = j; renderKCopy(j); })
+      .catch(function(){ renderKCopy(null); });
+  }
+  wrap.querySelectorAll('[data-baocpy]').forEach(function(el){
+    el.addEventListener('click', function(){
+      var t = el.getAttribute('data-baocpy');
+      wrap.querySelectorAll('[data-baocpy]').forEach(function(x){
+        var on = x === el;
+        x.style.background = on ? (x.getAttribute('data-baocpy') === 'k' ? '#eef2ff' : '#ede9fe') : '#fff';
+        x.style.color = on ? (x.getAttribute('data-baocpy') === 'k' ? '#1d4ed8' : '#6d28d9') : '#43464c';
+        x.style.borderColor = on ? (x.getAttribute('data-baocpy') === 'k' ? '#c7d2fe' : '#ddd6fe') : '#e8e8e4';
+        x.style.fontWeight = on ? '600' : '400';
+      });
+      wrap.querySelector('#bao_cpy_k').style.display = (t === 'k') ? 'block' : 'none';
+      wrap.querySelector('#bao_cpy_s').style.display = (t === 's') ? 'block' : 'none';
+      if (t === 's' && !sMounted){
+        sMounted = true;
+        try { openCopyView(k, 'z', false, false, wrap.querySelector('#bao_cpy_s')); }
+        catch (e) { wrap.querySelector('#bao_cpy_s').innerHTML = '<div style="color:#b42318;font-size:12.5px">文案页没挂上：' + esc(String(e)) + '</div>'; }
+      }
+    });
+  });
+  wrap.querySelectorAll('[data-baogen]').forEach(function(el){
+    el.addEventListener('click', function(){
+      (el.getAttribute('data-baogen') === 'k') ? genK(true, el) : genS(el);
+    });
+  });
+  wrap.querySelectorAll('[data-baoopen]').forEach(function(el){
+    el.addEventListener('click', function(){
+      if (el.getAttribute('data-baoopen') === 'k'){
+        fetch('/api/kitset?model=' + encodeURIComponent(k) + '&open=1');
+      } else {
+        fetch('/api/pubopen', {method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({model: k, sub: '聚光'})});
+      }
+    });
+  });
+  showK();
+  loadKCopy();
+  loadLib(function(){
+    /* 开窗自动补缺（跟婷窗同规矩）：蓝底缺→补蓝底，聚光缺→补聚光 */
+    try {
+      fetch(kImg(1), {method: 'HEAD'}).then(function(r){
+        if (!r.ok) genK(false, wrap.querySelector('[data-baogen="k"]'));
+      }).catch(function(){});
+    } catch (e) {}
+    if (!SFILES.length) genS(wrap.querySelector('[data-baogen="s"]'));
+    else msg('s', '缓存秒出');
   });
 }
 
@@ -6840,23 +7182,16 @@ listEl.addEventListener('click', function(e){
     openGwView(gw.getAttribute('data-gwview'));
     return;
   }
-  var kb = e.target.closest('[data-kitdoc]');
-  if (kb){
-    /* 蓝底套图入口（2026-10-21 用户定稿）：完全独立的第三工具——四张1080图+三档标题
-       +两段文案。与写文案/配文零共用窗口零共用引擎，数据走爬虫→官网→欣盛抓取链 */
-    openKitView(kb.getAttribute('data-kitdoc'));
+  var bb = e.target.closest('[data-baodoc]');
+  if (bb){
+    /* 宝套图入口（2026-11-04 用户令：蓝底+聚光合并成一个窗，按钮叫「宝」） */
+    openBaoView(bb.getAttribute('data-baodoc'));
     return;
   }
   var wb = e.target.closest('[data-whiteview]');
   if (wb){
     /* 白字首图入口（2026-11-03 用户令：卡片按钮行独立入口，不塞配文窗） */
     openWhiteView(wb.getAttribute('data-whiteview'));
-    return;
-  }
-  var sb = e.target.closest('[data-spotdoc]');
-  if (sb){
-    /* 暗角聚光独立入口（2026-10-28 用户令）：从配文抽出的深色聚光 6 张工具 */
-    openSpotView(sb.getAttribute('data-spotdoc'));
     return;
   }
   var tw = e.target.closest('[data-tbdoc]');
@@ -8284,19 +8619,44 @@ function diagHtml(j){
   var freshDot = !open ? 'ok' : (freshMin <= 35 ? 'ok' : freshMin <= 70 ? 'warn' : 'bad');
   var freshTxt = !open ? '休班中（8:40 开工）'
     : (up ? (freshMin <= 35 ? '节奏正常' : freshMin + ' 分钟没更新了') : '从没同步过');
-  // ② workflow 成功率（40 分）
-  function wfStat(runs){
-    if (!runs) return { s: 0, txt: '查不到 run（GitHub 查询失败）', dot: 'bad', last: null };
+  /* 2026-11-04 用户令「能用不能用为什么都说清楚」：每路给白话结论 + 影响 */
+  var freshWhy = !open ? ['ok', '休班中——营业时间外不安排抓取，页面显示的是休班前最后一轮数据，属正常，不用管']
+    : (!up ? ['bad', '❌ 还从没同步过——点右下「重新派发云端抓取」先跑一轮']
+    : freshMin <= 35 ? ['ok', '✅ 能用——' + freshMin + ' 分钟前刚同步，页面上看到的价格/库存就是最新的']
+    : freshMin <= 70 ? ['warn', '⚠️ 凑合能用——比正常节奏（≤35 分钟一班）慢了一拍，可能是上一班跑得久，先观察一轮再说']
+    : ['bad', '❌ 先别当真——' + freshMin + ' 分钟没同步了，多半是本机抓取哨兵没在跑（查计划任务 ModelLookupDataTrigger）。这期间页面上的价格/库存是旧的']);
+  var freshImp = '这一路管的是「数据新不新」：金山的价格/型号 + 用友的库存都靠它送进来';
+  // ② workflow 成功率（40 分）—— 2026-11-04 用户令：每路给「能用/不能用 + 为什么 + 影响」
+  function wfStat(runs, what, fix){
+    if (!runs) return { s: 0, txt: '查不到 run（GitHub 查询失败）', dot: 'bad', last: null,
+      why: ['bad', '❌ 判定不了——不是它坏了，是体检时 GitHub 没答上话。刷新一次再看，一直这样才要查 worker 的 GH_TOKEN'], imp: '' };
     var busy = function(r){ return r && (r.status === 'in_progress' || r.status === 'queued' || r.status === 'waiting'); };
     var last = runs[0] || null;
+    var okN = runs.filter(function(r){ return r.con === 'success'; }).length;
     var sc = last && last.con === 'success' ? 20 : (busy(last) ? 12 : 4);
+    var why, imp;
+    if (last && busy(last)){
+      why = ['ok', '⏳ 能用——上一班的数据还在库里照常显示，第 ' + last.num + ' 次正在跑，跑完自动进表'];
+      imp = '正在跑不用管；超过 20 分钟没跑完，下面的诊断会提示疑似卡住';
+    } else if (last && last.con === 'success'){
+      why = ['ok', '✅ 能用——最近一次（#' + last.num + '，' + _diagAgo(new Date(last.at).getTime()) + '）成功'];
+      imp = '近 ' + runs.length + ' 次成功 ' + okN + ' 次' + (okN < runs.length ? '；偶发一次失败会被下一班自动补上，不算病' : '');
+    } else {
+      why = ['bad', '❌ 先别信' + what + '——最近一次（#' + last.num + '，' + _diagAgo(new Date(last.at).getTime()) + '）失败：' + fix];
+      imp = '影响 = ' + what + '停在上一班成功的时刻；已经有的数照常显示，只是不再更新。点右下「重新派发」可立刻重跑';
+    }
     return { s: sc, last: last,
       txt: last ? (busy(last) ? '正在跑（第 ' + last.num + ' 次）'
         : last.con === 'success' ? '最近一次成功 · ' + _diagAgo(new Date(last.at).getTime())
         : '最近一次失败（' + last.con + '）') : '还没有运行记录',
-      dot: last && !busy(last) && last.con !== 'success' ? 'bad' : 'ok' };
+      dot: last && !busy(last) && last.con !== 'success' ? 'bad' : 'ok',
+      why: why, imp: imp };
   }
-  var yy = wfStat(j.yy), kd = wfStat(j.kd);
+  var yy = wfStat(j.yy, '库存数据', '十有八九是用友登录过期了——去用友客户端重新登一次，再点「重新派发」');
+  var kd = wfStat(j.kd, '价格数据', '多半是金山文档导出接口抖动——点「重新派发」重跑一班就好，连着失败才要深查');
+  var runWhy = j.runner === true ? ['ok', '✅ 在线——你电脑上的哨兵每分钟都在按班点接班，抓取活是它干的']
+    : j.runner === false ? ['warn', '⚠️ 离线——这台电脑没在跑（关机/睡眠中）。不用慌：GitHub 云端 runner 会自动兜底，只是数据到得慢一点']
+    : ['bad', '❌ 判定不了——GitHub 接口抖动，刷新再看'];
   // ③ runner（10 分）④ cronlog（10 分）
   var runScore = j.runner === true ? 10 : j.runner === false ? 5 : 0;
   var cronLg = j.cron || [];
@@ -8329,11 +8689,15 @@ function diagHtml(j){
   // 渲染
   function runRow(r){
     if (!r) return '';
-    var ic = (r.status === 'in_progress' || r.status === 'queued' || r.status === 'waiting')
-      ? '⏳' : (r.con === 'success' ? '✅' : '❌');
+    var isBusy = (r.status === 'in_progress' || r.status === 'queued' || r.status === 'waiting');
+    var ic = isBusy ? '⏳' : (r.con === 'success' ? '✅' : '❌');
     var ev = { schedule: '定时', workflow_dispatch: '手动/派发', repository_dispatch: '云端派发' }[r.ev] || (r.ev || '?');
+    var say = isBusy ? '跑着呢，跑完自动入库'
+      : (r.con === 'success' ? '成功：这班数据已进表'
+      : '失败：这班白跑了，下一班会自动补；连着 ❌ 就点「重新派发」');
     return '<div class="dgrun"><span>' + ic + '</span><span>#' + r.num + '</span><span>' + ev
-      + '</span><span>' + _diagAgo(new Date(r.at).getTime()) + '</span></div>';
+      + '</span><span>' + _diagAgo(new Date(r.at).getTime()) + '</span>'
+      + '<span class="dgwhy" title="' + esc(say) + '">' + esc(say) + '</span></div>';
   }
   function cronRow(l, i){
     var bad = /失败|未识别|error/i.test(l);
@@ -8347,19 +8711,33 @@ function diagHtml(j){
     + '<div class="dggrid">'
     +   '<div class="dgcard"><div class="dgch"><span class="dgdot ' + freshDot + '" style="width:8px;height:8px"></span>数据新鲜度 <b>' + freshScore + '/40</b></div>'
     +     '<div class="dgbig">' + (up ? esc(by || '—') + ' · ' + _diagAgo(up) : '—') + '</div>'
+    +     '<div class="dgwhy2 ' + freshWhy[0] + '">' + freshWhy[1] + '</div>'
+    +     '<div class="dgimp">' + freshImp + '</div>'
     +     '<div style="color:#98a2b3;font-size:12px">' + freshTxt + '（表格版本 ' + esc((j.xlsx || {}).ts || '无') + '）</div></div>'
     +   '<div class="dgcard"><div class="dgch"><span class="dgdot ' + (j.runner === true ? 'ok' : j.runner === false ? 'warn' : 'bad') + '" style="width:8px;height:8px"></span>本机抓取端 <b>' + runScore + '/10</b></div>'
     +     '<div class="dgbig">' + (j.runner === true ? '在线' : j.runner === false ? '离线' : '未知') + '</div>'
-    +     '<div style="color:#98a2b3;font-size:12px">' + (j.runner === false ? '电脑关机中，云端 runner 兜底' : '每分钟扫班点的哨兵') + '</div></div>'
+    +     '<div class="dgwhy2 ' + runWhy[0] + '">' + runWhy[1] + '</div>'
+    +     '<div class="dgimp">这一路管的是「谁来干活」：你电脑上的哨兵每分钟扫一次班点，到点就抓金山+用友</div></div>'
     + '</div>'
     + '<div class="dggrid">'
-    +   '<div class="dgcard"><div class="dgch"><span class="dgdot ' + kd.dot + '" style="width:8px;height:8px"></span>金山抓取（价格/型号） <b>' + kd.s + '/20</b></div><div style="font-size:12px;margin:4px 0">' + kd.txt + '</div>' + (j.kd || []).slice(0, 5).map(runRow).join('') + '</div>'
-    +   '<div class="dgcard"><div class="dgch"><span class="dgdot ' + yy.dot + '" style="width:8px;height:8px"></span>用友抓取（实时库存） <b>' + yy.s + '/20</b></div><div style="font-size:12px;margin:4px 0">' + yy.txt + '</div>' + (j.yy || []).slice(0, 5).map(runRow).join('') + '</div>'
+    +   '<div class="dgcard"><div class="dgch"><span class="dgdot ' + kd.dot + '" style="width:8px;height:8px"></span>金山抓取（价格/型号） <b>' + kd.s + '/20</b></div><div style="font-size:12px;margin:4px 0">' + kd.txt + '</div>'
+    +     '<div class="dgwhy2 ' + kd.why[0] + '">' + kd.why[1] + '</div><div class="dgimp">' + kd.imp + '</div>'
+    +     (j.kd || []).slice(0, 5).map(runRow).join('') + '</div>'
+    +   '<div class="dgcard"><div class="dgch"><span class="dgdot ' + yy.dot + '" style="width:8px;height:8px"></span>用友抓取（实时库存） <b>' + yy.s + '/20</b></div><div style="font-size:12px;margin:4px 0">' + yy.txt + '</div>'
+    +     '<div class="dgwhy2 ' + yy.why[0] + '">' + yy.why[1] + '</div><div class="dgimp">' + yy.imp + '</div>'
+    +     (j.yy || []).slice(0, 5).map(runRow).join('') + '</div>'
     + '</div>'
     + '<div class="dgcard"><div class="dgch">🩺 诊断</div>'
     +   dg.map(function(d){ return '<div class="dgdg ' + d[0] + '">' + d[1] + '</div>'; }).join('') + '</div>'
     + '<div class="dgcard"><div class="dgch">CF 派班流水（最近 ' + Math.min(15, cronLg.length) + ' 条）</div>'
     +   (cronLg.length ? cronLg.slice(-15).reverse().map(cronRow).join('') : '<div style="color:#98a2b3">还没有流水</div>') + '</div>'
+    + '<div class="dgcard"><div class="dgch">📖 这个面板怎么读（常见字样都是啥意思）</div>'
+    +   '<div style="font-size:12px;color:#475467;line-height:1.9">'
+    +   '<b>本机抓取端</b>：你电脑上每分钟扫一次班点的哨兵，到点抓金山（价格）+用友（库存）。<b>在线</b>=活是它干的；<b>离线</b>=电脑关机/睡眠，云端 runner 兜底，不用管。<br>'
+    +   '<b>手动/派发</b>：这班是「重新派发」按钮或本机哨兵临时点名的，不是整点定时班。<br>'
+    +   '<b>CF 派班流水 · 本机优先跳过</b>：<span style="color:#0f7a45;font-weight:600">正常，不是故障</span>——意思是这班本机哨兵已经干完了，云端定时班让路不重复跑。<br>'
+    +   '<b>❌ 失败</b>：单次失败不用管，下一班自动补；<span style="color:#b42318;font-weight:600">同一个连着失败 2-3 次</span>再点「重新派发」，还不行看红字诊断里的原因。<br>'
+    +   '<b>分数</b>：100=全绿；80 以上正常；60-79 有点毛病但能用；60 以下出问题了，按红字提示一步步处理。</div></div>'
     + '<div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end">'
     +   '<button class="exmini" data-diagref="1">↻ 重新体检</button>'
     +   '<button class="exmini" data-diagkick="1">▶ 重新派发云端抓取</button></div>';
