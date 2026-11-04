@@ -79,22 +79,9 @@ if sys.platform == "darwin":
 else:
     from appwin import run_app                                            # noqa: E402
 
-# 调试开关：WebView2 远程调试口（CDP）——goofish 内嵌页自动化依赖它
-# （2026-10-17：「快速进入」选号页自动点 + 菜单真实路由探测，见 xy_cdp.py）。
-# 2026-10-24 收紧：CDP 口开着时本机任意进程都能连上读页面/偷 Cookie，改成开关控制——
-#   数据目录放 xy_cdp_off.txt → 不开调试口、不启自动点选号（重启软件生效）。
-# 默认维持开（选号自动点依赖它）；不用闲鱼页自动化的人可以关掉减小暴露面。
-# 端口 pid 派生防多进程撞口；外部用 ML_CDP_PORT 可指定。
-try:
-    if not os.path.isfile(wp("xy_cdp_off.txt")):
-        _dbg_port = int(os.environ.get("ML_CDP_PORT") or 0)
-        if not _dbg_port:
-            _dbg_port = 9333 + (os.getpid() % 300)
-            os.environ["ML_CDP_PORT"] = str(_dbg_port)
-        if sys.platform != "darwin":            # WKWebView 无此 setting
-            webview.settings["REMOTE_DEBUGGING_PORT"] = _dbg_port
-except Exception:
-    pass
+# 2026-11-04 用户令「闲鱼自动化彻底删除」：WebView2 远程调试口（CDP）与
+# 「快速进入」自动点选号整套已拆除（xy_cdp.py 已删档）。
+# 原来开着 CDP 口时本机任意进程都能连上读页面/偷 Cookie——现在默认就不开，暴露面归零。
 
 _tick("常量区/埋点就绪")
 
@@ -192,17 +179,7 @@ def _goofish_mode():
     _safe = "".join(ch for ch in _acc if ch.isalnum() or ch in "-_") or "default"
     _sp = wp("xyprofile_" + _safe)
     os.makedirs(_sp, exist_ok=True)
-    # 独立窗口同样开 CDP + 自动点「快速进入」（跟主进程同款，xy_cdp_off.txt 关掉）。
-    # 端口必须重算：独立窗口是子进程，会继承父进程的 ML_CDP_PORT（已绑），不重算就没口
-    try:
-        if os.path.isfile(wp("xy_cdp_off.txt")):
-            raise RuntimeError("CDP 已被开关关闭")
-        import xy_cdp
-        os.environ["ML_CDP_PORT"] = str(9333 + (os.getpid() % 300))
-        webview.settings["REMOTE_DEBUGGING_PORT"] = int(os.environ["ML_CDP_PORT"])
-        xy_cdp.start_autoclick()
-    except Exception:
-        pass
+    # 2026-11-04：CDP 调试口 + 自动点选号已删，独立窗口不再开调试端口
     try:
         webview.create_window("闲鱼 · %s" % (_acc if _acc != "default" else "宝贝页"), _url,
                               width=1360, height=900)
@@ -268,12 +245,7 @@ def main():
     _tick("实时库存缓存：%s" % ("上次更新 " + str(state_stock_ts()) if state_stock_ts() else "还没有"))
     httpd, port = start_server()
     _tick("本地服务已起")
-    # goofish 内嵌自动化：「快速进入」选号页替用户自动点（2026-10-17 用户要求）
-    try:
-        import xy_cdp
-        xy_cdp.start_autoclick()
-    except Exception:
-        pass
+    # 2026-11-04：goofish 内嵌页自动点已删（用户令「闲鱼自动化彻底删除」）
     run_app(httpd, port, arg)
 
 

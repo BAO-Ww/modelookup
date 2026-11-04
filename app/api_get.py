@@ -147,7 +147,9 @@ class ApiGetMixin:
                         raise
                 if not jobman.submit("kitset:" + model, _do,
                                      _log=lambda s: state.LOG.append("[蓝底] " + s)):
-                    self._send(200, json.dumps({"ok": False, "msg": "该型号已在生成中，等一下"},
+                    # 2026-11-04 修「关窗重开不显示结果」：busy=true 让前端接管轮询，
+                    # 不再当失败抛掉（旧窗口触发的 job 还在跑，重开窗必须能接上）
+                    self._send(200, json.dumps({"ok": False, "busy": True, "msg": "该型号已在生成中，等一下"},
                                                ensure_ascii=False))
                     return
                 self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
@@ -287,15 +289,6 @@ class ApiGetMixin:
                 self._send(200, f.read(), "text/html; charset=utf-8")
             return
 
-        if path == "/api/xycookie":
-            # 闲鱼直连配套（2026-10-14）：这个号存没存 Cookie——只回有没有，绝不回内容
-            import xyops
-            q = urllib.parse.parse_qs(u.query)
-            acc = (q.get("acc") or [""])[0].strip()[:24]
-            self._send(200, json.dumps({"ok": True, "has": xyops.has_cookie(acc)},
-                                       ensure_ascii=False))
-            return
-
         if path == "/api/ping":
             self._send(200, json.dumps({"app": APP_ID, "ver": APP_VERSION}, ensure_ascii=False))
             return
@@ -341,11 +334,6 @@ class ApiGetMixin:
                     s["built"] = (get_payload().get("meta") or {}).get("built")
                 except Exception:
                     pass
-            # 闲鱼页自动化（CDP）开关状态（2026-10-24）：设置面板显示用，本机文件为准
-            try:
-                s["cdp_on"] = not os.path.isfile(wp("xy_cdp_off.txt"))
-            except Exception:
-                s["cdp_on"] = True
             # 开机自启状态（2026-10-25）：设置面板显示用（Mac 没有原生菜单，页面是唯一入口）
             try:
                 from appwin import autostart_state
@@ -479,7 +467,8 @@ class ApiGetMixin:
                     "job": pubwork.job_state()}, ensure_ascii=False))
                 return
             if pubwork.job_state()["running"]:
-                self._send(200, json.dumps({"ok": False, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
+                # 2026-11-04：busy=true（前端排队接管用）
+                self._send(200, json.dumps({"ok": False, "busy": True, "msg": "已有任务在跑：" + pubwork.busy_msg()}, ensure_ascii=False))
                 return
             pubwork._job_begin(model, "抓素材")
             def _w():
@@ -632,19 +621,6 @@ class ApiGetMixin:
             else:
                 j.update(ok=True, phase="idle")
             self._send(200, json.dumps(j, ensure_ascii=False))
-            return
-
-        if path == "/api/xymenu":
-            # 2026-10-17：运行时菜单路由探测（CDP 在已登录 goofish 页里调 mtop 菜单接口），
-            # 用来把「改价/下架」指到真实的宝贝管理页；raw=菜单原始 JSON，routes_seen=嗅探到的 hash
-            try:
-                import xy_cdp
-                raw = xy_cdp.dump_menu()
-                self._send(200, json.dumps(
-                    {"ok": True, "raw": raw or "(没探到：先在软件里打开一次「数据」并登录)",
-                     "routes_seen": xy_cdp.routes_seen()}, ensure_ascii=False))
-            except Exception as e:
-                self._send(200, json.dumps({"ok": False, "msg": str(e)[:200]}, ensure_ascii=False))
             return
 
         if path.startswith("/pubimg/"):

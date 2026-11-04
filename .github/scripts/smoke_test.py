@@ -95,8 +95,9 @@ def api_smoke():
         check("GET /api/ping -> 200", st == 200 and j.get("app") == "ModelLookup", str(j)[:60])
 
         st, j = get("/api/state")
-        check("GET /api/state -> 200 且带 status/rev/cdp_on",
-              st == 200 and "status" in j and "rev" in j and "cdp_on" in j,
+        # 2026-11-04：cdp_on 随闲鱼自动化拆除一起下架，断言改成 autostart_on
+        check("GET /api/state -> 200 且带 status/rev/autostart_on",
+              st == 200 and "status" in j and "rev" in j and "autostart_on" in j,
               "status=%s rev=%s" % (j.get("status"), j.get("rev")))
 
         st, j = get("/api/data", timeout=120)

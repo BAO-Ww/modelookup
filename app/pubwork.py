@@ -21,6 +21,7 @@ import threading
 import time
 
 from paths import reveal
+from renderlock import serialized
 
 # ---------------------------------------------------------------- 素材根与型号目录
 
@@ -561,6 +562,7 @@ def _last_get(model):
         return dict(_LAST.get(_safe(model)) or {})
 
 
+@serialized
 def _auto_qa_spot(model, info, src, out, style, paths, prog=None):
     """聚光四件套生成完自动 AI 复检（2026-10-29 用户令「做好的四张让AI过一遍」）。
     商汤免费额度优先；无 key/视觉不可用静默跳过不挡出货。
@@ -594,6 +596,7 @@ def _auto_qa_spot(model, info, src, out, style, paths, prog=None):
         _logf()("需人工确认：%s（%s）" % (x.get("issue"), x.get("severity")))
 
 
+@serialized
 def gen_style(model, style, sell_price=None, version="N", entry_title=None):
     """生成一套 6 张精修（后台线程跑，JOB 汇报进度）。
     entry_title（2026-11-04 用户令）：软件条目标题，聚光首图大字用它——
@@ -653,6 +656,7 @@ def gen_style(model, style, sell_price=None, version="N", entry_title=None):
             _logf()("AI 复检线程起不来（不影响成片）：%s" % e)
 
 
+@serialized
 def gen_hero(model, sell_price=None, version="N"):
     """促销首图（深色版 2048）：发布图/0_主图_卖点拼版.jpg"""
     _job_begin(model, "促销首图")
