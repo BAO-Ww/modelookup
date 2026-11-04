@@ -1777,8 +1777,8 @@ var PERM_DEFS = [
   ['xysj',        '闲鱼数据',          '入口与面板', '内嵌数据管家'],
   ['xyops',       '闲鱼链接',          '入口与面板', '编辑宝贝 / 查看宝贝'],
   ['xysoft',      '链接软件内打开',    '入口与面板', '勾上=闲鱼链接在软件里打开；不勾=浏览器打开'],
-  ['tbyp',        '婷',                '入口与面板', '出图时一起出文案（2026-11-04 用户令：显示名照改，控制对象不变）'],
-  ['kitset',      '宝',                '入口与面板', '一键出蓝底四张+暗角聚光（婷/宝共用此开关）'],
+  ['tbyp',        '婷',                '入口与面板', '控制卡片「婷」按钮（婷套图）和「配文」按钮——2026-11-04 用户令：婷入口绑婷开关'],
+  ['kitset',      '宝',                '入口与面板', '控制卡片「宝」按钮（蓝底四张+暗角聚光）'],
   ['p_pt',        '价格含税',          '价格列', '拿货价含税那档'],
   ['p_mr',        '价格取整',          '价格列', '把价取整显示'],
   ['p_mh',        '拿货价·慧买卖',     '价格列', '美的系慧买卖价'],
@@ -3586,7 +3586,7 @@ function renderItem(it){
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
     + (pok('copy') ? '<button class="copy" data-copydoc="' + esc(it.c) + '" data-copykind="' + esc(it.k || 'z') + '" title="打开闲鱼配文 PRO：抓真实参数写文案 + AI 出发布图（15:59 用户要的常驻入口）">写文案</button>' : '')
     + (pok('tbyp') ? '<button class="copy" data-tbdoc="' + esc(it.c) + '" data-tbkind="' + esc(it.k || 'z') + '" title="打开配文：型号一键出图出文案（独立权限，管理号决定给谁用）">配文</button>' : '')
-    + (pok('kitset') ? '<button class="copy" data-whiteview="' + esc(it.c) + '" title="婷套图（独立工具）：同一张首图换底色/字色——蓝底白字、紫底白字两个，不动本家蓝底">婷</button>' : '')
+    + (pok('tbyp') ? '<button class="copy" data-whiteview="' + esc(it.c) + '" title="婷套图（独立工具）：同一张首图换底色/字色——蓝底白字、紫底白字两个，不动本家蓝底；显示开关「婷」控制这个入口">婷</button>' : '')
     + (pok('kitset') ? '<button class="copy" data-baodoc="' + esc(it.c) + '" title="宝套图（独立工具）：蓝底四张 + 暗角聚光四张，一个窗里全看到">宝</button>' : '')
     + '<button class="markbtn gw" data-gwview="' + esc(it.c) + '" title="打开这台机器对应的官网产品页（没记录就用必应搜型号）">官网</button>'
     + '</span></div>'
@@ -5644,7 +5644,7 @@ function openBaoView(k){
   }
   /* ---------- 蓝底生成（jobman：kitset:<型号>，同老蓝底窗同接口） ---------- */
   var kGen = false;
-  function genK(force, btn){
+  function genK(force, btn, done){
     if (kGen){ msg('k', '蓝底已在生成中…'); return; }
     kGen = true;
     if (btn){ btn.disabled = true; btn.textContent = '生成中…'; }
@@ -5660,10 +5660,12 @@ function openBaoView(k){
             msg('k', res && res.cached ? '缓存秒出' : '✓ 蓝底四张完成');
             showK();
             KB = res; renderKCopy(res);   // 蓝底跑完文案同步刷（2026-11-04 两套文案回归）
+            if (done) done();
           }, function(err){
             kGen = false;
             if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
             msg('k', '✗ ' + (err && err.message || '蓝底生成失败'), true);
+            if (done) done();   // 蓝底失败也放行聚光（后端会自己抓素材）
           }, function(sec, st){
             msg('k', ((st && st.prog) || '生成中…') + '（已 ' + sec + ' 秒）');
           });
@@ -5834,15 +5836,27 @@ function openBaoView(k){
   });
   showK();
   loadKCopy();
+  /* 聚光文案开窗就开写（2026-11-04 用户令「文案也要一起写了啊，不要我点了再写」）：
+     挂载即自动生成（openCopyView 内置），页签点击只切显示。素材接口后端会等蓝底
+     抓完复用（pubwork._wait_or_reuse_kitset），不会跟蓝底双爬 */
+  sMounted = true;
+  try { openCopyView(k, 'z', false, false, wrap.querySelector('#bao_cpy_s')); }
+  catch (e) { wrap.querySelector('#bao_cpy_s').innerHTML = '<div style="color:#b42318;font-size:12.5px">文案页没挂上：' + esc(String(e)) + '</div>'; }
   loadLib(function(){
-    /* 开窗自动补缺（跟婷窗同规矩）：蓝底缺→补蓝底，聚光缺→补聚光 */
+    /* 开窗自动补缺（跟婷窗同规矩）：蓝底缺→补蓝底，聚光缺→补聚光。
+       2026-11-04 用户令「跑一个就够了」：两套都缺时聚光等蓝底抓完再跑，
+       别两条爬虫同时爬同一台机器（后端也会等蓝底素材复用，双保险） */
+    var sNeed = !SFILES.length;
     try {
       fetch(kImg(1), {method: 'HEAD'}).then(function(r){
-        if (!r.ok) genK(false, wrap.querySelector('[data-baogen="k"]'));
-      }).catch(function(){});
-    } catch (e) {}
-    if (!SFILES.length) genS(wrap.querySelector('[data-baogen="s"]'));
-    else msg('s', '缓存秒出');
+        if (!r.ok){
+          genK(false, wrap.querySelector('[data-baogen="k"]'), function(){
+            if (sNeed) genS(wrap.querySelector('[data-baogen="s"]'));
+          });
+        } else if (sNeed) genS(wrap.querySelector('[data-baogen="s"]'));
+      }).catch(function(){ if (sNeed) genS(wrap.querySelector('[data-baogen="s"]')); });
+    } catch (e) { if (sNeed) genS(wrap.querySelector('[data-baogen="s"]')); }
+    if (!sNeed) msg('s', '缓存秒出');
   });
 }
 

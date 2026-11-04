@@ -292,8 +292,91 @@ def _save_info(info):
         pass
 
 
+def _kitset_info_to_pub(cand, model, d):
+    """把蓝底（kitset）抓好的 info.json 搬成本模块素材 info（2026-11-04）。
+    搬得动返回 info（已落盘），不合适返回 None——绝不搬出空参数/缺图的数据。"""
+    try:
+        with open(cand, encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    props = [(str(a), str(b)) for a, b in (raw.get("props") or []) if a and b]
+    if not props:
+        return None
+    imgs = []
+    for x in (raw.get("imgs") or []):
+        f_ = x.get("f") if isinstance(x, dict) else x
+        if f_ and os.path.isfile(os.path.join(d, str(f_))):
+            _src = (x.get("src") if isinstance(x, dict) else "") or "官网"
+            imgs.append({"f": str(f_), "src": _src})
+    if not imgs:
+        return None
+    _cat = str(raw.get("cat") or "")
+    if not _cat:
+        try:
+            import pei_core
+            _cat = pei_core.guess_cat(str(raw.get("title") or model))
+        except Exception:
+            _cat = ""
+    info = {"site": raw.get("site") or "kitset", "brand": raw.get("brand") or "",
+            "model": raw.get("model") or model, "title": raw.get("title") or model,
+            "price": str(raw.get("price") or "0"), "avail": raw.get("avail") or "",
+            "props": props, "url": raw.get("url") or "", "cat": _cat,
+            "dir": d, "imgs": imgs, "source": "蓝底抓取（复用）"}
+    info = _normalize_info(info)
+    os.makedirs(d, exist_ok=True)
+    _save_info(info)
+    return info
+
+
+def _wait_or_reuse_kitset(model, d, log, prog):
+    """素材没有时先看蓝底那边抓好的（2026-11-04 用户令「跑一个就够了吧还要两个一起跑爬虫」）：
+    宝窗开窗蓝底/聚光/文案三路同时进，同一台机器不该爬两遍——聚光这边先复用
+    kitset/<型号>/info.json；蓝底 job 还在跑就等它抓完（最多 90 秒）再复用；
+    蓝底没在跑也没现成素材 → 返回 None 照旧自己爬（单独生成聚光的场景）。"""
+    try:
+        import kitset as _ks
+    except Exception:
+        return None
+    try:
+        nm = _ks.norm_model(model) or re.sub(r"\s+", "", model)
+        kd = os.path.join(_ks.kit_root(), nm)
+    except Exception:
+        return None
+    cands = (os.path.join(kd, "官网", "info.json"), os.path.join(kd, "info.json"))
+    deadline = time.time() + 90
+    told = False
+    while True:
+        for cand in cands:
+            if os.path.isfile(cand):
+                info = _kitset_info_to_pub(cand, model, d)
+                if info:
+                    if log:
+                        log("素材直接复用蓝底抓取结果（不重复爬）")
+                    return info
+        running = False
+        try:
+            import jobman
+            running = bool(jobman.state("kitset:" + nm).get("running")
+                           or jobman.state("kitset:" + model).get("running"))
+        except Exception:
+            running = False
+        if not running or time.time() >= deadline:
+            return None
+        if not told:
+            told = True
+            if prog:
+                prog(8, "蓝底正在抓素材，等它抓完直接用 ...")
+            if log:
+                log("蓝底抓取进行中，聚光等它抓完复用素材（不重复爬）")
+        time.sleep(2)
+
+
 def work(model, prog=None):
-    """抓素材：本地有就直接用；没有走 peiwen 抓取链（新爬虫→旧检索→兴达），存 素材/<型号>/"""
+    """抓素材：本地有就直接用；没有先看蓝底抓好的能不能复用（等最多 90s）；
+    复用不上走 peiwen 抓取链（新爬虫→旧检索→兴达），存 素材/<型号>/"""
     log = _logf()
     prog = prog or (lambda p, m: None)
     d = mdir(model)
@@ -307,6 +390,9 @@ def work(model, prog=None):
                 _save_info(info)
             except Exception as e:
                 log("补抓参数失败（%s），仍用原数据" % e)
+        return info
+    info = _wait_or_reuse_kitset(model, d, log, prog)
+    if info:
         return info
     os.makedirs(d, exist_ok=True)
     import pei_core
