@@ -208,11 +208,15 @@ def _pill_left(d, x, y, s, f, pad=14, h=36):
     return w
 
 
-def _pill_center(od, cx, y, s, f, pad_x=34, pad_y=20, fill=(46, 107, 230, 242)):
+def _pill_center(od, cx, y, s, f, pad_x=34, pad_y=20, fill=(46, 107, 230, 242), radius=None, min_w=0):
     w = _tw(od, s, f) + pad_x * 2
+    if min_w and min_w > w:
+        w = min_w
     asc, desc = f.getmetrics()
     h = asc + desc + pad_y * 2
-    od.rounded_rectangle([cx - w / 2, y, cx + w / 2, y + h], radius=h / 2, fill=fill)
+    # radius=None=圆角胶囊（本家）；radius=0=方块（2026-11-04 用户令：婷首图底色改方块）
+    _r = h / 2 if radius is None else radius
+    od.rounded_rectangle([cx - w / 2, y, cx + w / 2, y + h], radius=_r, fill=fill)
     od.text((cx, y + h / 2), s, font=f, fill=(255, 255, 255), anchor="mm")
     return h
 
@@ -343,16 +347,8 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
             h_act = 520.0 / _ar
     except Exception:
         pass
-    # 2026-11-03 用户令（白字 tone）：胶囊字一定要宽过机图——
-    # 最小宽 = 机图实际渲染宽 × 1.06（窄机身保底 520，封顶 1000 留边）。
-    # 字号照旧反推（上限 78），不够宽的部分用胶囊左右内边距补足，保证必超机图。
-    _wv_pill_minw = 520
-    if _tone_on:
-        try:
-            _pw_sc = h_act * (_pw / float(_ph))
-            _wv_pill_minw = min(1000, max(520, int(_pw_sc * 1.06) + 20))
-        except Exception:
-            pass
+    # 2026-11-03 旧令「胶囊必超机图」已作废（2026-11-04 用户令：方块贴字、可以小，
+    # 机器要露出来）——不再按机图宽反推最小宽和字号。
     d.ellipse([540 - 280, bottom - 28, 540 + 280, bottom + 2], fill=(238, 240, 243))
     _paste_product(C, prod, 540, bottom, h_act, max_w=960)
     ov = Image.new("RGBA", C.size, (0, 0, 0, 0))
@@ -360,6 +356,9 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
     # safe=AI 复检保守档（2026-10-29 用户令「蓝底也要接上」）：标题胶囊/底部行字号
     # 各缩一档，胶囊带自动变矮，压字/截断类问题重渲即解
     f1, f2 = _font(F_BOLD, 52 if safe else 58), _font(F_BOLD, 45 if safe else 50)
+    if _tone_on:
+        # 2026-11-04 用户令：婷首图字和色块都小一点，别全把机器盖住
+        f1, f2 = _font(F_BOLD, 40 if safe else 42), _font(F_BOLD, 34 if safe else 36)
     def _ph(f):
         a, dsc = f.getmetrics()
         return a + dsc + 40
@@ -376,32 +375,39 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
         lines = [lines[0], lines[1][:half], lines[1][half:]]
     # 白字模式：胶囊不许缩成机身宽——短句按最小宽 520 反推字号（2026-11-03 用户令）。
     # 字号先定死再算 total_h，居中定位才不会偏。
+    # 白字模式：字撑满机图宽（2026-11-04 14:31 用户令「字跟图一样大小」，方块贴字）——
+    # 每行字号按机图实际渲染宽反推放大（字宽≈机图宽-左右内边距，上限 78），
+    # 方块只包住字（小内边距），所以方块自然跟机图一样宽。
+    _tone_w = 0
+    if _tone_on:
+        try:
+            _tone_w = int(_pw * (h_act / float(_ph)))
+        except Exception:
+            _tone_w = 620
+        _tone_w = max(300, _tone_w)
     _line_fonts = []
     for i, s_ in enumerate(lines):
         _f = f1 if i == 0 else f2
-        if _tone_on:
+        if _tone_w:
+            _base = getattr(_f, "size", 36)
             try:
-                _w0 = _tw(od, s_, _f) + 68
-                if _w0 < _wv_pill_minw:
-                    _base = getattr(_f, "size", 50)
-                    _fs = min(78, int(_base * _wv_pill_minw / float(_w0)))
-                    _f = _font(F_BOLD, max(_base, _fs))
+                _twv = _tw(od, s_, _f)
+                _sz = min(78, max(30, int(_base * (_tone_w - 32) / float(_twv))))
             except Exception:
-                pass
+                _sz = _base
+            _f = _font(F_BOLD, _sz)
         _line_fonts.append(_f)
     y0 = 420
     total_h = sum(_ph(_f) for _f in _line_fonts) + 18 * (len(lines) - 1)
     if centered:
         y0 = int(bottom - h_act / 2 - total_h / 2)
     for i, s_ in enumerate(lines):
-        _px = 34
         if _tone_on:
-            try:
-                _twv = _tw(od, s_, _line_fonts[i])
-                _px = max(34, int((_wv_pill_minw - _twv) / 2.0))
-            except Exception:
-                pass
-        h = _pill_center(od, 540, y0, s_, _line_fonts[i], pad_x=_px, fill=_pill_fill)
+            # 2026-11-04 用户令：方块贴字（小内边距），字已按机图宽放大，方块自然等宽
+            h = _pill_center(od, 540, y0, s_, _line_fonts[i], pad_x=16, pad_y=10,
+                             fill=_pill_fill, radius=0)
+        else:
+            h = _pill_center(od, 540, y0, s_, _line_fonts[i], pad_x=34, fill=_pill_fill)
         y0 += h + 18
     C = Image.alpha_composite(C.convert("RGBA"), ov).convert("RGB")
     d = ImageDraw.Draw(C)
@@ -1871,10 +1877,16 @@ def _try_save_sizeimg(u, sizeimg, log, prod_path=None, ai_budget=None):
         ok = _looks_like_sizeimg(im)
         if ok:
             v = _ai_is_sizeimg(im, log)
-            if v is False:
+            # 2026-11-04 HP-35 实锤：官网详情页的「保修/安装收费」服务表像素上像线框
+            # （满页表格线），AI 又刚好限流答不上（v=None）→ 被当尺寸图收进，
+            # 聚光/蓝底尺寸图全错。收紧：AI 不是明确点头（True）一律不收——
+            # 拒了顶多走手绘线稿（真实 dims），收错是把保修表贴上产品图。
+            if v is not True:
                 ok = False
-                if log:
+                if log and v is False:
                     log("详情页候选 %s 像素像线框图但 AI 否掉，跳过" % u.split("/")[-1])
+                if log and v is None:
+                    log("详情页候选 %s AI 没给准话（限流/无应答），宁可不用" % u.split("/")[-1])
         elif ai_budget is not None and ai_budget[0] > 0:
             v = _ai_is_sizeimg(im, log)
             if v is not None:
@@ -2425,21 +2437,26 @@ def _parse_dims(pd):
     EB100Z35Pro2 实锤（2026-10-28）：官网同时给「尺寸」和「尺寸(宽*高*深)mm」同值键，
     先撞无标签键会把宽深对调（深 570 > 宽 550）——必须让带标签的键优先。"""
     items = list((pd or {}).items())
+    # 2026-11-04 HP-35 实锤：88mm 这种两位数 Dimensions 被旧正则 \d{3,4} 漏掉，
+    # 三个数凑不齐整条放弃 → 尺寸图连真实数字都不印。放宽到 2-4 位。
     def _nums(vs):
-        ns = re.findall(r"\d{3,4}(?:\.\d+)?", str(vs))
+        ns = re.findall(r"\d{2,4}(?:\.\d+)?", str(vs))
         return [int(float(x)) for x in ns[-3:]] if len(ns) >= 3 else None
     for k, v in items:                  # ① 带顺序标签：对号入座
         ks = str(k)
         if ("尺寸" not in ks and "外形" not in ks):
             continue
-        if not ("深" in ks and "宽" in ks and "高" in ks):
+        # 厚=深（HP-35 实锤：官网键是「外形尺寸(宽*高*厚)mm」）
+        if not (("深" in ks or "厚" in ks) and "宽" in ks and "高" in ks):
             continue
         nums = _nums(v)
         if not nums:
             continue
         order = []
-        for ch, idx in (("深", 0), ("宽", 1), ("高", 2)):
-            order.append((ks.find(ch), idx))
+        for ch, idx in (("深", 0), ("厚", 0), ("宽", 1), ("高", 2)):
+            _p = ks.find(ch)
+            if _p >= 0:
+                order.append((_p, idx))
         order.sort()
         vals = [None, None, None]       # [宽, 高, 深]
         for pos, (_fpos, idx) in enumerate(order):
@@ -2813,6 +2830,20 @@ def _hard_points(info, pd, sp):
         n = num(str(pd.get("通量", "")))
         if n:
             add("%sG大通量，接水不用等" % n)
+        # 2026-11-04 用户令「卖点才一个」：前置过滤器/超滤这类没 RO 没通量的，
+        # 从官网 props 里抠硬货（HP-35 实锤整条链只剩一行尺寸）
+        if "前置" in alltext or "管道" in alltext:
+            add("前置过滤，全屋用水第一道关")
+        if "不锈钢" in alltext and ("滤" in alltext):
+            add("不锈钢滤网滤芯，耐腐蚀用得久")
+        if "反冲洗" in alltext or "冲洗" in alltext:
+            add("可冲洗滤芯，冲一冲接着用不换芯")
+        _pv = str(pd.get("进水压力", "") or pd.get("进水压力(Mpa)", ""))
+        if re.search(r"\d", _pv):
+            add("%sMPa 宽水压适配，水压不稳也能装" % _pv.replace("MPa", "").replace("Mpa", "").strip())
+        _dm = re.search(r"(\d{2,3}[*×x]\d{2,3}[*×x]\d{2,3})", str(pd.get("外形尺寸", "")) or alltext)
+        if _dm:
+            add("%smm 小巧机身，装哪儿都不占地" % _dm.group(1))
     elif "油烟机" in tt or "烟机" in tt or "爆炒风量" in str(pd) or "排风量" in str(pd):
         n = None
         for k, v in pd.items():

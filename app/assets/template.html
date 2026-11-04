@@ -1777,8 +1777,8 @@ var PERM_DEFS = [
   ['xysj',        '闲鱼数据',          '入口与面板', '内嵌数据管家'],
   ['xyops',       '闲鱼链接',          '入口与面板', '编辑宝贝 / 查看宝贝'],
   ['xysoft',      '链接软件内打开',    '入口与面板', '勾上=闲鱼链接在软件里打开；不勾=浏览器打开'],
-  ['tbyp',        '配文',              '入口与面板', '出图时一起出文案'],
-  ['kitset',      '蓝底套图',          '入口与面板', '一键出四张蓝底套图'],
+  ['tbyp',        '婷',                '入口与面板', '出图时一起出文案（2026-11-04 用户令：显示名照改，控制对象不变）'],
+  ['kitset',      '宝',                '入口与面板', '一键出蓝底四张+暗角聚光（婷/宝共用此开关）'],
   ['p_pt',        '价格含税',          '价格列', '拿货价含税那档'],
   ['p_mr',        '价格取整',          '价格列', '把价取整显示'],
   ['p_mh',        '拿货价·慧买卖',     '价格列', '美的系慧买卖价'],
@@ -5519,6 +5519,8 @@ function openBaoView(k){
     +   '<b style="font-size:14px">宝套图</b>'
     +   '<span style="font-size:12px;color:#8a929e">' + esc(k) + '</span>'
     +   '<span style="font-size:11.5px;color:#8a929e">蓝底四张 + 暗角聚光四张 · 生成完不自动开文件夹</span>'
+    +   '<span id="bao_msg_k" style="font-size:11.5px;color:#9fe0a8"></span>'
+    +   '<span id="bao_msg_s" style="font-size:11.5px;color:#fcd34d"></span>'
     +   '<span style="flex:1"></span>'
     +   '<button id="bao_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
     + '</div>'
@@ -5545,7 +5547,6 @@ function openBaoView(k){
       +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
       +     '<div style="font-weight:700;font-size:13px">' + title + ' <span style="font-weight:400;font-size:11.5px;color:#8a929e">' + sub + ' · 点图看大图</span></div>'
       +     '<span style="flex:1"></span>'
-      +     '<span id="bao_msg_' + t + '" style="font-size:11.5px;color:#9fe0a8"></span>'
       +     '<button data-baoopen="' + t + '" style="border:1px solid ' + bd + ';background:' + bg + ';color:' + c + ';border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
       +     '<button data-baogen="' + t + '" style="border:1px solid ' + bd + ';background:' + bg + ';color:' + c + ';border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
       +   '</div>'
@@ -5558,10 +5559,10 @@ function openBaoView(k){
   function kImg(n){ return '/api/kitimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('蓝底') + '/img_' + n + '.jpg'; }
   function sImg(f){ return '/pubimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('聚光') + '/' + encodeURIComponent(f); }
   function msg(t, s, bad){
+    /* 2026-11-04 用户令：进度/状态统一上顶栏，卡片行只留按钮 */
     var el = wrap.querySelector('#bao_msg_' + t); if (!el) return;
-    el.textContent = s || '';
-    el.style.color = bad ? '#fca5a5' : '#9fe0a8';
-    if (bad && el.parentElement) el.parentElement.style.color = '';
+    el.textContent = s ? ((t === 'k' ? '蓝底 ' : '聚光 ') + s) : '';
+    el.style.color = bad ? '#fca5a5' : (t === 'k' ? '#9fe0a8' : '#fcd34d');
   }
   function zoom(src, title){
     var old = document.getElementById('bao_zoom'); if (old) old.remove();
@@ -5709,8 +5710,11 @@ function openBaoView(k){
       });
     function startGen(){
       msg('s', '已开始，等 AI 出图…（首次 1-2 分钟）');
+      /* 2026-11-04 用户令：聚光首图大字=条目标题（如「海尔净水·厨下机HP-35」），
+         别拿官网页面标题自己编——条目名跟着卡片一起传给后端 */
+      var _it = itemOf(k);
       fetch('/api/pubgen', {method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({model: k, style: 'spot'})})
+        body: JSON.stringify({model: k, style: 'spot', title: _it ? nameOf(_it) : ''})})
         .then(function(r){ return r.json(); })
         .then(function(j){
           if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
@@ -6020,7 +6024,7 @@ function openKitView(k){
    左边 6 张深色聚光图切换，右边整个写文案页（openCopyView 嵌入模式：顶栏+文案/卖点/自检）。
    图走 /api/pubgen style=spot，文案与写文案同引擎同接口（/api/copy）。 */
 function openSpotView(k){
-  if (!pok('kitset')){ alert('聚光图没权限——找管理号在「账号管理」里勾「蓝底套图」'); return; }
+  if (!pok('kitset')){ alert('聚光图没权限——找管理号在「账号管理」里勾「宝」'); return; }
   var old = document.getElementById('spotview'); if (old) old.remove();
   var wrap = document.createElement('div'); wrap.id = 'spotview';
   wrap.style.cssText = 'position:fixed;inset:0;background:#f7f7f5;z-index:70;display:flex;flex-direction:column;font-size:13px;color:#1c1e22';

@@ -1578,7 +1578,9 @@ def _vision_call(api_key, data_url, prompt, log=None):
             _last_err = e
             try:
                 if log:
-                    log("视觉调用 %s 失败（%s），换下一家" % (_pname, e))
+                    # 2026-11-04 用户令：兜底流水别吓人——商汤限流切 GLM 是正常机制，
+                    # 横幅上写人话；原始报错保留在 _last_err，真全失败时才抛
+                    log("AI 判图切到备用通道，正常继续")
             except Exception:
                 pass
     if _last_err:

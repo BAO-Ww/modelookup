@@ -312,6 +312,47 @@ def prep_photo(path, focus=0.5, xoff=0.5, sharpen=True):
     return im
 
 
+def _crop_sig(im, min_run=20, bridge=26):
+    """显著度裁剪（2026-11-04 HP-35 实锤）：官网图右侧一道 1px 白色细线（瑕疵）
+    是不透明的，getbbox() 把它算进包围盒 → 机图整体被挤偏不居中。
+    做法：alpha 列/行投影 → 非空段按 ≤bridge 间隔合并 → 宽度 <min_run 的段
+    （细线/杂点）丢弃，只保留主机体段。保险：全空/异常退回普通 getbbox。"""
+    try:
+        if im.mode != "RGBA":
+            return im
+        a = im.split()[3]
+        w, h = a.size
+        if w <= min_run * 2 or h <= min_run * 2:
+            return im
+        step = 2  # 隔行采样提速
+        px = a.load()
+
+        def _runs(n, get):
+            idx = [i for i in range(0, n, step) if get(i)]
+            if not idx:
+                return []
+            out = [[idx[0], idx[0]]]
+            for i in idx[1:]:
+                if i - out[-1][1] <= bridge:
+                    out[-1][1] = i
+                else:
+                    out.append([i, i])
+            return [(s, e) for s, e in out if e - s >= min_run]
+
+        col = _runs(w, lambda x: any(px[x, y] for y in range(0, h, step)))
+        row = _runs(h, lambda y: any(px[x, y] for x in range(0, w, step)))
+        if not col or not row:
+            bb = im.getbbox()
+            return im.crop(bb) if bb else im
+        bb = (col[0][0], row[0][0], min(w, col[-1][1] + step), min(h, row[-1][1] + step))
+        if bb[2] - bb[0] < 10 or bb[3] - bb[1] < 10:
+            return im
+        return im.crop(bb)
+    except Exception:
+        bb = im.getbbox()
+        return im.crop(bb) if bb else im
+
+
 def load_cut(path, matting=True):
     """裁出产品主体。
     透明 PNG -> 直接 bbox 裁（官方图多自带透明）。
@@ -329,13 +370,12 @@ def load_cut(path, matting=True):
         im = im.convert("RGBA")
     if im.mode == "RGBA":
         if im.split()[3].getextrema()[0] < 255:
-            bb = im.getbbox()
-            return im.crop(bb) if bb else im
+            return _crop_sig(im)
         im = im.convert("RGB")
     else:
         im = im.convert("RGB")
     if matting and _looks_white_bg(im):
-        return _white_matte(im)
+        return _crop_sig(_white_matte(im))
     bb = im.getbbox()
     im = im.crop(bb) if bb else im
     # ★ 必须返回 RGBA：下游 img1~img8 全部用 cv.alpha_composite(pf, (px, py))，
@@ -905,10 +945,7 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
     if dims:
         # 暗底手绘线框：正视图+宽高金色标注，深度一句话（几何同蓝底、线条改浅色）
         Wd, Hd, Dd = dims
-        fh = 470; fw = max(70, int(Wd / float(Hd) * fh))
-        fx, fy = (W - fw) // 2 - 50, 286
-        dr.rounded_rectangle([fx, fy, fx + fw, fy + fh], 12,
-                             outline=(225, 232, 242, 230), width=3)
+
         def _dl(x1, y1, x2, y2, label, vert=False):
             dr.line([x1, y1, x2, y2], fill=(255, 205, 60, 220), width=2)
             if vert:
@@ -919,9 +956,29 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
                 dr.line([x1, y1 - 8, x1, y1 + 8], fill=(255, 205, 60, 220), width=2)
                 dr.line([x2, y2 - 8, x2, y2 + 8], fill=(255, 205, 60, 220), width=2)
                 T(dr, ((x1 + x2) // 2, y1 - 20), label, 26, TX1, "mb")
-        _dl(fx, fy - 46, fx + fw, fy - 46, "%s mm" % Wd)
-        _dl(fx + fw + 46, fy, fx + fw + 46, fy + fh, "%s mm" % Hd, vert=True)
-        T(dr, (W // 2, fy + fh + 72), "深 %s mm · 外形尺寸以实物为准" % Dd, 27, TX2, "mm")
+
+        # 2026-11-04 用户实锤（HP-35）：有机图却画通用矩形，观感太糙——
+        # 优先拿机图描浅色线稿当正视图，宽高标注跟着线稿实际边界走
+        sk = _sketch_rgba(front) if front else None
+        if sk is not None:
+            sc = min(720 / max(1, sk.width), 540 / max(1, sk.height))
+            tw = max(1, int(sk.width * sc))
+            th = max(1, int(sk.height * sc))
+            sk = sk.resize((tw, th), Image.LANCZOS)
+            fx, fy = (W - tw) // 2, 300
+            cv.alpha_composite(sk, (fx, fy))
+            dr = ImageDraw.Draw(cv)
+            _dl(fx, fy - 46, fx + tw, fy - 46, "%s mm" % Wd)
+            _dl(fx + tw + 46, fy, fx + tw + 46, fy + th, "%s mm" % Hd, vert=True)
+        else:
+            fh = 470; fw = max(70, int(Wd / float(Hd) * fh))
+            fx, fy = (W - fw) // 2 - 50, 286
+            dr.rounded_rectangle([fx, fy, fx + fw, fy + fh], 12,
+                                 outline=(225, 232, 242, 230), width=3)
+            _dl(fx, fy - 46, fx + fw, fy - 46, "%s mm" % Wd)
+            _dl(fx + fw + 46, fy, fx + fw + 46, fy + fh, "%s mm" % Hd, vert=True)
+        T(dr, (W // 2, fy + fh + 72) if sk is None else (W // 2, 862),
+          "深 %s mm · 外形尺寸以实物为准" % Dd, 27, TX2, "mm")
         # 2026-10-29 用户令「官网那么多参数又不会写」：手绘卡别光秃秃仨数字，
         # 底部对齐官方线稿分支版式（918 品牌型号 / 972 真参数行，只挑真参数绝不编）
         _kv = []
