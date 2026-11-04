@@ -1487,9 +1487,9 @@ def _gather_info(model, log):
     return info, imgs
 
 
-def _cut_border_bg(im, thr=46):
-    """边框同色判定 + 从边缘泛洪抠底：白底/黑底/灰底纯色背景的产品图 -> 透明底抠图。
-    背景不统一（促销横幅/场景图/拼图）返回 None——这类图直接淘汰不用。"""
+def _flood_bbox(im, thr=46):
+    """边框同色判定 + 从边缘泛洪抠底，返回主体 bbox（把关用，2026-11-04）。
+    背景不统一（促销横幅/场景图/拼图）返回 None。与 _cut_border_bg 同套判定。"""
     from PIL import ImageDraw
     im = im.convert("RGBA")
     w, h = im.size
@@ -1517,17 +1517,45 @@ def _cut_border_bg(im, thr=46):
             ImageDraw.floodfill(im, s, (0, 0, 0, 0), thresh=thr)
         except Exception:
             pass
-    bbox = im.split()[3].getbbox()
+    return im.split()[3].getbbox()
+
+
+def _closeup_frac(im):
+    """局部特写检测（2026-11-04 用户令「AI选图彻底乱套了」：XQG110-HBLEU5YE1 把
+    洗涤剂抽屉特写当选 front，整机照全落榜）。特写图特征：主体贴满画布——
+    左/右边距 <2% 或 顶边距 <2%。整机照居中、四边有背景留白，不会命中。
+    返回 True=特写嫌疑。抠不出主体（背景不统一）返回 False 不拦——那种图
+    另有把关。底边不算：真产品照机器落地贴底是正常特征。"""
+    try:
+        bb = _flood_bbox(im)
+        if not bb:
+            return False
+        w, h = im.size
+        l, t, r, b = bb
+        return (l < w * 0.02 or r > w * 0.98 or t < h * 0.02)
+    except Exception:
+        return False
+
+
+def _cut_border_bg(im, thr=46):
+    """边框同色判定 + 从边缘泛洪抠底：白底/黑底/灰底纯色背景的产品图 -> 透明底抠图。
+    背景不统一（促销横幅/场景图/拼图）返回 None——这类图直接淘汰不用。"""
+    im = im.convert("RGBA")
+    w, h = im.size
+    if w < 200 or h < 200:
+        return None
+    bbox = _flood_bbox(im, thr)
     if not bbox:
         return None
-    frac = ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])) / float(w * h)
+    l, t, r, b = bbox
+    frac = ((r - l) * (b - t)) / float(w * h)
     if frac < 0.08 or frac > 0.92:
         return None
-    bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    bw, bh = r - l, b - t
     if not (0.3 <= bh / float(bw) <= 5.0):
         return None
     # 底部落地比例：真产品照机器贴着底边（≥86%），悬浮创意图/泼墨图到不了
-    return im.crop(bbox), bbox[3] / float(h), frac
+    return im.crop(bbox), b / float(h), frac
 
 
 def _max_dark_run(im):
@@ -2054,10 +2082,14 @@ def _zol_hunt_sizeimg(model, want_dims, sizeimg, log, prod_path=None):
                         continue
                 except Exception:
                     pass
-            if not (_looks_like_sizeimg(im) or (ai_budget[0] > 0 and _ai_is_sizeimg(im, log))):
+            # 2026-11-04 HP-37 同款收紧：像素过也必须 AI 明确点头，None/False 一律不收
+            if ai_budget[0] <= 0:
                 continue
-            if ai_budget[0] > 0 and not _looks_like_sizeimg(im):
-                ai_budget[0] -= 1
+            if not _looks_like_sizeimg(im):
+                continue
+            if _ai_is_sizeimg(im, log) is not True:
+                continue
+            ai_budget[0] -= 1
             _flat_white(im).save(sizeimg, quality=92)
             nums = _ai_read_size_nums(sizeimg, log)
             if nums and all(abs(a - b) <= 2 for a, b in zip(nums, tuple(want_dims))):
@@ -2175,6 +2207,29 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                                     % (_role, _pick[_role], _sf * 100, _bs * 100,
                                        "，退试 angle" if _role == "front" else "走启发式重选"))
                             continue
+                        # 特写把关（2026-11-04 用户令「AI选图彻底乱套了」：XQG110-HBLEU5YE1
+                        # 把洗涤剂抽屉特写当选 front——视觉模型只看「有没有 Haier 洗衣机」，
+                        # 分不清整机照和局部特写。像素判定：主体贴左/右/顶边=特写，弃用）
+                        if _closeup_frac(_imf):
+                            if log:
+                                log("AI 选图 %s=%s 主体贴满画布——局部/部件特写，不是整机照，弃用%s"
+                                    % (_role, _pick[_role],
+                                       "，退试 angle" if _role == "front" else "走启发式重选"))
+                            continue
+                        # 二次复核（像素判定对深色渐变背景特写无效——泛洪抠不透——
+                        # 把选中的图单独发一遍视觉模型问「整机/特写」，单图二分准得多；
+                        # None=模型不可用/废答案，不拦照走，行为与加复核前一致）
+                        try:
+                            import pei_core as _pc2
+                            _whole = _pc2.zhipu_verify_whole(_key, _fp, log=log)
+                        except Exception:
+                            _whole = None
+                        if _whole is False:
+                            if log:
+                                log("AI 选图 %s=%s 复核判定局部特写，弃用%s"
+                                    % (_role, _pick[_role],
+                                       "，退试 angle" if _role == "front" else "走启发式重选"))
+                            continue
                         _rescue_prod(Image.open(_fp), log).save(picked)
                         have_prod = True
                         _picked_one = _pick[_role]
@@ -2284,19 +2339,21 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                         log("候选%d 与已选机图同图，是产品照不是尺寸图，跳过" % n)
                     continue
                 # 2026-10-31 用户令「让 AI 去选图，找出尺寸图然后使用」：
-                # 像素特征只当初筛，AI 说了才算。AI 明确否 → 弃用，继续当机图候选往下走；
-                # AI 不可用（None）才退回纯启发式，避免没网/没额度时整张图出不来。
+                # 像素特征只当初筛。2026-11-04 HP-37 二次实锤：AI 限流（None）时服务表
+                # 钻「AI 不可用按像素采用」的空子又进来——收紧成跟 _try_save_sizeimg 同一口径：
+                # AI 不是明确点头（True）一律不收，拒了顶多走手绘线稿（真实 dims）。
                 _verdict = _ai_is_sizeimg(im, log)
-                if _verdict is False:
+                if _verdict is not True:
                     _ai_rej.add(fp if kind == "url" else u)
                     if log:
-                        log("候选%d 像素像线框图，但 AI 判定不是尺寸图（缺整机外形/标注线/毫米数字），弃用" % n)
+                        log("候选%d 像素像线框图，但 AI %s，弃用"
+                            % (n, "判定不是尺寸图" if _verdict is False
+                                  else "没给准话（限流/无应答），宁可不用"))
                 else:
                     _flat_white(im).save(sizeimg, quality=92)
                     have_size = True
                     if log:
-                        log("候选%d 判定为官网尺寸图（%s），img4 直接用它"
-                            % (n, "AI 确认" if _verdict else "AI 不可用·按像素特征采用"))
+                        log("候选%d 判定为官网尺寸图（AI 确认），img4 直接用它" % n)
                     continue
             # 启发式没认出：先记进 AI 复核候选（本地路径，循环结束后商汤/GLM 看图定夺）
             if not have_size and len(_ai_cand) < 12:
@@ -2349,6 +2406,19 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             if log:
                 log("候选%d 处理失败：%s" % (n, e))
     if not have_prod:
+        # 启发式 best 也过一遍整机/特写复核（2026-11-04）：抽屉特写能骗过像素启发式
+        # （深灰渐变背景泛洪抠不透、bbox 不贴边），AI 复核单图二分兜住
+        if best:
+            try:
+                import pubwork as _pwk
+                import pei_core as _pck
+                _w = _pck.zhipu_verify_whole(_pwk._ai_key(), im=best[1], log=log)
+            except Exception:
+                _w = None
+            if _w is False:
+                if log:
+                    log("启发式机图（%s）复核判定局部特写，弃用，走备胎" % (best[2] or "本地候选"))
+                best = None
         if not best:
             if _trans_fallback[0]:
                 _rescue_prod(Image.open(_trans_fallback[0]), log).save(picked)
@@ -2913,6 +2983,7 @@ def _hard_points(info, pd, sp):
 def _short_feats(pd, info):
     """img1 底部卖点行：3-4 个真实参数短词。"""
     out = []
+    _kg = {}   # 公斤容量（2026-11-04 XQG110 实锤：洗涤容量(kg)=11 被拼成「11L大容量」）
     def add(s):
         if s and s not in out and len(out) < 4:
             out.append(s)
@@ -2944,12 +3015,22 @@ def _short_feats(pd, info):
             add(vs)
         if "烘干" in ks and vs not in ("不支持", "无", "否"):
             add("洗烘一体")
+        # 洗衣机/洗烘机 kg 容量（key 带 (kg) 或值带 kg，洗涤/烘干/脱水容量一律按公斤算）：
+        # 只出一次「N公斤大容量」（洗涤容量优先，其次最大值），绝不当 L（XQG110 实锤）
+        if ("容量" in ks and ("kg" in ks.lower() or "kg" in vs.lower())) \
+                or re.search(r"(洗涤|烘干|脱水|洗衣)容量", ks):
+            n = re.sub(r"[^0-9.]", "", vs)
+            if n:
+                _kg["wash" if "洗涤" in ks or "洗衣" in ks else "max"] = \
+                    max(_kg.get("wash" if "洗涤" in ks or "洗衣" in ks else "max", 0),
+                        int(float(n)))
+            continue   # kg 容量不再走下面的容积/L 判定（洗烘一体/烘干方式已在上面 add 过）
         # 洗碗机/容量类（CWY15 实锤：底部只剩「大容量」一个词）；容量单位 件/套
         if ("套" in vs or "件" in vs) and ("容量" in ks or "套数" in ks or "容积" in ks):
             n = re.sub(r"[^0-9]", "", vs)
             if n:
                 add(n + "套大容量")
-        elif "容积" in ks or ("容量" in ks and "kg" not in vs.lower()):
+        elif "容积" in ks or ("容量" in ks and ("L" in vs or "升" in vs)):
             n = re.sub(r"[^0-9]", "", vs)
             if n:
                 add(n + "L大容量")
@@ -2961,6 +3042,12 @@ def _short_feats(pd, info):
             add("嵌入式")
         if ("洗涤方式" in ks or "烘干方式" in ks or "干燥方式" in ks) and vs and vs not in ("无", "否", "不支持"):
             add(str(vs).replace("式", "")[:6])
+    if _kg:
+        _n = _kg.get("wash") or _kg.get("max")
+        if _n:
+            _s = "%d公斤大容量" % _n
+            if _s not in out:
+                out[:] = ([_s] + out)[:4]   # 公斤容量排最前（首要卖点），上限 4 不丢
     return " · ".join(out) if out else (pei_core.core_feature(info) or "")
 
 
@@ -3203,7 +3290,8 @@ def ensure_data(model, log=None):
             # ① 参数 + AI 缓存（info.json 一份进根，一份硬链进 官网\——同 inode 内容永远同步）
             _link_or_copy(os.path.join(pd, "info.json"), os.path.join(kd, "info.json")) and \
                 _link_or_copy(os.path.join(pd, "info.json"), os.path.join(kd, "官网", "info.json"))
-            for fn in ("_ai_pick_v5.json", "_ai_pick_v4.json", "_ai_pick.json", "_ai_read_v2.json"):
+            for fn in ("_ai_pick_v6.json", "_ai_pick_v5.json", "_ai_pick_v4.json",
+                       "_ai_pick.json", "_ai_read_v2.json"):
                 if _link_or_copy(os.path.join(pd, fn), os.path.join(kd, "官网", fn)):
                     n += 1
             # ② 抓取图：peiwork 根 + 官网/ 子目录 → kitset/<型号>/官网/

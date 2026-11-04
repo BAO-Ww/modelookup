@@ -1557,6 +1557,60 @@ def _sn_vision(api_key, data_url, prompt):
     return d["choices"][0]["message"]["content"]
 
 
+# ---------------- 视觉请求全局限流门（2026-11-04 用户令 C：排队 + 429 退避重试） ----------------
+# 商汤/智谱免费额度都是滚动窗口：宝窗+婷窗+文案同时跑时十几个请求瞬间打出去，
+# 几秒烧光额度自己制造 429。全局队列保证任意两次视觉 HTTP 请求最小间隔；
+# 撞 429 不再直接切通道（切过去也限流），同通道退避重试用完才换。
+_VISION_GATE_LOCK = threading.Lock()
+_VISION_GATE_LAST = [0.0]
+_VISION_GAP = 1.1          # 两次视觉请求最小间隔（秒）
+_VISION_429_TRIES = 3      # 同通道最多试 3 次（原 1 次 + 退避重试 2 次）
+
+
+def _vision_gate():
+    """全局排队：任意线程的视觉 HTTP 请求之间至少隔 _VISION_GAP 秒。"""
+    with _VISION_GATE_LOCK:
+        _wait = _VISION_GAP - (time.monotonic() - _VISION_GATE_LAST[0])
+        if _wait > 0:
+            time.sleep(_wait)
+        _VISION_GATE_LAST[0] = time.monotonic()
+
+
+def _vision_is_rate(e):
+    """判定异常是不是限流/额度类（HTTPError 429，或各家错误文案里的 429/rate/频繁/额度/限流/quota）。"""
+    s = str(e or "")
+    try:
+        if getattr(e, "code", None) == 429:
+            return True
+    except Exception:
+        pass
+    s = s.lower()
+    return ("429" in s or "rate" in s or "quota" in s
+            or "频繁" in s or "额度" in s or "限流" in s)
+
+
+def _vision_attempt(fn, api_key, data_url, prompt, log=None):
+    """单通道视觉请求：过全局门 → 调用；撞限流等 15s/30s 退避重试，用完才抛给上层切通道。
+    非限流错误（超时/鉴权/网络）不重试立即抛——别把真故障拖成慢死。"""
+    for _i in range(_VISION_429_TRIES):
+        _vision_gate()
+        try:
+            return fn(api_key, data_url, prompt)
+        except Exception as e:
+            if _i < _VISION_429_TRIES - 1 and _vision_is_rate(e):
+                _back = 15 + 15 * _i
+                try:
+                    if log:
+                        log("视觉请求被限流，等 %d 秒自动重试（第 %d/%d 次）"
+                            % (_back, _i + 1, _VISION_429_TRIES - 1))
+                except Exception:
+                    pass
+                time.sleep(_back)
+            else:
+                raise
+    return None
+
+
 def _vision_call(api_key, data_url, prompt, log=None):
     """视觉调用分发：商汤 sn_key.txt 有 key 优先走 SenseNova（免费额度），
     失败自动落到智谱 GLM（原 api_key）。都没有返回 None。"""
@@ -1571,7 +1625,7 @@ def _vision_call(api_key, data_url, prompt, log=None):
     _last_err = None
     for _pname, _fn, _k in pairs:
         try:
-            txt = _fn(_k, data_url, prompt)
+            txt = _vision_attempt(_fn, _k, data_url, prompt, log=log)
             if txt:
                 return txt
         except Exception as e:
@@ -1784,6 +1838,69 @@ def _src_cands(p, min_side=220):
     return out
 
 
+def zhipu_verify_whole(api_key, img_path=None, log=None, im=None):
+    """二次复核（2026-11-04 用户令「AI选图彻底乱套了」）：把 AI 选中的 front/angle
+    单独发一遍视觉模型，问「整机照还是局部特写」。拼版 8 格里挑图分不清抽屉特写
+    和整机（XQG110-HBLEU5YE1 实锤），单图二分判断准得多。
+    img_path=本地文件（结果按文件名缓存）；im=PIL Image（启发式候选，不缓存）。
+    返回 True=整机照 / False=局部特写 / None=模型不可用（别拦，当没复核）。"""
+    if not api_key or not str(api_key).strip():
+        return None
+    try:
+        obj = {}
+        cch = None
+        key = ""
+        if im is None:
+            p = Path(img_path)
+            if not p.is_file():
+                return None
+            # 结果缓存到同目录 _ai_verify_v1.json：{文件名: bool}，同一张图只问一次
+            cch = p.parent / "_ai_verify_v1.json"
+            key = p.name
+            try:
+                obj = json.loads(cch.read_text(encoding="utf-8"))
+                if key in obj:
+                    return bool(obj[key])
+            except Exception:
+                obj = {}
+            im = Image.open(p)
+        im = im.convert("RGBA")
+        bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+        im = Image.alpha_composite(bg, im)
+        im.thumbnail((1400, 1400))
+        buf = io.BytesIO()
+        im.convert("RGB").save(buf, "JPEG", quality=88)
+        data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        prompt = (
+            "判断这张家电商品图：画面里是不是【完整机器】的产品照——能看到整机从头到脚的"
+            "完整轮廓（正面、侧面、斜角都算）。只拍到机器一小部分的算局部特写："
+            "比如拉开的洗涤剂抽屉、面板/顶盖一角、旋钮按键区、内筒近距离特写、"
+            "看不到机器整体外形的，都算局部特写。\n"
+            "只回答一个 JSON，不要解释：{\"whole\":true} 或 {\"whole\":false}"
+        )
+        txt = _vision_call(api_key, data_url, prompt, log=log)
+        m = re.search(r"\{[^{}]*\}", str(txt or ""))
+        whole = None
+        if m:
+            try:
+                whole = bool(json.loads(m.group(0)).get("whole"))
+            except Exception:
+                whole = None
+        if whole is None:
+            return None     # 废答案绝不缓存（铁律），也绝不拦
+        if cch is not None:
+            obj[key] = whole
+            try:
+                cch.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
+        if log:
+            log("AI 复核：%s" % ("整机照" if whole else "局部特写，弃用"))
+        return whole
+    except Exception:
+        return None
+
+
 def zhipu_pick_images(api_key, src_dir, kind, log=None):
     """用 GLM-4V 看候选图，按角色（正面/角度/开门/实景）选图。返回 dict：
     front/angle/open/scene = 相对 src_dir 的文件路径（新抓图可能带 官网/ 子目录）或 None；
@@ -1813,7 +1930,7 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
     # cands——只要中间剔掉一张废图/海报，AI 报的编号就会映射到别的文件（选错图帮凶）。
     # 编号必须与最终候选严格一一对应，就按 cands 现取。
     names = [_rel[f] for f in cands]
-    cache = p / "_ai_pick_v5.json"   # v5：2026-11-03 白机身照不再被当垃圾过滤+背面图铁律，旧缓存作废
+    cache = p / "_ai_pick_v6.json"   # v6：2026-11-04 局部特写铁律（抽屉特写当选 front 实锤），旧缓存作废
     try:
         if cache.exists():
             _obj = json.loads(cache.read_text(encoding="utf-8"))
@@ -1842,7 +1959,10 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
         "无论白字灰字蓝字）；· 中国能效标识/能源效率标识（白底带彩色能效等级表格或二维码的那张）；"
         "· 参数表/规格表；· 尺寸线稿图；· 纯文字公告图；"
         "· 促销海报（图上带价格、折扣、补贴、优惠券、价签横幅的宣传图，"
-        "哪怕整机拍得很好看也不能选，那是有字有价的广告图）。\n"
+        "哪怕整机拍得很好看也不能选，那是有字有价的广告图）；\n"
+        "· 局部/部件特写图（2026-11-04 XQG110 实锤：洗涤剂抽屉特写被当成 front）："
+        "只拍到机器一小部分的图——拉开的抽屉、面板/顶盖一角、旋钮按键、内筒近距离特写等，"
+        "看不到整机完整轮廓的，不是 front/angle/open 任何角色，绝不能选。\n"
         "只回答一个 JSON，每个编号值必须是【单个数字】（如 \"front\":3），"
         "绝不要输出数组/列表：\n"
         "{\"front\":编号,\"angle\":编号,\"open\":编号,\"scene\":编号或null,"
