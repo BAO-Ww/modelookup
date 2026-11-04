@@ -18,6 +18,15 @@ import urllib.request
 import zlib
 
 from normalize import norm_model
+
+
+def _safe_dir(nm):
+    """目录名拦点段（2026-11-04 P0-2）：model='..' 会把清目录/rmtree 顶出 copy 根。
+    型号名正常不含 '..'，含了就当未命名。"""
+    nm = str(nm or "").strip()
+    if not nm or ".." in nm:
+        return "未命名"
+    return nm
 from paths import wp
 from net import urlopen_ssl
 
@@ -632,7 +641,7 @@ def make_featured(mdir, price, log):
 # ---------------------------------------------------------------- 主入口
 def generate(model, kind='l', force=0, log=None):
     log = log or (lambda s: None)
-    nm = norm_model(model) or model
+    nm = _safe_dir(norm_model(model) or model)
     kk = 's' if kind == 's' else 'l'
     cache = os.path.join(copy_root(), "%s_%s_v4.json" % (nm, kk))   # v4：官网+欣盛双源全图（旧缓存不读）
     if not force and os.path.isfile(cache):
@@ -742,7 +751,7 @@ _AD_LIMIT = re.compile(r'最好|最佳|最强|最优|第一|顶级|国家级|世
 
 
 def _cache_path(model, kind):
-    nm = norm_model(model) or model
+    nm = _safe_dir(norm_model(model) or model)
     return os.path.join(copy_root(), "%s_%s_v4.json" % (nm, 's' if kind == 's' else 'l'))
 
 

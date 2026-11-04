@@ -528,7 +528,7 @@ def main():
             "month": month,
             "src": os.path.basename(clean_src),
             "built": _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "pv": 24,   # payload 结构版本：v24=删pgp/psp/inv（库存全走用友），exe 缓存版本不匹配时自动改用包内数据
+            "pv": 26,   # payload 结构版本：必须跟 app/config.py PAYLOAD_VER 一致（P1-9：24 是老版本号，payload.json 若回打包会被判过期退空数据）
             "online": {"share": "https://www.kdocs.cn/l/ch7gwGTP9De4", "fileId": "548020345856"},
             "sources": [
                 {"kind": "clean", "name": "公布版 · 滞销样机清理明细",

@@ -66,14 +66,10 @@ def build(out=None, payload=None, tpl=None):
         len(data.get("rows", [])), len(data.get("imgs", {})),
         len(html.encode("utf-8")) / 1048576.0))
 
-    # 同一个模板也供 exe 版用（exe 读的是「未注入数据」的原始模板 + 单独的 payload.json）
-    adir = os.path.join(HERE, "app", "assets")
-    if os.path.isdir(adir):
-        with io.open(os.path.join(adir, "template.html"), "w", encoding="utf-8") as f:
-            f.write(tpl_src)                   # ← 原始模板，保留 /*__DATA__*/ 占位
-        with io.open(os.path.join(adir, "payload.json"), "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-        print("   app/assets/template.html + payload.json 已同步")
+    # 2026-11-04 P2-5 排雷：原来这里会把 template_kdocs.html 覆写到 app/assets/template.html——
+    # 真正的桌面模板（宝窗/婷，9000+ 行）一直直接改 app/assets/template.html，
+    # 谁跑一次 build_kdocs 就会把现用模板打回 2400 行旧版。这段复制已删，
+    # exe 打包走 app/assets/template.html 本体（spec 不打 payload.json，见 ModelLookup.spec）。
     return out
 
 
