@@ -372,7 +372,7 @@ def build_menu(sub=False):
     # 子账号（2026-10-08 十次改版）：菜单 = 账号管理 / 显示 / 重新加载页面 / 软件更新 / 退出登录
     # 2026-10-10 加「显示(S)」：字体大小每个用户每台电脑自己调（跟账号无关、不上云）
     if sub:
-        return [
+        result = [
             MenuAction("账号管理", adm),
             Menu("设置(&S)", [
                 MenuAction("字体大小", fontsize),
@@ -384,9 +384,10 @@ def build_menu(sub=False):
             MenuAction("更新日志", lambda: js_click("extver")),
             MenuAction("退出登录", logout),
         ]
-    # 2026-10-08 顶部菜单归类（用户要求：平铺 9 项太乱，收成三个下拉）：
-    #   数据(D) = 页面/在线表/数据更新/补图导入导出；账号(A) = 账号管理/退出登录；帮助(H) = 软件更新/关于
-    return [
+    else:
+        # 2026-10-08 顶部菜单归类（用户要求：平铺 9 项太乱，收成三个下拉）：
+        #   数据(D) = 页面/在线表/数据更新/补图导入导出；账号(A) = 账号管理/退出登录；帮助(H) = 软件更新/关于
+        result = [
         Menu("数据(&D)", [
             MenuAction("全部更新", upd_all),
             MenuAction("重新加载页面", reload_page),
@@ -435,6 +436,22 @@ def build_menu(sub=False):
             MenuAction("关于", about),
         ]),
     ]
+
+    # 2026-11-05 Mac 启动即崩修复（用户截图弹窗实锤）：
+    # pywebview 6.2.1 的 cocoa 后端 _add_custom_menu() 对顶层列表每一项直接取
+    # .items（WinForms 允许顶层 MenuAction「直点直跑」，cocoa 不允许）——
+    # 2026-11-03 加的顶层「云端体检」MenuAction 让 Mac 在 first_show 时
+    # AttributeError: 'MenuAction' object has no attribute 'items'，窗口都出不来。
+    # 子账号菜单顶层本来就有 5 个 MenuAction，Mac 上子账号一样起不来。
+    # 修法：darwin 下把顶层 MenuAction 包一层同名 Menu（显示成一个下拉，点进去
+    # 第一项执行），Windows 路径一行不动，还是直点直跑。
+    if sys.platform == "darwin":
+        # 注意：本函数开头在 darwin 下把 MenuAction 重定义成了「剥 & 的工厂函数」，
+        # 不是类，isinstance 会炸 —— 这里重新拿原始类来判断。
+        from webview.menu import MenuAction as _MenuAction_cls
+        result = [Menu(it.title, [it]) if isinstance(it, _MenuAction_cls) else it
+                  for it in result]
+    return result
 
 
 def _built_desc():
