@@ -3766,15 +3766,25 @@ function doCopy(text, btn){
     navigator.clipboard.writeText(text).then(function(){ toast(btn, true); }, function(){ fb(text, btn); });
   } else { fb(text, btn); }
 }
-function fb(text, btn){
+function execCopy(text){
+  /* 剪贴板兜底（2026-11-05 Mac 统一走这里）：WKWebView 里 navigator.clipboard.writeText
+     可能被拒（权限/手势判定），execCommand('copy') 这条老路两个内核都认 */
   try{
     var ta = document.createElement('textarea');
     ta.value = text; ta.style.position = 'fixed'; ta.style.top = '-1000px';
     document.body.appendChild(ta); ta.select();
     var ok = document.execCommand('copy');
     document.body.removeChild(ta);
-    toast(btn, ok);
-  }catch(e){ toast(btn, false); }
+    return ok;
+  }catch(e){ return false; }
+}
+function fb(text, btn){ toast(btn, execCopy(text)); }
+function copySafe(text, ok, bad){
+  /* 带兜底的复制：writeText 成功→ok()；被拒→execCopy 兜底，成了也算 ok() */
+  var done = function(good){ if (good){ if (ok) ok(); } else if (bad) bad(); };
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){ done(true); }, function(){ done(execCopy(text)); });
+  } else { done(execCopy(text)); }
 }
 
 /* ================= 筛选 ================= */
@@ -5402,7 +5412,7 @@ function openWhiteView(k){
     +         '<button data-wvopen="blue" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
     +         '<button data-wvregen="blue" style="border:1px solid #93c5fd;background:#dbeafe;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
     +       '</div>'
-    +       '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,max-content);grid-template-rows:repeat(2,1fr);justify-content:center;gap:6px" id="wv_grid_blue"></div>'
+    +       '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="wv_grid_blue"></div>'
     +     '</div>'
     +     '<div style="flex:1;min-height:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px;display:flex;flex-direction:column;text-align:left">'
     +       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
@@ -5411,7 +5421,7 @@ function openWhiteView(k){
     +         '<button data-wvopen="purple" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
     +         '<button data-wvregen="purple" style="border:1px solid #c4b5fd;background:#ede9fe;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
     +       '</div>'
-    +       '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,max-content);grid-template-rows:repeat(2,1fr);justify-content:center;gap:6px" id="wv_grid_purple"></div>'
+    +       '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="wv_grid_purple"></div>'
     +     '</div>'
     +   '</div>'
     +   '<div style="flex:1;min-width:400px;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 16px;display:flex;flex-direction:column">'
@@ -5436,7 +5446,7 @@ function openWhiteView(k){
           /* 2026-11-03 用户令：格子缩到图片实际大小（正方形=行高），不留空底；
              多余空间留在格子外面（列间距），格子内不再有大片空白 */
           var cell = document.createElement('div');
-          cell.style.cssText = 'position:relative;align-self:stretch;aspect-ratio:1/1;justify-self:center;background:#f7f8fa;border:1px solid #eceef2;border-radius:10px;overflow:hidden;cursor:zoom-in';
+          cell.style.cssText = 'position:relative;width:100%;height:100%;background:#f7f8fa;border:1px solid #eceef2;border-radius:10px;overflow:hidden;cursor:zoom-in';
           cell.title = (tone === 'blue' ? '蓝底白字' : '紫底白字') + ' · ' + LBS[nn-1] + '（点开看大图）';
           var badge = document.createElement('div');
           badge.textContent = nn;
@@ -5462,6 +5472,36 @@ function openWhiteView(k){
       }
     });
   }
+  /* 2026-11-05 Mac 修复：同宝窗——WebKit 把 max-content 列里 aspect-ratio 格子的
+     最大内容贡献算成 0，四张缩略图会全叠在一起。改成 JS 给像素轨道。 */
+  function wvFit(){
+    var tones = ['blue', 'purple'], cell = 0;
+    for (var i = 0; i < 2; i++){
+      var g0 = wrap.querySelector('#wv_grid_' + tones[i]);
+      if (!g0) return;
+      var card0 = g0.parentNode, hd0 = card0.children[0];
+      var availH0 = card0.clientHeight - hd0.offsetHeight - 8 - 26;
+      if (availH0 < 100) return;
+      var c0 = Math.floor((availH0 - 6) / 2);
+      if (!cell || c0 < cell) cell = c0;
+    }
+    var maxByWidth = Math.floor(((wrap.clientWidth - 40) * 0.52 - 6) / 2);
+    if (cell > maxByWidth) cell = maxByWidth;
+    if (cell < 60) cell = 60;
+    var w = cell * 2 + 6;
+    tones.forEach(function(t){
+      var g = wrap.querySelector('#wv_grid_' + t);
+      if (!g) return;
+      var card = g.parentNode;
+      g.style.gridTemplateColumns = 'repeat(2,' + cell + 'px)';
+      g.style.gridTemplateRows = 'repeat(2,' + cell + 'px)';
+      g.style.width = w + 'px';
+      g.style.margin = '0 auto';
+      card.style.width = (w + 26) + 'px';
+    });
+  }
+  function wvRefit(){ wvFit(); requestAnimationFrame(wvFit); }
+  window.addEventListener('resize', wvRefit);
   function wvZoom(tone, n){
     var old = document.getElementById('wv_zoom'); if (old) old.remove();
     var z = document.createElement('div'); z.id = 'wv_zoom';
@@ -5506,7 +5546,7 @@ function openWhiteView(k){
     });
     box.querySelectorAll('[data-wtcopy]').forEach(function(el){
       el.onclick = function(){
-        navigator.clipboard.writeText(el.getAttribute('data-wtcopy')).then(function(){ el.textContent = '已复制'; setTimeout(function(){ el.textContent = '复制'; }, 1200); });
+        copySafe(el.getAttribute('data-wtcopy'), function(){ el.textContent = '已复制'; setTimeout(function(){ el.textContent = '复制'; }, 1200); });
       };
     });
     var dc = box.querySelector('#wv_descCopy');
@@ -5568,7 +5608,7 @@ function openWhiteView(k){
   wrap.querySelector('#wv_folder').addEventListener('click', function(){
     try { fetch('/api/kitwhite?model=' + encodeURIComponent(k) + '&open=model'); } catch (e) {}
   });
-  wvShow(); loadTbCopy();
+  wvShow(); wvRefit(); loadTbCopy();
   /* 开窗自动生成（2026-11-03 用户令「点进来直接生成」）：缺哪套补哪套，
      两种色调 job key 分开（kitwhite:<型号>:<tone>）可并行，互不抢锁 */
   ['blue', 'purple'].forEach(function(tone){
@@ -5628,7 +5668,7 @@ function openBaoView(k){
       +     '<button data-baoopen="' + t + '" style="border:1px solid ' + bd + ';background:' + bg + ';color:' + c + ';border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
       +     '<button data-baogen="' + t + '" style="border:1px solid ' + bd + ';background:' + bg + ';color:' + c + ';border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
       +   '</div>'
-      +   '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,max-content);grid-template-rows:repeat(2,1fr);justify-content:center;gap:6px" id="bao_grid_' + t + '"></div>'
+      +   '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="bao_grid_' + t + '"></div>'
       + '</div>';
   }
   var KLAB = {1: '主图', 2: '参数', 3: '卖点', 4: '尺寸'};
@@ -5654,7 +5694,7 @@ function openBaoView(k){
   }
   function cell(grid, src, badge, label, title, onclick){
     var d = document.createElement('div');
-    d.style.cssText = 'position:relative;align-self:stretch;aspect-ratio:1/1;justify-self:center;background:#f7f8fa;border:1px solid #eceef2;border-radius:10px;overflow:hidden;cursor:zoom-in';
+    d.style.cssText = 'position:relative;width:100%;height:100%;background:#f7f8fa;border:1px solid #eceef2;border-radius:10px;overflow:hidden;cursor:zoom-in';
     d.title = title + '（点开看大图）';
     var b = document.createElement('div');
     b.textContent = badge;
@@ -5678,25 +5718,40 @@ function openBaoView(k){
     return d;
   }
   /* 卡片宽度贴住缩略图（2026-11-04 用户令「要婷窗那种布局」）：
-     按卡片可用高度算出格子边长 → 反推网格宽 → 卡宽=网格宽+内边距，杜绝两侧白边 */
-  function fitGrid(t){
-    var card = document.getElementById('bao_card_' + t);
-    var g = wrap.querySelector('#bao_grid_' + t);
-    if (!card || !g) return;
-    var hd = card.children[0];
-    var availH = card.clientHeight - hd.offsetHeight - 8 - 26; /* 标题行高+间距+内边距24+边框2 */
-    if (availH < 120) return;
-    var cell = Math.floor((availH - 6) / 2);
+     按卡片可用高度算出格子边长 → 反推网格宽 → 卡宽=网格宽+内边距，杜绝两侧白边。
+     2026-11-05 Mac 修复（用户截图实锤）：原来用 grid-template-columns:repeat(2,max-content)
+     + 格子 aspect-ratio:1/1，WebKit 这类格子的「最大内容宽度」贡献算成 0（列只剩 2px 边框），
+     四个格子全叠在一起互相盖住，画面上只剩第 2、4 张。改成由这里直接给出像素列宽/行高，
+     Chromium 与 WebKit 结果完全一致。 */
+  function fitGrid(){
+    var tones = ['k', 's'], cell = 0;
+    for (var i = 0; i < 2; i++){
+      var card0 = document.getElementById('bao_card_' + tones[i]);
+      if (!card0) return;
+      var hd0 = card0.children[0];
+      var availH0 = card0.clientHeight - hd0.offsetHeight - 8 - 26; /* 标题行+间距+内边距24+边框2 */
+      if (availH0 < 100) return;
+      var c0 = Math.floor((availH0 - 6) / 2);
+      if (!cell || c0 < cell) cell = c0;    /* 两张卡取小的，宽度才对得齐 */
+    }
+    /* 窗口窄（Mac 小屏）时给右边文案栏留够位置，别把左栏撑爆 */
+    var maxByWidth = Math.floor(((wrap.clientWidth - 40) * 0.56 - 6) / 2);
+    if (cell > maxByWidth) cell = maxByWidth;
+    if (cell < 60) cell = 60;
     var w = cell * 2 + 6;
-    if (card._fitW === w) return;           /* 已收敛 */
-    card._fitW = w;
-    g.style.width = w + 'px';
-    g.style.margin = '0 auto';
-    card.style.width = (w + 26) + 'px';
-    /* 收窄后标题行可能换行、可用高度变化 → 再算一轮直到不动 */
-    requestAnimationFrame(function(){ fitGrid(t); });
+    tones.forEach(function(t){
+      var card = document.getElementById('bao_card_' + t);
+      var g = wrap.querySelector('#bao_grid_' + t);
+      if (!card || !g) return;
+      g.style.gridTemplateColumns = 'repeat(2,' + cell + 'px)';
+      g.style.gridTemplateRows = 'repeat(2,' + cell + 'px)';
+      g.style.width = w + 'px';
+      g.style.margin = '0 auto';
+      card.style.width = (w + 26) + 'px';
+    });
   }
-  window.addEventListener('resize', function(){ fitGrid('k'); fitGrid('s'); });
+  function refit(){ fitGrid(); requestAnimationFrame(fitGrid); }  /* 卡宽变了标题行可能换行，再校一次 */
+  window.addEventListener('resize', refit);
   function showK(){
     var g = wrap.querySelector('#bao_grid_k'); if (!g) return;
     g.innerHTML = '';
@@ -5705,7 +5760,7 @@ function openBaoView(k){
         g.appendChild(cell('k', kImg(nn), nn, KLAB[nn], '蓝底 · ' + KLAB[nn], function(){ zoom(kImg(nn), '蓝底 · ' + KLAB[nn]); }));
       })(n);
     }
-    fitGrid('k');
+    refit();
   }
   function showS(){
     var g = wrap.querySelector('#bao_grid_s'); if (!g) return;
@@ -5718,7 +5773,7 @@ function openBaoView(k){
       var lb = SLAB[String(f).replace(/\.(jpg|jpeg|png)$/i, '')] || f;
       g.appendChild(cell('s', sImg(f), i + 1, lb, '聚光 · ' + lb, function(){ zoom(sImg(f), '聚光 · ' + lb); }));
     });
-    fitGrid('s');
+    refit();
   }
   /* ---------- 蓝底生成（jobman：kitset:<型号>，同老蓝底窗同接口） ---------- */
   var kGen = false;
@@ -5898,15 +5953,16 @@ function openBaoView(k){
     box.innerHTML = h;
     box.querySelectorAll('[data-baotc]').forEach(function(el){
       el.onclick = function(){
-        navigator.clipboard.writeText(el.getAttribute('data-baotc')).then(function(){
+        copySafe(el.getAttribute('data-baotc'), function(){
           el.textContent = '已复制'; setTimeout(function(){ el.textContent = '复制'; }, 1200);
         });
       };
     });
     var ca = box.querySelector('#bao_copyall');
     if (ca) ca.onclick = function(){
-      navigator.clipboard.writeText((D.points || []).join('\n') + '\n\n' + (D.aftersale || ''));
-      ca.textContent = '已复制全套'; setTimeout(function(){ ca.textContent = '一键复制全套'; }, 1500);
+      copySafe((D.points || []).join('\n') + '\n\n' + (D.aftersale || ''), function(){
+        ca.textContent = '已复制全套'; setTimeout(function(){ ca.textContent = '一键复制全套'; }, 1500);
+      });
     };
   }
   function loadKCopy(){
@@ -6051,15 +6107,17 @@ function openKitView(k){
       var btn = document.createElement('button');
       btn.textContent = '复制'; btn.style.cssText = 'border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:6px 12px;font-size:12px;flex:0 0 auto;cursor:pointer';
       btn.addEventListener('click', function(){
-        navigator.clipboard.writeText(t).then(function(){ btn.textContent='已复制'; setTimeout(function(){ btn.textContent='复制'; },1200); });
+        copySafe(t, function(){ btn.textContent='已复制'; setTimeout(function(){ btn.textContent='复制'; },1200); });
       });
       row.appendChild(btn); tl.appendChild(row);
     });
     body.querySelector('#kv_c2').textContent = (D.points || []).join('\n');
     body.querySelector('#kv_c3').textContent = D.aftersale || '';
     body.querySelector('#kv_copyall').onclick = function(){
-      navigator.clipboard.writeText((D.points || []).join('\n') + '\n\n' + (D.aftersale || ''));
-      this.textContent = '已复制全套'; var b = this; setTimeout(function(){ b.textContent = '一 键 复 制 全 套'; }, 1500);
+      var b = this;
+      copySafe((D.points || []).join('\n') + '\n\n' + (D.aftersale || ''), function(){
+        b.textContent = '已复制全套'; setTimeout(function(){ b.textContent = '一 键 复 制 全 套'; }, 1500);
+      });
     };
     /* 2026-10-31：只重出单张 / 挑主图 / 图糊预警（糊了就建议换主图重出） */
     var _one = body.querySelector('#kv_one');
