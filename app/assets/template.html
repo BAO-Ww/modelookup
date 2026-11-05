@@ -1898,19 +1898,20 @@ function authFetch(path, opts, withRetry){
     var tmo = _HOST_TMO[h] || 4000;
     /* 黑屋线路只给 4s：只是「最后一条命」，别让它拖整轮 */
     if (_badMap()[h] > Date.now()) tmo = 4000;
-    /* /puball 是大接口（整包 25KB，服务端 3 个子用户 × 2 次 KV 读串行，实测 4s～60s 浮动）：
-       主域给它留 28 秒，别把「慢」误判成「断」→ 关黑屋 → 后面全部降级 */
-    if (h === AUTH_HOSTS[0] && path.indexOf('/puball') === 0) tmo = 28000;
+    /* /puball 是大接口（整包 25KB，账号间已并行）：2026-11-05 实测主域 1.7-2.0s，
+       28s 宽限太长——抖动时用户干等半分钟才换线 → 收到 12s（三倍余量仍够） */
+    if (h === AUTH_HOSTS[0] && path.indexOf('/puball') === 0) tmo = 12000;
     /* /diag（云端体检+侧栏抓取时间 2026-11-03）：worker 侧要现查 GitHub workflow，
        4s 常掐死 → 主域给 20 秒 */
     if (h === AUTH_HOSTS[0] && path.indexOf('/diag') === 0) tmo = 20000;
     /* 2026-11-02 治「已发布云端同步不了」：/pubsync 要读发布+定价、还要回写全量定价
        （worker 侧原来逐条写 170+ 条，实测 4s～10s，偶发顶穿 12s 默认值被 Abort →
        当成断网 → 主域被关黑屋 10 分钟 → 全部请求转去国内不通的备用域）。
-       同步类接口一律给 25 秒；/pub 单条标记同样会连带写价，一起放宽 */
+       同步类接口一律给 25 秒——/pubsync 是写路径，慢是正常的，保留不动。
+       2026-11-05 G：/pub 是读路径，实测主域 1.2s，25s 宽限让抖动时干等半分钟 → 收到 10s */
     if (h === AUTH_HOSTS[0] && path.indexOf('/pubsync') === 0) tmo = 25000;
     if (h === AUTH_HOSTS[0] && (path === '/pub' || path.indexOf('/pub?') === 0
-        || path.indexOf('/pubp') === 0)) tmo = 25000;
+        || path.indexOf('/pubp') === 0)) tmo = 10000;
     /* /diag 云端体检也是重查询（worker 要实时去 GitHub 拉两条 workflow 流水，实测 2s+，
        GitHub 慢一下就超 4s 默认值被误报「网络不通」——2026-11-02 实锤）→ 给 20 秒 */
     if (h === AUTH_HOSTS[0] && path === '/diag') tmo = 20000;
@@ -2329,7 +2330,20 @@ function applyPermBar(){
   if (sr){
     var srShow = !!(AUTH && AUTH.role === 'admin' && pok('pubview'));
     sr.hidden = !srShow;   /* 2026-10-31 晚：用户改口，放回侧栏（原生菜单那份已撤） */
-    if (srShow && !sr.dataset.loaded){ sr.dataset.loaded = '1'; loadSubRec(); }
+    /* 2026-11-05 A（治「管理号进已发布要等好久」）：不再首屏自动拉 /admin/list + /puball——
+       这两趟大多数时候用不上，还容易在主域抖动时超时、把主域记进失效名单 10 分钟，
+       连累你接下来点的 /pub（已发布）排到国内不通的备线上白等。改成首次点开下拉才拉。 */
+    if (srShow && !sr.dataset.loaded){
+      sr.dataset.loaded = '1';
+      var _srsel = document.getElementById('subrecsel');
+      if (_srsel){
+        _srsel.innerHTML = '<option value="">（点开加载子账号…）</option>';
+        var _srFired = false;
+        var _srGo = function(){ if (_srFired) return; _srFired = true; loadSubRec(); };
+        _srsel.addEventListener('mousedown', _srGo, { once: true });
+        _srsel.addEventListener('focus', _srGo, { once: true });
+      }
+    }
   }
   // 「已发布」「没库存」筛选按钮：管理号默认有（可在「我的显示开关」里自己关）；子账号由权限决定
   var pb = document.querySelector('.chip[data-flag="pub"]');
@@ -2974,11 +2988,28 @@ function loadSubRec(){
   }
 }
 /* 2026-10-31 晚三批：子用户发布入口在原生菜单栏「子用户」（帮助前面）。
-   菜单点名字 → Python evaluate_js 调这里 → 走下拉 change 的既有流程切视角。 */
+   菜单点名字 → Python evaluate_js 调这里 → 走下拉 change 的既有流程切视角。
+   2026-11-05 A 配套：下拉改「点开才加载」后，菜单直选不能假设已加载——
+   未加载就先触发 loadSubRec，等列表回来（或失败）再选值切视角。 */
 window.exPickSub = function(u){
   var s = document.getElementById('subrecsel'); if (!s) return;
-  s.value = String(u || '');
-  s.dispatchEvent(new Event('change', { bubbles: true }));
+  var _u = String(u || '');
+  function _pick(){ s.value = _u; s.dispatchEvent(new Event('change', { bubbles: true })); }
+  if (!s.dataset.loaded){
+    s.dataset.loaded = '1';
+    loadSubRec();
+    var _n = 0;
+    var _w = setInterval(function(){
+      _n++;
+      var _o = s.querySelector('option');
+      var _t = _o ? (_o.textContent || '') : '';
+      if (_t && _t.indexOf('点开') < 0 && _t.indexOf('加载中') < 0){
+        clearInterval(_w); _pick();
+      } else if (_n >= 100){ clearInterval(_w); }   // 30s 兜底，别死等
+    }, 300);
+    return;
+  }
+  _pick();
 };
 function showSubRec(u){
   /* 数据源 2026-10-09 分离：看子账号（u!=0）用 _SUBPUB（/puball 整包），看自己（'0'）
@@ -4424,7 +4455,22 @@ function enterSelfPub(chip){
     }).catch(function(){});
     return;
   }
-  authFetch('/pub').then(_apply).catch(function(){ if (chip) chip.classList.remove('on'); });
+  /* 2026-11-05 F（治「点已发布没反应」）：没缓存不再干等云端——先用本地 MARKED 的
+     时间戳/口径/各号价把视图画出来（0 延迟），/pub 回来再 _apply 修正。
+     云端失败也不撤视图了：本地快照已经画上，撤掉反而是退步。 */
+  var _loc = {}, _locN = 0;
+  Object.keys(MARKED).forEach(function(c){
+    var m = MARKED[c];
+    if (m && m.t){ _loc[c] = { t: m.t, k: m.k || null, xys: m.xys || null }; _locN++; }
+  });
+  if (_locN){
+    _apply({ ok: true, marks: _loc, prices: PRICES || {} });
+  }
+  authFetch('/pub').then(function(j){
+    if (j && j.ok) _apply(j);                 // 云端回来原地修正（没变也不动视图）
+  }).catch(function(){
+    if (!_locN && chip) chip.classList.remove('on');   // 本地快照都没有才算失败
+  });
 }
 function exitSelfPub(){
   SUBVIEW = null;
@@ -4877,12 +4923,12 @@ function openPickKind(k, recKey){
     + '<div style="font-weight:700;margin-bottom:10px">「' + esc(k) + '」发到哪个闲鱼号？</div>'
     + '<div id="kindxyrow" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">' + xyChipHTML() + '</div>'
     + '<div style="font-weight:700;margin:12px 0 6px">这个号的闲鱼定价</div>'
-    + '<input id="kindprice" type="number" min="0" step="1" placeholder="填这个号发布的价"'
+    + '<input id="kindprice" type="number" min="0" step="1" autocomplete="off" placeholder="填这个号发布的价"'
     + ' style="width:100%;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:14px">'
     + '<div id="kindearn" style="margin-top:6px;font-size:12.5px;color:#6b7280">挣：填了价就算给你看（按卡片上的成本口径）</div>'
     + '<div style="font-weight:700;margin:12px 0 6px">闲鱼ID（选填）</div>'
     + '<div style="display:flex;gap:8px;align-items:center">'
-    + '<input id="kindxid" type="text" maxlength="40" placeholder="这个宝贝的闲鱼ID，发布多个时点胶囊各显各的"'
+    + '<input id="kindxid" type="text" maxlength="40" autocomplete="off" placeholder="这个宝贝的闲鱼ID，发布多个时点胶囊各显各的"'
     + ' style="flex:1;min-width:0;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:14px">'
     + '<span id="kindxiddel" data-kxdel="1" title="删掉这条记录的闲鱼ID（云端同步清掉，价格和口径不动）" hidden'
     + ' style="cursor:pointer;flex:none;width:30px;height:30px;line-height:28px;text-align:center;border-radius:8px;border:1px solid #e4b6b0;color:#c0392b;font-weight:700;font-size:16px;background:#fff">×</span>'
@@ -5111,7 +5157,7 @@ function openXidDialog(k){
     + '<div id="xidedit" style="display:none">'
     +   '<div style="font-weight:700;margin:6px 0 6px">闲鱼ID</div>'
     +   '<div style="display:flex;gap:8px">'
-    +     '<input id="xidinp" maxlength="40" placeholder="粘贴闲鱼宝贝ID（纯数字）"'
+    +     '<input id="xidinp" maxlength="40" autocomplete="off" placeholder="粘贴闲鱼宝贝ID（纯数字）"'
     +       ' style="flex:1;min-width:0;box-sizing:border-box;border:1px solid #d7dce6;border-radius:8px;padding:8px 10px;font-size:14px">'
     +     '<button id="xidsave" style="border:none;border-radius:8px;padding:8px 16px;font-size:13.5px;font-weight:600;background:#4f46e5;color:#fff">保存</button>'
     +     '<button id="xiddel" title="删掉这条记录的闲鱼ID（云端同步清掉，价格和口径不动）"'
