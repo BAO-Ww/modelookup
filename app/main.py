@@ -41,6 +41,13 @@ import urllib.request
 import openpyxl  # noqa: E402
 import webview  # noqa: E402
 
+# 2026-11-05 用户令「这个不要，我会自己粘贴」：WebView2（Edge 内核）的表单自动填充
+# 会在闲鱼 ID / 定价输入框下面弹「保存的信息」历史建议。HTML 侧输入框已加
+# autocomplete="off"（普通文本框有效），这里再从壳层整体关掉 autofill 兜底
+# （pywebview 没显式传浏览器参数时 WebView2 读这个环境变量；未知 flag 被忽略，无副作用）。
+os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                      "--disable-features=Autofill,msAutofill,AutofillServerCommunication")
+
 # 2026-10-10 修「Security validation failure: parent process has different
 # executable!」：PyInstaller 6.22.1 起引导器给 onefile 加了父进程安全校验
 # （GHSA-9fxf-4qw3-ghmr）——进程环境里若带着 _PYI_* 引导变量，引导器就认定
