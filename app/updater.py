@@ -320,7 +320,7 @@ def _updateall_bg(log, wf="all"):
                     parts.append("库存：云端已更新，本机已同步（%s）" % after)
                     state._STK_DETAIL[0] = "从云端同步 %s 行（云端定时共享）" % (state.STOCK.get("rows") or 0)
                 else:
-                    state.set_state(stock_at=time.strftime("%Y-%m-%d %H:%M"))
+                    state.set_state(stock_at=(state.STOCK or {}).get("ts") or time.strftime("%Y-%m-%d %H:%M"))
                     parts.append("库存：云端确认过最新（内容无变化，时间已刷新）")
                     state._STK_DETAIL[0] = "云端库存确认最新"
     except Exception as e:
@@ -343,6 +343,58 @@ def _updateall_bg(log, wf="all"):
 
 def want_local(wf):
     return {"all": ("kd", "yy"), "kd": ("kd",), "yy": ("yy",)}[wf if wf in ("all", "kd", "yy") else "all"]
+
+
+def _suball_bg(log, wf="all"):
+    """子账号的「云端拉取」（2026-11-05 用户令「子用户的全部更新只能是去云端拉取数据，
+    不要一条龙走完，一条龙是管理号才能拿走」）：
+    **不触发 GitHub Actions**（citrigger 一条龙是管理号专属），只把云端现成的
+    表格 / 库存同步下来。wf = all（表格+库存）/ kd（只表格）/ yy（只库存）。
+    进度照走 _ALLRUN，前端进度条/按钮文案不用改一个字。"""
+    errs, parts = [], []
+    state._ALLRUN[4] = 0
+    state._ALLRUN[5] = time.time()
+    try:
+        if "kd" in want_local(wf):
+            state._all_stage("正在从云端拉取表格数据…", 15)
+            st = sync_xlsx_cloud(log, touch=True)
+            if st == "synced":
+                parts.append("表格：云端已更新，已同步重建")
+                state._UPD_DETAIL[0] = "云端表格同步重建"
+            elif st == "unchanged":
+                parts.append("表格：云端确认过最新（时间已刷新）")
+                state._UPD_DETAIL[0] = "云端表格确认最新"
+            else:
+                errs.append("表格：%s" % st)
+                parts.append("表格：❌ %s" % st)
+        if "yy" in want_local(wf):
+            state._all_stage("正在从云端同步库存…", 75)
+            before = (state.STOCK or {}).get("ts") or ""
+            stock_pull_cloud(log, force=True)
+            after = (state.STOCK or {}).get("ts") or ""
+            if after and after != before:
+                parts.append("库存：已同步（%s）" % after)
+                state._STK_DETAIL[0] = "从云端同步 %s 行（管理号共享）" % (state.STOCK.get("rows") or 0)
+            else:
+                state.set_state(stock_at=(state.STOCK or {}).get("ts") or time.strftime("%Y-%m-%d %H:%M"))
+                parts.append("库存：云端还没有新数据（时间已刷新）")
+                state._STK_DETAIL[0] = "云端库存确认最新"
+    except Exception as e:
+        errs.append(str(e))
+        parts.append("❌ %s" % e)
+        try:
+            state.set_state("error", str(e))
+        except Exception:
+            pass
+    finally:
+        state._ALLRUN[0] = False
+        state._ALLRUN[1] = "；".join(errs)
+        state._ALLRUN[2] = "　|　".join(parts)
+        state._ALLRUN[3] = ""
+        state._ALLRUN[4] = 100
+        if not errs:
+            state.set_state("done", "云端数据已同步", rev=state.STATE.get("rev", 0) + 1)
+        log("子账号云端拉取结束 → %s" % state._ALLRUN[2])
 
 
 def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):

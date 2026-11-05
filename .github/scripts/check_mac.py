@@ -19,9 +19,13 @@ def main():
     if not os.path.isfile(binp):
         raise SystemExit("找不到可执行文件：" + binp)
 
-    log = os.path.join(os.path.dirname(binp), "exe_check.log")
+    # 2026-11-05：自检日志改落 work_dir（~/Library/Application Support/ModelLookup）——
+    # 原来写在 .app/Contents/MacOS/ 里，等于往代码签名过的包里塞文件，seal 一破
+    # macOS 就静默拒绝启动（用户「双击没反应」的根因之一）。与 main._check() 同步。
+    log = os.path.join(os.path.expanduser("~"), "Library", "Application Support",
+                       "ModelLookup", "exe_check.log")
     if os.path.isfile(log):
-        os.remove(log)
+        os.remove(log)          # 必须先删，否则读到上一次的 PASS 假绿
 
     print("Running self check: %s --check" % binp)
     try:

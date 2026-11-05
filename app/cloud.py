@@ -71,10 +71,11 @@ def _cloud_token():
 _PROXY_BAD = [0.0]          # 代理连挂的话 5 分钟内不再试（免得每个请求都白等一次）
 
 
-def cloud_req(path, method="GET", obj=None, timeout=90):
+def cloud_req(path, method="GET", obj=None, timeout=90, progress=None):
     """调云端 worker（带页面登录态）。返回 (dict|None, err|None)。
     2026-11-01：settings.json 配了 net_proxy（"auto"=自动探测本机代理端口）就先走代理，
-    代理网络层失败自动退直连（HTTP 4xx/5xx 不算网络失败，照常返回不重试）。"""
+    代理网络层失败自动退直连（HTTP 4xx/5xx 不算网络失败，照常返回不重试）。
+    2026-11-05：progress(got_bytes, total_bytes) 边下边报——大包（表格 20MB）不再干转圈。"""
     tok = _cloud_token()
     if not tok:
         return None, "还没有登录态（页面没登录过）"
@@ -88,6 +89,26 @@ def cloud_req(path, method="GET", obj=None, timeout=90):
     if px and time.time() - _PROXY_BAD[0] < 300:
         px = None
 
+    def _read(r):
+        if not progress:
+            return json.loads(r.read().decode("utf-8"))
+        try:
+            total = int(r.headers.get("Content-Length") or 0)
+        except Exception:
+            total = 0
+        buf, got = [], 0
+        while True:
+            chunk = r.read(262144)
+            if not chunk:
+                break
+            buf.append(chunk)
+            got += len(chunk)
+            try:
+                progress(got, total)
+            except Exception:
+                pass
+        return json.loads(b"".join(buf).decode("utf-8"))
+
     def _do(use_px):
         req = urllib.request.Request(CLOUD_HOST + path, data=body, method=method)
         req.add_header("X-Token", tok)
@@ -97,7 +118,7 @@ def cloud_req(path, method="GET", obj=None, timeout=90):
         req.add_header("Origin", CLOUD_HOST)
         req.add_header("Referer", CLOUD_HOST + "/")
         with urlopen_ssl(req, timeout=timeout, proxy=use_px) as r:
-            return json.loads(r.read().decode("utf-8"))
+            return _read(r)
 
     last_err = None
     for use_px in ((px, None) if px else (None,)):
@@ -207,6 +228,12 @@ def stock_pull_cloud(log, force=True):
         with state.STOCK_LOCK:
             local_ts = state.STOCK.get("ts") or ""
         if _ts_key(cloud_ts) <= _ts_key(local_ts):
+            # 2026-11-05：没新数据也把「云端最新抓取时间」显示出来（管理号/子账号同一个时间）
+            try:
+                if (state.STATE.get("stock_at") or "") != cloud_ts:
+                    state.set_state(stock_at=cloud_ts)
+            except Exception:
+                pass
             return                        # 云端没有比本地更新的东西（2026-10-09 改成比先后；2026-10-14 兼容跨年）
         log("云端库存有更新（%s → %s），自动同步…" % (local_ts or "无", cloud_ts))
     log("正在从云端同步库存（管理号共享的用友实时数据）…")
@@ -303,13 +330,48 @@ def _data_sentinel(j, err, ts):
 
 _sync_fail = {"ts": "", "at": 0.0}   # 2026-10-26：同步失败退避记录（同 ts 10 分钟内不重试）
 
+_XLSX_FILES = ("data.xlsx", "price.xlsx", "subsidy.xlsx")   # 云端整包里的三件套
+
+
+def _fts_load():
+    """本机每件表格的内容指纹（2026-11-05 增量同步用）。读不到返回 {}——那时会全拉一次建基线。"""
+    try:
+        d = json.loads(io.open(wp("xlsx_fts.json"), encoding="utf-8").read() or "{}")
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _fts_save(d):
+    try:
+        io.open(wp("xlsx_fts.json"), "w", encoding="utf-8").write(json.dumps(d, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def _cloud_time(j, fallback=""):
+    """云端最近一次抓取时间（/xlsxmeta 的 up，毫秒时间戳）→ "YYYY-MM-DD HH:MM"。
+    2026-11-05 用户令：不管子账号还是管理号，侧栏显示的都必须是**云端抓取时间**，
+    不是本机重建时间（否则同一份数据两台机显示两个时间，子账号看着像没更新）。"""
+    try:
+        up = int((j or {}).get("up") or 0)
+    except Exception:
+        up = 0
+    if up > 0:
+        try:
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(up / 1000.0))
+        except Exception:
+            pass
+    return fallback
+
 
 def sync_xlsx_cloud(log, touch=False):
-    """从云端同步金山表格（2026-10-09 v2.8 全云端口径）：
-    轻探 /xlsxmeta（ts=各文件内容哈希）→ 有新内容拉 /xlsxcloud 全量 →
-    落盘（公布版/价格表/补贴表）→ 重建 → 记 ts。
-    touch=True（手动「全部更新」）：即使内容没变也算「云端确认过最新」，刷新侧栏时间；
-    自动跟随（touch=False）不刷——不然每 60 秒时间都会动，失去意义。
+    """从云端同步金山表格（2026-10-09 v2.8 全云端口径；2026-11-05 改增量拉取）：
+    轻探 /xlsxmeta（ts=整包哈希，fts=每件表格各自的内容指纹）→
+    **只拉指纹变了/本地缺的那几件**（/xlsxcloud?f=price）→ 落盘 → 重建 → 记 ts。
+    原来任一文件变就整包重拉 20.9MB（价格表每小时变一次、补贴表 11.9MB 几乎不变），
+    现在日常只拉 0.38MB；晚高峰子账号那台不再卡几分钟。
+    touch=True（手动「全部更新」）：即使内容没变也算「云端确认过最新」，刷新侧栏时间。
     返回："synced"（同步并重建完成）/ "unchanged"（云端没新东西）/ 其他 = 错误信息。"""
     try:
         j, err = cloud_req("/xlsxmeta", "GET", timeout=30)
@@ -317,38 +379,78 @@ def sync_xlsx_cloud(log, touch=False):
         _data_sentinel(j, err, ts)          # 数据链路哨兵（2026-10-24）：异常亮牌，正常清牌
         if not ts:
             return "unchanged"           # 云端还没有数据 / 探测失败：当没新东西
+        # 2026-11-05：时间一律用云端抓取时间（管理号/子账号显示同一个）
+        cat = _cloud_time(j)
         local = ""
         try:
             local = io.open(wp("xlsx_ts.txt"), encoding="utf-8").read().strip()
         except Exception:
             pass
         if ts == local:
-            if touch:
-                state.set_state(price_at=time.strftime("%Y-%m-%d %H:%M"))
+            if cat or touch:
+                state.set_state(price_at=cat or time.strftime("%Y-%m-%d %H:%M"))
             return "unchanged"
         # 2026-10-26 修：同一 ts 失败过 → 退避 10 分钟。此前失败路径 ts 永不更新，
         # 每 60s 重拉重建且注定再失败（金山表改版=无限白烧云端流量）。
         if ts == _sync_fail["ts"] and time.time() - _sync_fail["at"] < 600:
             return "unchanged"
+        # ---- 2026-11-05 增量：先算「这次到底要拉哪几件」----
+        cfts = j.get("fts") if isinstance(j.get("fts"), dict) else {}
+        lfts = _fts_load()
+        if cfts and lfts:
+            need = [n for n in _XLSX_FILES
+                    if cfts.get(n) and (lfts.get(n) != cfts.get(n) or not os.path.isfile(wp(n)))]
+            if not need:
+                # ts 变了但三件内容都没变（云端重传了同一份）→ 只记 ts，不白拉、不重建
+                with io.open(wp("xlsx_ts.txt"), "w", encoding="utf-8") as f:
+                    f.write(ts)
+                if cat or touch:
+                    state.set_state(price_at=cat or time.strftime("%Y-%m-%d %H:%M"))
+                return "unchanged"
+        else:
+            # 老云端没有 fts / 本机首次（升级上来没基线）→ 全拉一次，顺手把基线建起来
+            need = list(_XLSX_FILES)
         if not state._update_lock.acquire(blocking=False):
             return "busy"                # 别的更新正在跑，这轮先不动
         try:
-            log("☁ 云端表格有更新（%s…），自动同步…" % ts[:8])
+            log("☁ 云端表格有更新（%s…），需要拉：%s" % (ts[:8], ", ".join(need)))
             state.set_state("running", "正在从云端同步表格数据…")
+            # 只拉几件就带 ?f=，三件全要才走整包（老云端/排障仍支持）
+            q = "/xlsxcloud"
+            if len(need) < len(_XLSX_FILES):
+                q += "?f=" + ",".join(n[:-5] for n in need)
+
+            _pg = {"t": 0.0}
+
+            def _progress(got, total):
+                now = time.time()
+                if now - _pg["t"] < 0.8 and (not total or got < total):
+                    return              # 限频 0.8s，别把状态区刷爆
+                _pg["t"] = now
+                try:
+                    if total:
+                        state.set_state("running", "正在从云端同步表格数据… %.1f/%.1f MB" % (
+                            got / 1048576.0, total / 1048576.0))
+                    else:
+                        state.set_state("running", "正在从云端同步表格数据… 已收 %.1f MB" % (got / 1048576.0))
+                except Exception:
+                    pass
+
             # 2026-10-31 晚：晚高峰跨境链路极慢（85 字节的 /xlsxmeta 都要 3.2s），
             # 300s 超时把能拉完的也判死 → 提到 600s，且失败自动重试一次再宣判。
-            j2, err2 = cloud_req("/xlsxcloud", "GET", timeout=600)
+            j2, err2 = cloud_req(q, "GET", timeout=600, progress=_progress)
             if err2 or not j2 or not j2.get("ok"):
                 state.set_state("running", "云端响应慢，正在重试同步表格…")
-                j2, err2 = cloud_req("/xlsxcloud", "GET", timeout=600)
+                j2, err2 = cloud_req(q, "GET", timeout=600, progress=_progress)
             if err2 or not j2 or not j2.get("ok"):
                 msg = "云端表格同步失败：%s" % (err2 or (j2 or {}).get("msg"))
                 _sync_fail.update(ts=ts, at=time.time())   # 退避，防 60s 无限重拉
                 state.set_state("error", msg)
                 return msg
             files = j2.get("files") or {}
+            got_fts = j2.get("fts") if isinstance(j2.get("fts"), dict) else {}
             saved = []
-            for name in ("data.xlsx", "price.xlsx", "subsidy.xlsx"):
+            for name in _XLSX_FILES:
                 b64 = files.get(name)
                 if not b64:
                     continue
@@ -364,8 +466,14 @@ def sync_xlsx_cloud(log, touch=False):
             rebuild(log)
             with io.open(wp("xlsx_ts.txt"), "w", encoding="utf-8") as f:
                 f.write(ts)
+            # 指纹跟着更新：只记录「这次真下下来」的那几件（缺的下轮补，绝不虚标）
+            for n in saved:
+                if got_fts.get(n):
+                    lfts[n] = got_fts[n]
+            if lfts and got_fts:
+                _fts_save(lfts)
             state.set_state("done", "数据已自动同步（云端表格 · %s…）" % ts[:8],
-                            price_at=time.strftime("%Y-%m-%d %H:%M"))
+                            price_at=cat or time.strftime("%Y-%m-%d %H:%M"))
             log("云端表格同步完成：%s" % ", ".join(saved))
             return "synced"
         finally:
