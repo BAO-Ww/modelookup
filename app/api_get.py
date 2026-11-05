@@ -17,7 +17,7 @@ from config import APP_ID, APP_VERSION
 from paths import wp
 from payload import api_data_bytes, get_payload, img_bytes
 from state import _tick, read_state, set_state
-from updater import _updateall_bg
+from updater import _suball_bg, _updateall_bg
 
 
 class ApiGetMixin:
@@ -360,8 +360,14 @@ class ApiGetMixin:
                     except Exception:
                         pass
                 if state.PERM_STATE.get("role") not in (None, "admin"):
-                    self._send(200, json.dumps({"ok": False, "msg": "只有管理号能触发云端更新（子账号的数据会自动跟着云端走）"},
-                                               ensure_ascii=False))
+                    # 2026-11-05 用户令：子账号只从云端拉现成数据，不触发云端一条龙
+                    if not state.allrun_try_start(lambda: read_state()["status"] in ("running", "login")):
+                        self._send(200, json.dumps({"ok": False, "running": True,
+                                                    "msg": "已有更新在进行中"}, ensure_ascii=False))
+                        return
+                    set_state("running", "正在从云端同步数据…")
+                    threading.Thread(target=_suball_bg, args=(state.LOG.append, wf), daemon=True).start()
+                    self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
                     return
                 if not state.allrun_try_start(lambda: read_state()["status"] in ("running", "login")):
                     self._send(200, json.dumps({"ok": False, "running": True,
@@ -382,8 +388,14 @@ class ApiGetMixin:
         if path == "/api/update":
             # 2026-10-10 全云端：本机直拉金山已退役 → 触发云端任务（同「全部更新」的 kd 分支）
             if state.PERM_STATE.get("role") not in (None, "admin"):
-                self._send(200, json.dumps({"ok": False, "msg": "只有管理号能触发云端更新（子账号的数据会自动跟着云端走）"},
-                                           ensure_ascii=False))
+                # 2026-11-05 用户令：子账号只从云端拉现成表格，不触发云端一条龙
+                if not state.allrun_try_start(lambda: read_state()["status"] in ("running", "login")):
+                    self._send(200, json.dumps({"ok": False, "running": state._ALLRUN[0],
+                                                "msg": "已有更新在进行中"}, ensure_ascii=False))
+                    return
+                set_state("running", "正在从云端同步数据…")
+                threading.Thread(target=_suball_bg, args=(state.LOG.append, "kd"), daemon=True).start()
+                self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
                 return
             if not state.allrun_try_start(lambda: read_state()["status"] in ("running", "login")):
                 self._send(200, json.dumps({"ok": False, "running": state._ALLRUN[0],

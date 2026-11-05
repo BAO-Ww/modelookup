@@ -332,7 +332,8 @@ def fetch_model_set():
     try:
         import base64
         import openpyxl
-        j, err = cloud_req("/xlsxcloud", "GET", timeout=300)
+        # 2026-11-05：只要 data + price 两件，别把 11.9MB 补贴表也拉下来（每半小时白拉 16MB）
+        j, err = cloud_req("/xlsxcloud?f=data,price", "GET", timeout=300)
         if err or not (j or {}).get("ok"):
             log("⚠ 型号表拉取失败（%s），聚合退回拼接口径" % (err or (j or {}).get("msg")))
             return None, card_codes

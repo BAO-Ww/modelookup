@@ -404,6 +404,24 @@ async function hmac(key, msg) {
 const J = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", ...CORS } });
 const jerr = (msg, status = 400) => J({ ok: false, msg }, status);
 
+// 2026-11-05 增量同步用：单个 xlsx 的内容指纹。
+// 为什么不用 crypto.subtle.digest：整包 20MB base64，Workers 的 CPU 限额扛不住（免费档 10ms）。
+// 采样步长 997 的 FNV-1a（约 2 万次循环 + 长度），表格改一行必然同时改长度或改动命中点。
+function cheapHash(s) {
+  s = String(s || "");
+  const n = s.length;
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < n; i += 997) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  // 头尾再各掺 64 字符（改标题/表尾这类小改动也能抓）
+  const a = s.slice(0, 64), b = s.slice(-64);
+  for (let i = 0; i < a.length; i++) { h ^= a.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  for (let i = 0; i < b.length; i++) { h ^= b.charCodeAt(i) * 31; h = Math.imul(h, 16777619) >>> 0; }
+  return n.toString(36) + "-" + h.toString(36);
+}
+
 // ---------------- token ----------------
 // 2026-10-10 审计修复（静态2）：token 里烤进密码版本号 pv——改密码后旧 token（含被偷的）全部作废。
 // 旧格式 3 段（u|exp|sig，无 pv）兼容读取：视为 pv="0"，等价于用户从未改过密。
@@ -1452,31 +1470,64 @@ async function route(request, env, path, ctx) {
     if ((users[who] || {}).role !== "admin" && !isCloud) return jerr("没有上传权限", 403);
     const b = await request.json().catch(() => ({}));
     if (!b || !b.ts || !b.files || !b.files["data.xlsx"]) return jerr("表格数据为空，拒收");
-    const obj = { ts: String(b.ts).slice(0, 64), files: b.files, by: isCloud ? "云端定时" : who, up: Date.now() };
+    // 2026-11-05 增量：给每个文件打内容指纹，客户端只拉变了的那个。
+    // （原来任一文件变就整包 21MB 重拉，价格表每小时变一次 → 每台机器每小时白拉 21MB）
+    const fts = {};
+    for (const name of Object.keys(b.files || {})) {
+      try { fts[name] = cheapHash(b.files[name]); } catch (e) { }
+    }
+    const obj = { ts: String(b.ts).slice(0, 64), fts: fts, files: b.files, by: isCloud ? "云端定时" : who, up: Date.now() };
     await env.KV.put("xlsxlive", JSON.stringify(obj));
     // 2026-11-01：顺手落一份「只有元信息」的小键。xlsxlive 里装着 3 个 xlsx 的 base64
     // （整包十几 MB），原来每台机器每 60 秒轻探 /xlsxmeta 都要把整包读一遍 → 单次 3s。
-    try { await env.KV.put("xlsxm", JSON.stringify({ ts: obj.ts, by: obj.by, up: obj.up })); } catch (e) {}
-    return J({ ok: true, mb: Math.round(JSON.stringify(obj).length / 1048576 * 10) / 10 });
+    try { await env.KV.put("xlsxm", JSON.stringify({ ts: obj.ts, fts: fts, by: obj.by, up: obj.up })); } catch (e) {}
+    return J({ ok: true, mb: Math.round(JSON.stringify(obj).length / 1048576 * 10) / 10, fts: fts });
   }
   if (path === "/xlsxcloud" && request.method === "GET") {
     const obj = await getJSON(env, "xlsxlive", null);
     if (!obj) return jerr("云端还没有共享表格（等云端定时任务跑一次）", 404);
-    return J({ ok: true, ts: obj.ts, files: obj.files, by: obj.by });
+    // 2026-11-05 增量拉取：?f=data,price（或 data.xlsx,price.xlsx）= 只要这几件；
+    // 不带参数 = 整包（老客户端/排障用，行为不变）。
+    let files = obj.files || {};
+    const wantRaw = (url.searchParams.get("f") || "").split(",").map(s => s.trim()).filter(Boolean);
+    if (wantRaw.length) {
+      const out = {};
+      for (const k of wantRaw) {
+        const name = k.slice(-5) === ".xlsx" ? k : k + ".xlsx";
+        if (files[name]) out[name] = files[name];
+      }
+      if (!Object.keys(out).length) return jerr("要的表格云端没有：" + wantRaw.join(","), 404);
+      files = out;
+    }
+    return J({ ok: true, ts: obj.ts, fts: obj.fts || null, files: files, by: obj.by });
   }
   if (path === "/xlsxmeta" && request.method === "GET") {
     // 2026-11-01：先读小元信息键（几十字节），读不到才回退读整包并顺手补一份，
     // 免得每台机器每 60 秒都把十几 MB 的 xlsxlive 拉一遍。
+    // 2026-11-05：小键里带 fts（每个文件的内容指纹），客户端据此只拉变了的文件。
     let obj = await getJSON(env, "xlsxm", null);
     if (!obj) {
       const big = await getJSON(env, "xlsxlive", null);
       if (!big) return J({ ok: true, ts: "" });
-      obj = { ts: big.ts || "", by: big.by || "", up: +big.up || 0 };
+      obj = { ts: big.ts || "", fts: big.fts || null, by: big.by || "", up: +big.up || 0 };
       if (ctx && ctx.waitUntil) ctx.waitUntil(env.KV.put("xlsxm", JSON.stringify(obj)).catch(() => {}));
     }
     if (ctx && ctx.waitUntil && await autoKick("kd", Date.now() - (+obj.up || 0)))
       ctx.waitUntil(ghDispatch("kdocs-cloud-data.yml"));
-    return J({ ok: true, ts: obj.ts || "", by: obj.by || "", up: +obj.up || 0 });   // up=最近成功跑批时间戳（本机哨兵用，2026-10-24）
+    // 2026-11-05 懒补指纹：部署这一版之前上传的整包没有 fts（而内容没变时 CI 不会重传），
+    // 不补的话增量永远起不来。只在缺 fts 时补一次，写小键不重写整包（省一次 20MB KV 写）。
+    if (ctx && ctx.waitUntil && !obj.fts) {
+      ctx.waitUntil((async () => {
+        try {
+          const big = await getJSON(env, "xlsxlive", null);
+          if (!big || !big.files) return;
+          const f = big.fts || {};
+          if (!big.fts) for (const n of Object.keys(big.files)) f[n] = cheapHash(big.files[n]);
+          await env.KV.put("xlsxm", JSON.stringify({ ts: big.ts || "", fts: f, by: big.by || "", up: +big.up || 0 }));
+        } catch (e) { }
+      })());
+    }
+    return J({ ok: true, ts: obj.ts || "", fts: obj.fts || null, by: obj.by || "", up: +obj.up || 0 });   // up=最近成功跑批时间戳（本机哨兵用，2026-10-24）
   }
 
   // ---------- 金山登录态中转（2026-10-09）----------

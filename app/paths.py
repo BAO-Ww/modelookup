@@ -64,11 +64,32 @@ def data_root():
 
 def default_base():
     """图片/素材总根默认值（2026-10-31 用户令「所有生成/下载的图片全跟软件安装位置走」）：
-    打包版 = exe 所在目录\图片库（装在哪图片就存哪，卸载/搬目录都跟着走）；
-    源码直跑维持 work_dir（开发机不挪真实数据，源码/装版各存各家互不干扰）。"""
+    Windows 打包版 = exe 所在目录\\图片库（装在哪图片就存哪，卸载/搬目录都跟着走）；
+    源码直跑维持 work_dir（开发机不挪真实数据，源码/装版各存各家互不干扰）。
+
+    ⚠ 2026-11-05 Mac 端致命坑（用户「完全没有反应，打不开，窗口都没有」的真身）：
+    Mac 打包版的 sys.executable 在 ModelLookup.app/Contents/MacOS/ 里面 ——
+    照搬 Windows 的「exe 同级目录」等于往 .app 包里写数据。macOS 的 .app 是
+    codesign 签名过的 bundle，Contents/MacOS/ 里多出一个「图片库」目录会直接
+    破坏签名 seal（ad-hoc 签名同理）；seal 一破，LaunchServices 直接拒绝启动，
+    **不弹任何提示**，双击就是彻底没反应。而且 migrate_images() 每次启动都会
+    makedirs 一遍，等于每开一次就把签名再砸一次。
+    所以 Mac 一律落 ~/Pictures（用户可见、易备份、在包外），绝不进 .app。"""
     if is_frozen():
+        if sys.platform == "darwin":
+            return os.path.join(os.path.expanduser("~"), "Pictures", "型号查询图片库")
         return os.path.join(os.path.dirname(sys.executable), "图片库")
     return work_dir()
+
+
+def stray_base_in_bundle():
+    """Mac 专用自检：返回 .app 包内被误建出来的「图片库」路径（没有就 None）。
+    这个目录一旦存在，.app 的代码签名 seal 就已经破了，必须在包外把它搬走
+    （搬走 = 包内恢复原样 = seal 重新吻合），否则软件再也起不来。"""
+    if sys.platform != "darwin" or not is_frozen():
+        return None
+    p = os.path.join(os.path.dirname(sys.executable), "图片库")
+    return p if os.path.isdir(p) else None
 
 
 def data_base():
@@ -80,13 +101,33 @@ def data_base():
 def migrate_images(log=None):
     """启动一次性搬家（2026-10-31 存储根改跟安装目录走）：旧默认位置 work_dir 底下的
     kitset / peiwork / copy 整目录搬到 data_base()（默认 = exe 目录\图片库）。
-    幂等：目标已存在且有内容就不动（绝不覆盖用户数据）；源码直跑 base==work_dir 直接跳过。"""
+    幂等：目标已存在且有内容就不动（绝不覆盖用户数据）；源码直跑 base==work_dir 直接跳过。
+
+    Mac 额外一步（2026-11-05）：先把 .app 包里被误建的「图片库」整目录搬出来。
+    搬出来不只是救数据 —— 包内恢复原样后，被砸坏的代码签名 seal 重新吻合，
+    下一次启动就不会再被 macOS 静默拒绝（详见 default_base 注释）。"""
     log = log or (lambda s: None)
     try:
         base = data_base()
+        import shutil as _sh
+        # ---- Mac：抢救 .app 包内残留（这段必须在 base==work_dir 早退之前）
+        try:
+            stray = stray_base_in_bundle()
+            if stray:
+                os.makedirs(base, exist_ok=True)
+                for name in os.listdir(stray):
+                    s2 = os.path.join(stray, name)
+                    d2 = os.path.join(base, name)
+                    if os.path.isdir(d2) and os.listdir(d2):
+                        d2 = d2 + "__包内备份"      # 目标已有内容 → 换个名字，绝不覆盖
+                    _sh.move(s2, d2)
+                    log("包内图片库搬出：%s -> %s" % (s2, d2))
+                os.rmdir(stray)
+                log("已清空 .app 包内的「图片库」目录（签名 seal 恢复）")
+        except Exception as e:
+            log("包内图片库清理失败（不影响启动，需要手动处理）：%r" % (e,))
         if os.path.abspath(base) == os.path.abspath(work_dir()):
             return
-        import shutil as _sh
         os.makedirs(base, exist_ok=True)
         for name in ("kitset", "peiwork", "copy"):
             src = wp(name)

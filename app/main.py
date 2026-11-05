@@ -466,7 +466,13 @@ def _check():
     # ASCII 哨兵：CI 拿这行判断成败，不受控制台编码影响
     out.append("RESULT: %s" % ("PASS" if ok else "FAIL"))
     txt = "\n".join(out)
-    logdir = os.path.dirname(sys.executable) if is_frozen() else os.path.dirname(os.path.abspath(__file__))
+    # 2026-11-05 Mac：自检日志绝不能落在 Contents/MacOS/ 里 —— 往签名过的 .app 包内
+    # 新增文件会破坏代码签名 seal，之后 macOS 直接静默拒绝启动（双击没反应的根因之一）。
+    # Mac 统一写 work_dir（~/Library/Application Support/ModelLookup），与程序日志同处。
+    if sys.platform == "darwin" and is_frozen():
+        logdir = work_dir()
+    else:
+        logdir = os.path.dirname(sys.executable) if is_frozen() else os.path.dirname(os.path.abspath(__file__))
     try:
         with io.open(os.path.join(logdir, "exe_check.log"), "w", encoding="utf-8") as f:
             f.write(txt)
@@ -493,6 +499,22 @@ if __name__ == "__main__":
                                                  APP_NAME + " 启动失败", 0x10)
             except Exception:
                 pass
+            # 2026-11-05 Mac 端：这里原来只有 Windows MessageBox（ctypes.windll 在 Mac
+            # 上根本不存在，直接 AttributeError 被 except 吞掉）⇒ Mac 启动失败 =
+            # 完全静默，用户只看到「点了没反应」。改走 osascript 弹原生对话框，
+            # 至少把最后几行栈打在屏幕上，别让人两眼一抹黑。
+            if sys.platform == "darwin":
+                try:
+                    import subprocess
+                    _lines = traceback.format_exc().strip().splitlines()[-24:]
+                    _parts = ['"' + ln.replace("\\", "/").replace('"', "'") + '"'
+                              for ln in _lines]
+                    _script = ('display dialog %s with title "%s 启动失败" '
+                               'buttons {"好"} default button 1 with icon stop'
+                               % (" & return & ".join(_parts), APP_NAME))
+                    subprocess.Popen(["/usr/bin/osascript", "-e", _script])
+                except Exception:
+                    pass
             # 崩溃留痕（2026-10-21）：Windows 也落盘——弹窗点掉就没了，文件还在
             try:
                 _crash_log("启动失败(main抛异常)", traceback.format_exc())

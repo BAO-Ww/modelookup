@@ -2355,6 +2355,12 @@ function applyPermBar(){
   var b = document.getElementById('updbtn'), s = document.getElementById('stkbtn');
   if (b) b.hidden = !pok('upd_kdocs');
   if (s) s.hidden = !pok('upd_yy');
+  /* 2026-11-05 用户令：子账号的「全部更新」只从云端拉现成数据，一条龙只有管理号能下发。
+     按钮提示跟着改口径，别让子账号以为点了会去跑云端任务。 */
+  var ab = document.getElementById('allbtn');
+  if (ab) ab.title = (AUTH && AUTH.role === 'admin')
+    ? '一键全量：金山表格（型号/价格/补贴）→ 用友实时库存，一条龙跑完'
+    : '从云端拉取最新表格与库存（只同步现成数据，不下发云端任务）';
   // 闲鱼宝贝数据入口（2026-10-17）：权限键 xysj，账号管理里勾（后台入口已删）
   var kj = document.getElementById('xysjbtn');
   if (kj) kj.hidden = !pok('xysj');
@@ -7543,8 +7549,12 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
   function startCloud(wf){
     if (all && all.disabled) return;
     busy(true, '正在云端更新…');
+    /* 2026-11-05：子账号不发云端任务，文案别说「触发 GitHub Actions」 */
+    var _admin = !!(AUTH && AUTH.role === 'admin');
     msg.innerHTML =
-      '<div class="uprog"><div class="meta"><span>正在触发云端更新（GitHub Actions）…</span><b>刚点击</b></div>'
+      '<div class="uprog"><div class="meta"><span>'
+      + (_admin ? '正在触发云端更新（GitHub Actions）…' : '正在从云端拉取数据…')
+      + '</span><b>刚点击</b></div>'
       + '<div class="bar"><div class="fill" style="width:3%"><div class="glow"></div></div></div></div>';
     fetch('/api/updateall', { method: 'POST', cache: 'no-store',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wf: wf || 'all' })
@@ -7893,6 +7903,9 @@ function _fmtBJ(ts){
 }
 function diagPull(){
   if (typeof authFetch !== 'function') return;
+  /* 2026-11-05：/diag 只有管理号能看（子账号 403）。子账号别再每 60 秒白探一次，
+     时间直接走上游同步来的云端抓取时间（price_at / stock_at）。 */
+  if (!(AUTH && AUTH.role === 'admin')) return;
   authFetch('/diag').then(function(j){
     if (!j || !j.ok) return;
     DIAGW = { kd: (j.kd || [])[0] || null, yy: (j.yy || [])[0] || null };

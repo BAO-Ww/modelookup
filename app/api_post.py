@@ -15,7 +15,7 @@ from appwin import rebuild_menu_for
 from cloud import stock_pull_cloud
 from paths import wp
 from state import read_state, set_state
-from updater import _app_install_bg, _updateall_bg, do_update
+from updater import _app_install_bg, _suball_bg, _updateall_bg, do_update
 
 
 class ApiPostMixin:
@@ -122,8 +122,15 @@ class ApiPostMixin:
             except Exception:
                 pass
             if state.PERM_STATE.get("role") not in (None, "admin"):
-                self._send(200, json.dumps({"ok": False, "msg": "只有管理号能触发云端更新（子账号的数据会自动跟着云端走）"},
-                                           ensure_ascii=False))
+                # 2026-11-05 用户令：子账号的「全部更新」只从云端拉现成数据，
+                # 不触发云端一条龙（citrigger 是管理号专属）
+                if not state.allrun_try_start(lambda: read_state()["status"] in ("running", "login")):
+                    self._send(200, json.dumps({"ok": False, "running": True,
+                                                "msg": "已有更新在进行中"}, ensure_ascii=False))
+                    return
+                set_state("running", "正在从云端同步数据…")
+                threading.Thread(target=_suball_bg, args=(state.LOG.append, wf), daemon=True).start()
+                self._send(200, json.dumps({"ok": True, "running": True}, ensure_ascii=False))
                 return
             if not state.allrun_try_start(lambda: read_state()["status"] in ("running", "login")):
                 self._send(200, json.dumps({"ok": False, "running": True,
