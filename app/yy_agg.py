@@ -16,6 +16,22 @@ from normalize import core_of, norm_model
 from payload import get_payload
 from paths import wp
 
+# 仓库黑名单（2026-11-05 用户令）：
+#   「东莞事业部统仓统配（东莞）ZP仓」不要、也不算进库存——全部型号都是。
+#   子串匹配（在仓名出现即整行剔除），故意不用「ZP仓」做关键词——
+#   「分销统仓统配ZP仓」是另一个仓，用户没说不要，不能误伤。
+#   ⚠ 手抄镜像：.github/scripts/yy_cloud_pull.py 的 aggregate 必须同步同款，
+#   两边口径劈叉 = 管理号本机拉的与 CI 云拉的库存对不上。
+WH_EXCLUDE = ("东莞事业部统仓统配",)
+
+
+def wh_excluded(wname):
+    s = str(wname or "")
+    for x in WH_EXCLUDE:
+        if x in s:
+            return True
+    return False
+
 
 def yy_finish(recs, log):
     """聚合 + 命中统计 + 落盘。"""
@@ -55,6 +71,9 @@ def yy_finish(recs, log):
     agg = {}
     agg_code = {}                          # 编码桶（2026-10-10 深夜「编码优先」）：与型号桶并行
     for r0 in recs:
+        # 2026-11-05 仓库黑名单：整行剔除（型号桶/编码桶都不进，q/a/wt/whs 全干净）
+        if wh_excluded(r0.get(YY_K_WH)):
+            continue
         mo = norm_model(r0.get(YY_K_MODEL))
         if not mo:
             continue
