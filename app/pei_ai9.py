@@ -1320,7 +1320,15 @@ def pick_images(src_dir, cat=None):
     closed = [t for t in cuts if t[1] <= (2.0 if wide else 0.92)]
     front = None
     if closed:
-        front = min(closed, key=lambda t: (t[2], abs(t[1] - tgt)))[0]
+        if wide:
+            front = min(closed, key=lambda t: (t[2], abs(t[1] - tgt)))[0]
+        else:
+            # 2026-11-05 实锤（BCD-513WGHTD19DYU1 首图选成四门全开展示图）：
+            # 老规则「同层最贴近 0.65」——开门图门没全甩开时 ar≈0.70~0.72，
+            # 差值 0.07 反而赢过关门正面 0.44 的差值 0.21（AI 限流走启发式时翻车）。
+            # 物理事实：开门只会让 bbox 变宽、不会变窄 ⇒ 立式最瘦的那张 ≈ 关门正面。
+            # 改取同层 ar 最小（AI 缓存命中时本函数结果不会被用到，这是限流兜底）。
+            front = min(closed, key=lambda t: (t[2], t[1]))[0]
     if front is None:
         for f in sorted(imgs, key=lambda x: (tier(rel_of[x]), rel_of[x])):
             if _is_cutout(f) and not _is_junk_cut(f):
@@ -1331,10 +1339,17 @@ def pick_images(src_dir, cat=None):
 
     # 角度：除正面外另一张关门/斜角（比正面略宽的优先）。
     # 老关键词("07"/角度)碰上编号命名的特写图会翻车（28E 顶板特写 07 实锤），只在排序没得选时用
+    # 2026-11-05 跟随正面修正：立式取「≥正面 ar 里最窄的」（关门斜角 ≈ 正面略宽），
+    # 老规则目标 0.75 又会让开门图赢（同 front 的坑）。
     rest = [t for t in closed if t[0] != front]
     angle = None
     if rest:
-        angle = min(rest, key=lambda t: (t[2], abs(t[1] - (tgt + (0.1 if not wide else 0.2)))))[0]
+        if wide:
+            angle = min(rest, key=lambda t: (t[2], abs(t[1] - (tgt + (0.1 if not wide else 0.2)))))[0]
+        else:
+            _f_ar = dict((t[0], t[1]) for t in cuts).get(front) or 0.65
+            _up = [t for t in rest if t[1] >= _f_ar] or rest
+            angle = min(_up, key=lambda t: (t[2], t[1]))[0]
     if angle is None:
         angle = find_cut("45", "角度", "angle", "侧面")
         if angle is None or angle == front:
