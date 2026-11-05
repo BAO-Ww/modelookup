@@ -47,6 +47,19 @@ K_WH = "warehouse_name"
 PAGE_SIZE = 1000
 PAGE_MAX = 15
 
+# 仓库黑名单（2026-11-05 用户令）：「东莞事业部统仓统配（东莞）ZP仓」不要、
+# 不算进库存——全部型号都是。子串匹配，故意不用「ZP仓」（不能误伤分销统仓统配ZP仓）。
+# ⚠ 手抄镜像：app/yy_agg.py 的 WH_EXCLUDE/wh_excluded 必须同步同款。
+WH_EXCLUDE = ("东莞事业部统仓统配",)
+
+
+def wh_excluded(wname):
+    s = str(wname or "")
+    for x in WH_EXCLUDE:
+        if x in s:
+            return True
+    return False
+
 
 def norm_model(s):
     """型号归一：与 app/main.py norm_model 语义一致（大写、去空白、去全角）。
@@ -228,6 +241,9 @@ def aggregate(recs, t_mo=None):
     agg_code = {}
 
     for r0 in recs:
+        # 2026-11-05 仓库黑名单：整行剔除（与 app/yy_agg.py yy_finish 同口径）
+        if wh_excluded(r0.get(K_WH)):
+            continue
         mo = norm_model(r0.get(K_MODEL))
         if not mo:
             continue

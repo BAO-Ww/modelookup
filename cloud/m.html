@@ -473,6 +473,35 @@ function dlg(msg, withInput, cb){
   inp.onkeydown = function(e){ if (e.key==='Enter'){ e.preventDefault(); document.getElementById('dlgOk').click(); } };
 }
 
+/* 仓库黑名单（2026-11-05 用户令）：「东莞事业部统仓统配（东莞）ZP仓」不要、
+   不算进库存（全部型号）。云端数据源（yy_cloud_pull/app yy_agg）已同口径整行剔除，
+   这里洗旧缓存兜底（下次云端推送前仍有旧仓残留）。同款逻辑见 template.html scrubStock。 */
+var WH_EXCLUDE = ['东莞事业部统仓统配'];
+function scrubStock(sd){
+  if (!sd) return;
+  var bs = [sd.stock, sd.sbc];
+  for (var bi = 0; bi < 2; bi++){
+    var b = bs[bi]; if (!b) continue;
+    for (var k in b){
+      var a = b[k]; if (!a || !a.whs || !a.whs.length) continue;
+      var keep = [];
+      for (var i = 0; i < a.whs.length; i++){
+        var s = String(a.whs[i].w || ''), bad = false;
+        for (var x = 0; x < WH_EXCLUDE.length; x++){ if (s.indexOf(WH_EXCLUDE[x]) >= 0){ bad = true; break; } }
+        if (!bad) keep.push(a.whs[i]);
+      }
+      if (keep.length === a.whs.length) continue;
+      a.whs = keep;
+      var wt = {}, sum = 0;
+      for (var j = 0; j < keep.length; j++){
+        var t = keep[j].t || '其他仓';
+        wt[t] = Math.round(((wt[t] || 0) + keep[j].n) * 100) / 100;
+        sum += keep[j].n;
+      }
+      a.wt = wt; a.a = Math.round(sum * 100) / 100;
+    }
+  }
+}
 /* ============ 库存口径（编码优先、型号兜底——同电脑端） ============ */
 function stockOf(mo, name, code){
   var s = STOCK && STOCK.stock; if (!s) return null;
@@ -1453,6 +1482,7 @@ function loadAll(){
   }
   jobs.push(api('/stockcloud').then(function(j){
     STOCK = { ts: j.ts||'', stock: j.stock||{}, sbc: j.sbc||{} };
+    scrubStock(STOCK);
     document.getElementById('tsStock').textContent = '库存 ' + (j.ts||'');
   }).catch(function(e){
     document.getElementById('tsStock').textContent = '库存未连上';

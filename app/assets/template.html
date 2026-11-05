@@ -767,6 +767,39 @@ function showYyAlert(msg){
 /* 实时库存（exe 版从用友 YonSuite 拉的现存量，点「更新实时库存」刷新）：
    STOCK = { 型号norm: { q:现存量, a:可用量, wt:{仓库类型:可用量} } }，键与 norm() 同一套归一 */
 var STOCKDATA = null;
+/* 仓库黑名单（2026-11-05 用户令）：「东莞事业部统仓统配（东莞）ZP仓」不要、
+   不算进库存（全部型号）。后端 yy_agg / CI yy_cloud_pull 已同口径整行剔除；
+   这里再洗一遍**旧缓存**（上次拉库存还带着该仓），改版立即生效不用等重拉。
+   注意只重算 a/wt/whs——q（现存合计）没按仓拆、洗不了，短暂偏大，
+   下一轮拉库存后端过滤后自动归正。故意不用「ZP仓」做关键词（不能误伤分销统仓统配ZP仓）。 */
+var WH_EXCLUDE = ['东莞事业部统仓统配'];
+function whExcluded(w){
+  var s = String(w || '');
+  for (var i = 0; i < WH_EXCLUDE.length; i++){ if (s.indexOf(WH_EXCLUDE[i]) >= 0) return true; }
+  return false;
+}
+function scrubStock(sd){
+  if (!sd) return;
+  var bs = [sd.stock, sd.sbc];
+  for (var bi = 0; bi < 2; bi++){
+    var b = bs[bi]; if (!b) continue;
+    for (var k in b){
+      var a = b[k]; if (!a || !a.whs || !a.whs.length) continue;
+      var keep = [];
+      for (var i = 0; i < a.whs.length; i++){ if (!whExcluded(a.whs[i].w)) keep.push(a.whs[i]); }
+      if (keep.length === a.whs.length) continue;          // 没命中黑名单，不动
+      a.whs = keep;
+      var wt = {}, sum = 0;
+      for (var j = 0; j < keep.length; j++){
+        var t = keep[j].t || '其他仓';
+        wt[t] = Math.round(((wt[t] || 0) + keep[j].n) * 100) / 100;
+        sum += keep[j].n;
+      }
+      a.wt = wt;
+      a.a = Math.round(sum * 100) / 100;
+    }
+  }
+}
 /* 库存匹配（2026-10-10 深夜终稿「**编码优先、型号兜底**」）：
    ① 卡片有 YS物料编码（约 6 成的行）→ 先走编码一对一硬核对——编码是 SKU 唯一码
      （用友 productsku_cCode = 表里的 YS物料编码，同一套），对得上就是对得上，
@@ -7703,7 +7736,7 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
       .catch(function(){ return null; });
     Promise.all([pD, pS]).then(function(a){
       var d = a[0], s = a[1];
-      if (s && s.stock && Object.keys(s.stock).length) STOCKDATA = s;
+      if (s && s.stock && Object.keys(s.stock).length){ scrubStock(s); STOCKDATA = s; }
       start(d);
     }).catch(function(){}).then(function(){ UPSTATE.fetching = false; });
   }
@@ -9340,7 +9373,7 @@ if (DATA){
     .catch(function(){ return null; });
   grabDataWait(6).then(function(d){
     return pStock.then(function(s){
-      if (s && s.stock && Object.keys(s.stock).length) STOCKDATA = s;
+      if (s && s.stock && Object.keys(s.stock).length){ scrubStock(s); STOCKDATA = s; }
       start(d);
     });
   }).catch(function(e){
