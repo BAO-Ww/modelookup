@@ -9197,6 +9197,10 @@ function exSnap(){
        没库存也只报自己标记发布了的（MARKED 里有记录的），没发布的库存归零不出黄条
        （已发布型号的没库存另有 pubStockWarn 横幅盯，这条是数据变动快报的口径） */
     sc = sc.filter(function(x){ return +x.n <= 0 && MARKED[x.m]; });
+    /* 2026-11-05 用户令「我没发布的怎么也提示我改价格」：价格变动改成跟没库存同一口径——
+       只报自己标记发布过的型号，没发布的价格怎么动都不打扰。
+       （快照本身仍然收全量价格，将来这台机器标了发布，也能照常比出涨跌） */
+    pc = pc.filter(function(x){ return !!MARKED[x.m]; });
     if (!pc.length && !sc.length) return;
     exAlert(pc, sc);
   });
