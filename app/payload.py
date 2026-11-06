@@ -314,6 +314,29 @@ def rebuild(log):
         cache = merged
 
     payload = build_payload(allrecs, cache, month)
+    # 用友对码补缺（2026-11-06 用户令「物料编码没读取到，读取到再加上去」）：
+    # 金山清理明细的 YS物料编码/YS物料名称 本身可能是 VLOOKUP #N/A（JSQ30-16WM7DPTGU1
+    # 实锤，解析层 sx() 已把它剔成空），用友实时行里有真编码+物料名称跟型号同行
+    #（yy_agg 聚了 型号→{code,n} 映射、随库存上云共享）—— 这里给 code/n 空着的卡补上。
+    try:
+        _m2 = (state.STOCK or {}).get("mo2meta") or {}
+    except Exception:
+        _m2 = {}
+    if _m2:
+        _n_fix = 0
+        for r in payload["rows"]:
+            meta = (_m2.get(str(r.get("mo") or ""))
+                    or _m2.get(norm_model(r.get("mo") or "") or "")
+                    or _m2.get(str(r.get("c") or "")))
+            if not meta:
+                continue
+            if not r.get("code") and meta.get("code"):
+                r["code"] = meta["code"]
+                _n_fix += 1
+            if not r.get("n") and meta.get("n"):
+                r["n"] = meta["n"]
+        if _n_fix:
+            log("用友对码补上 %d 张卡缺的物料编码/名称" % _n_fix)
     payload["meta"]["src"] = ""
     attach_subsidy(payload, log)          # 补贴表（以旧换新）：69码 + 售价
     attach_xinsheng(payload, log)         # 欣盛商城（2026-10-12）：官方售价 + 缺图补图

@@ -30,6 +30,12 @@ try:
 except Exception:
     core_hero = None
 
+try:
+    from normalize import is_err_val      # 表格公式报错值（#N/A 等）一律当空，别印到图上
+except Exception:
+    def is_err_val(v):
+        return str(v or "").strip().upper().startswith("#")
+
 W = H = 1080
 
 # 模块级状态（generate 时写入），9 张绘制函数读取
@@ -651,9 +657,16 @@ def _spot_title():
     去完 =「海尔滚筒洗衣机10公斤」。"""
     _m = (P.get('model') or '').strip()
     _t = str(P.get('title') or '').strip()
+    # 2026-11-06 用户实锤（JSQ30-16WM7DPTGU1 聚光首图印着 #N/A）：条目标题可能是表格
+    # 公式报错值 → 当空，退回「品牌+品类+容量」，绝不让 #N/A 印在机器上
+    if is_err_val(_t):
+        _t = ''
     if _m and _m.lower() in _t.lower():
         _i = _t.lower().find(_m.lower())
         _t = (_t[:_i] + ' ' + _t[_i + len(_m):]).strip()
+    _t = _t.strip()
+    if is_err_val(_t):
+        _t = ''
     return _t or (P['brand'] + (P['cat'] or P['kind'] or '') + (P.get('cap') or '')).strip() or _m
 
 
@@ -671,12 +684,29 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
         cv.alpha_composite(pf, (px, py))
         dr = ImageDraw.Draw(cv)
         _brand_minimal(dr)
-        _t1 = _spot_title()
-        _s1 = 96
-        while _s1 > 40 and dr.textlength(_t1, font=font(_s1, True)) > W * 0.86:
+        # 2026-11-06 用户令「蓝底都是对的，聚光的字怎么就不对了 / 难道聚光就不能跟他一样」：
+        # 聚光大字改成跟蓝底同源——取 kitset 那两句（line1 / line2 去型号段），
+        # 不再用软件条目标题（那是表格字段，可能带 #N/A、描述尾，跟蓝底口径分叉）。
+        _l1, _l2 = "", ""
+        try:
+            import kitset as _ks
+            _l1, _l2 = _ks.hero_lines(P.get("model") or "")
+        except Exception:
+            _l1, _l2 = "", ""
+        if not _l1:
+            _l1, _l2 = _spot_title(), ""
+        _s1 = 92
+        while _s1 > 40 and dr.textlength(_l1, font=font(_s1, True)) > W * 0.86:
             _s1 -= 2
-        dr.text((W // 2, 452), _t1, font=font(_s1, True), fill="#ffffff",
+        _y1 = 424 if _l2 else 452
+        dr.text((W // 2, _y1), _l1, font=font(_s1, True), fill="#ffffff",
                 anchor="mm", stroke_width=8, stroke_fill=(10, 12, 17, 210))
+        if _l2:
+            _s2 = 62
+            while _s2 > 32 and dr.textlength(_l2, font=font(_s2, True)) > W * 0.80:
+                _s2 -= 2
+            dr.text((W // 2, _y1 + 82), _l2, font=font(_s2, True), fill="#e9eef7",
+                    anchor="mm", stroke_width=6, stroke_fill=(10, 12, 17, 200))
         # 型号胶囊（2026-10-30 样张 v2 用户定稿「用这个」）：字号/宽/高全部跟着型号文字走，
         # 超长型号整颗缩号防顶出画面（常规 XQG100-H28E≈54号，超长 BCD-522… 17 位自动缩到放得下）
         _mt = P['model']
@@ -688,7 +718,7 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
             _tw_ = dr.textlength(_mt, font=font(_cb))
             _pw = int(_tw_) + int(_cb * 2.5)
         _ph = int(_cb * 2.1)                      # 高也跟字号走
-        _py = 546
+        _py = 562 if _l2 else 546
         _px = W // 2 - _pw // 2
         dr.rounded_rectangle([_px, _py, _px + _pw, _py + _ph], _ph // 2, fill=(255, 199, 0, 255))
         T(dr, (W // 2, _py + _ph // 2 + 2), _mt, _cb, "#ffffff", "mm")
@@ -1722,38 +1752,65 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
     step(12, "正在挑选素材图 ...")
     BG_DIR = bg_dir or (Path(src_dir) / "AI背景")
     API_KEY = api_key
-    front_f, angle_f, open_f, scene_f = pick_images(src_dir, cat=GEN_CAT)
-    if not front_f:
-        raise RuntimeError("素材目录没有可用的图片：%s" % src_dir)
 
-    # AI 视觉选图（有 key 时）：按内容挑真实实景照、纠正规则选图误判
-    # （如洗衣机 16.jpg 实为内部结构渲染图，规则选图误当场景；视觉模型能识别并排除）
-    ai_pick = None
-    if api_key and core is not None:
-        try:
-            ai_pick = core.zhipu_pick_images(api_key, src_dir, P.get("kind"))
-        except Exception:
-            ai_pick = None
-    if ai_pick:
-        def _vc(fn):
-            fp = Path(src_dir) / fn
-            return fp if (fp.exists() and _is_cutout(fp) and not _is_junk_cut(fp)) else None
-        def _vs(fn):
-            fp = Path(src_dir) / fn
-            return fp if (fp.exists() and _is_photo(fp)) else None
-        if ai_pick.get("front"):
-            front_f = _vc(ai_pick["front"]) or front_f
-        if ai_pick.get("angle"):
-            angle_f = _vc(ai_pick["angle"]) or angle_f
-        if ai_pick.get("open"):
-            open_f = _vc(ai_pick["open"]) or open_f
-        if ai_pick.get("scene"):
-            scene_f = _vs(ai_pick["scene"])
-        # 场景页标题随 AI 认出的真实场景走（阳台实拍 / 厨房实拍 / ...）
-        if ai_pick.get("scene_label"):
-            P["r_title"] = ai_pick["scene_label"]
-            if ai_pick.get("scene_sub"):
-                P["r_sub"] = ai_pick["scene_sub"]
+    # 2026-11-06 用户令「蓝底都生成出来了，聚光直接用蓝底选出来的做不就好了嘛」：
+    # 聚光四张（首图/机器展示/机器参数/尺寸图）全都只用 front，而宝套图的 _pick_prod
+    # 已经把「AI 视觉选图 + 海报/特写把关 + 抠底」整条链跑完并落盘成
+    # kitset/<型号>/product.png —— 那就是审过的正面整机图。
+    # 再从 官网\ 重挑一遍纯属重复劳动：多烧 30s+ 视觉额度，还可能挑出跟蓝底不同的图
+    # （两套成品机器长得不一样，用户实锤「聚光怎么还要选图」）。
+    # src_dir = kitset/<型号>/官网 ⇒ parent 就是型号根目录，跟 info["dir"] 同源。
+    _spot_prod = None
+    if GEN_STYLE == "spot":
+        _dirs = [Path(src_dir).parent]
+        _di = str(info.get("dir") or "")
+        if _di and Path(_di) not in _dirs:
+            _dirs.append(Path(_di))
+        for _d in _dirs:
+            _c = _d / "product.png"
+            try:
+                if _c.is_file() and min(Image.open(_c).size) >= 300:
+                    _spot_prod = _c
+                    break
+            except Exception:
+                continue
+
+    if _spot_prod is not None:
+        front_f, angle_f, open_f, scene_f = _spot_prod, None, None, None
+        step(13, "直接用蓝底已选好的主图（product.png）...")
+    else:
+        front_f, angle_f, open_f, scene_f = pick_images(src_dir, cat=GEN_CAT)
+        if not front_f:
+            raise RuntimeError("素材目录没有可用的图片：%s" % src_dir)
+
+        # AI 视觉选图（有 key 时）：按内容挑真实实景照、纠正规则选图误判
+        # （如洗衣机 16.jpg 实为内部结构渲染图，规则选图误当场景；视觉模型能识别并排除）
+        ai_pick = None
+        if api_key and core is not None:
+            try:
+                ai_pick = core.zhipu_pick_images(api_key, src_dir, P.get("kind"))
+            except Exception:
+                ai_pick = None
+        if ai_pick:
+            def _vc(fn):
+                fp = Path(src_dir) / fn
+                return fp if (fp.exists() and _is_cutout(fp) and not _is_junk_cut(fp)) else None
+            def _vs(fn):
+                fp = Path(src_dir) / fn
+                return fp if (fp.exists() and _is_photo(fp)) else None
+            if ai_pick.get("front"):
+                front_f = _vc(ai_pick["front"]) or front_f
+            if ai_pick.get("angle"):
+                angle_f = _vc(ai_pick["angle"]) or angle_f
+            if ai_pick.get("open"):
+                open_f = _vc(ai_pick["open"]) or open_f
+            if ai_pick.get("scene"):
+                scene_f = _vs(ai_pick["scene"])
+            # 场景页标题随 AI 认出的真实场景走（阳台实拍 / 厨房实拍 / ...）
+            if ai_pick.get("scene_label"):
+                P["r_title"] = ai_pick["scene_label"]
+                if ai_pick.get("scene_sub"):
+                    P["r_sub"] = ai_pick["scene_sub"]
 
     # 无真实实景照：回退「产品摆影棚」，标题不可用「阳台/厨房实拍」误导，改用中性「产品实拍」
     if not scene_f:

@@ -3948,5 +3948,58 @@ def blur_warn(bdir):
             out["img_%d" % n] = "糊（%dKB%s）" % (int(kb), "，短边 %d" % side if side else "")
     return out
 
-
-
+def hero_lines(model, info=None):
+    """蓝底首图那两句文案（line1 / line2 去掉型号段），给聚光首图复用同一套口径。
+    2026-11-06 用户令「蓝底都是对的，聚光的字怎么就不对了」——聚光标题不再取软件条目
+    标题（那格可能是表格报错值 #N/A），改成跟蓝底同源：set.json 里已有的 cfg 优先，
+    没有就现算一份 _build_cfg。返回 (line1, line2)；取不到返回 ('','')。"""
+    m = norm_model(model) or str(model or '')
+    def _dedup(l2):
+        # 官网标题堆砌去重（2026-11-06 样张实锤「强排恒温强排式」）：
+        # 结尾是「XX式」且这个词根在前半段已经出现过 → 删掉前半段那个，
+        # 「强排恒温」+「强排式」→「恒温强排式」。只动聚光展示，不动蓝底 cfg。
+        try:
+            # 官网标题堆砌去重：2~3 字词根出现 ≥2 次（如「强排」×2）→ 删第一次出现，
+            # 「强排恒温强排式」→「恒温强排式」。只动聚光展示，不动蓝底 cfg。
+            for _n in (3, 2):
+                _cnt = {}
+                for _i in range(len(l2) - _n):
+                    _w = l2[_i:_i + _n]
+                    _cnt[_w] = _cnt.get(_w, 0) + 1
+                _reps = [w for w, c in _cnt.items() if c > 1]
+                if _reps:
+                    _w = min(_reps, key=lambda x: l2.index(x))
+                    _f = l2.index(_w)
+                    _s = l2.index(_w, _f + _n)
+                    l2 = l2[:_f] + l2[_f + _n:_s] + _w + l2[_s + _n:]
+                    break
+        except Exception:
+            pass
+        return l2
+    # ① 蓝底已出过 → 直接读它落地的那两句（口径 100% 一致）
+    try:
+        p = os.path.join(model_dir(model), "set.json")
+        if os.path.isfile(p):
+            d = json.load(io.open(p, encoding="utf-8"))
+            cfg = d.get("cfg") or {}
+            l1, l2 = str(cfg.get("line1") or "").strip(), str(cfg.get("line2") or "").strip()
+            mm = str(cfg.get("model") or m)
+            if l1 and l2:
+                if mm and l2.endswith(mm):
+                    l2 = l2[:-len(mm)].strip()
+                return l1, _dedup(l2)
+    except Exception:
+        pass
+    # ② 蓝底还没出 → 用同一套 _build_cfg 现算（不依赖条目名称）
+    try:
+        info = info or load_kinfo(model) or {}
+        if not info:
+            return "", ""
+        cfg = _build_cfg(info, mdir=model_dir(model)) or {}
+        l1, l2 = str(cfg.get("line1") or "").strip(), str(cfg.get("line2") or "").strip()
+        mm = str(cfg.get("model") or m)
+        if mm and l2.endswith(mm):
+            l2 = l2[:-len(mm)].strip()
+        return l1, _dedup(l2)
+    except Exception:
+        return "", ""

@@ -239,6 +239,7 @@ def aggregate(recs, t_mo=None):
     返回 (agg, agg_code)。"""
     agg = {}
     agg_code = {}
+    mo2meta = {}      # 型号→{code,n}（补卡片缺的 YS物料编码/名称，与 app/yy_agg.py 同款）
 
     for r0 in recs:
         # 2026-11-05 仓库黑名单：整行剔除（与 app/yy_agg.py yy_finish 同口径）
@@ -289,6 +290,16 @@ def aggregate(recs, t_mo=None):
             ac["a"] += av
             ac["wt"][wt] = round(ac["wt"].get(wt, 0.0) + av, 2)
             ac["whs"][k2] = round(ac["whs"].get(k2, 0.0) + av, 2)
+        # 型号→编码/物料名称对码（2026-11-06 用户令「物料编码没读取到，读取到再加上去」：
+        # 金山清理明细 YS物料编码 可能是 #N/A，用友行里有真编码 —— 与 app/yy_agg.py 同款）
+        _cc = str(r0.get(K_CODE) or "").strip()
+        _sn = str(r0.get(K_SKUNAME) or "").strip()
+        if _cc or _sn:
+            m2 = mo2meta.setdefault(key, {})
+            if _cc and not _cc.startswith("#") and not m2.get("code"):
+                m2["code"] = _cc
+            if _sn and not _sn.startswith("#") and not m2.get("n"):
+                m2["n"] = _sn
     for a in agg.values():
         lst = [{"w": k[0], "t": k[1], "n": v} for k, v in a["whs"].items()]
         lst.sort(key=lambda x: (-x["n"], x["w"]))
@@ -297,7 +308,7 @@ def aggregate(recs, t_mo=None):
         lst = [{"w": k[0], "t": k[1], "n": v} for k, v in a["whs"].items()]
         lst.sort(key=lambda x: (-x["n"], x["w"]))
         a["whs"] = lst
-    return agg, agg_code
+    return agg, agg_code, mo2meta
 
 
 def cloud_req(path, method="GET", obj=None, timeout=180):
@@ -406,14 +417,15 @@ def main():
     except Exception as _e:
         log("样本日志失败：" + str(_e))
     t_mo, card_codes = fetch_model_set()
-    agg, agg_code = aggregate(recs, t_mo)
-    log("聚合：%d 个型号 · %d 个编码" % (len(agg), len(agg_code)))
+    agg, agg_code, mo2meta = aggregate(recs, t_mo)
+    log("聚合：%d 个型号 · %d 个编码 · %d 条对码" % (len(agg), len(agg_code), len(mo2meta)))
     # 编码直连率：卡片编码能在库存编码桶里直接找到的（前端编码优先路径的实际命中率）
     if card_codes:
         hitc = sum(1 for c in card_codes if c in agg_code)
         log("编码直连：%d / %d 个卡片编码命中（%.0f%%）" % (hitc, len(card_codes), 100.0 * hitc / len(card_codes)))
     j, err = cloud_req("/stockcloud", "POST",
-                       {"ts": ts, "rows": len(recs), "stock": agg, "sbc": agg_code}, timeout=300)
+                       {"ts": ts, "rows": len(recs), "stock": agg, "sbc": agg_code,
+                        "mo2meta": mo2meta or None}, timeout=300)
     if err or not j or not j.get("ok"):
         log("❌ 上传云端失败：", err or (j or {}).get("msg"))
         sys.exit(6)

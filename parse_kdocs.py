@@ -45,6 +45,9 @@ def s(v):
     if v is None:
         return None
     t = str(v).strip()
+    # 表格公式报错值（#N/A 等）当空处理 —— 与 app/normalize.py sx() 同口径
+    if t.upper().startswith("#"):
+        return None
     return t if t else None
 
 
@@ -54,7 +57,7 @@ def num(v):
     if isinstance(v, (int, float)):
         return int(v) if float(v).is_integer() else float(v)
     t = str(v).strip().replace(",", "")
-    if not t or t in ("-", "--", "—", "无"):
+    if not t or t in ("-", "--", "—", "无") or t.upper().startswith("#"):
         return None
     try:
         f = float(t)
