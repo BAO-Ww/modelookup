@@ -394,7 +394,7 @@ def _chat(prompt):
         return json.loads(r.read().decode("utf-8"))["choices"][0]["message"]["content"]
 
 
-PROMPT = """你是闲鱼/小红书家电卖家文案写手。产品：{pname}（型号 {model}）。
+PROMPT = """你是闲鱼家电卖家文案写手。产品：{pname}（型号 {model}）。
 
 【铁律】
 1) 只能使用【真实数据】里出现的参数、功能和数字，绝对禁止编造数据里没有的参数、功能或数字。{no_params}
@@ -411,9 +411,8 @@ PROMPT = """你是闲鱼/小红书家电卖家文案写手。产品：{pname}（
    一级双变频（变频压缩机+变频离心风机），省电节能运行平稳降噪
    风冷无霜，不用手动除霜，制冷均匀食材不结冰
    中门全变温区（果蔬/珍品/零度/软冻/冷冻五种模式），一台顶多台
-4) xhs：正好5组，每组是 {{"t":"标题","txt":"配文"}} 两个键。t：小红书标题≤20字、可带emoji、但绝对不能带#话题；txt：100-160字真实买家分享口吻，必须分成2-3个自然段（每段以一个emoji开头，如 ✨/🧊/💪），至少引用2个【真实数据】里的具体参数或功能（越具体越像真用过的人），txt 末尾另起一行带3-6个#话题（如 #海尔 #冰箱 #家电分享）——#话题只能出现在 txt 末尾，绝不放进 t；5组必须是5个不同角度（价格惊喜/成色/功能亮点/使用场景/情绪共鸣），禁止同一句换emoji充数，禁止空话套话堆砌。
-5) 输出纯 JSON（不要 markdown 代码块）：
-{{"titles":["","",""],"points":["","","","","","","","","","","","","","",""],"xhs":[{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}},{{"t":"","txt":""}}]}}
+4) 输出纯 JSON（不要 markdown 代码块）：
+{{"titles":["","",""],"points":["","","","","","","","","","","","","","",""]}}
 
 【真实数据】
 {facts}"""
@@ -446,7 +445,7 @@ def _fact_floats(facts):
 
 
 def _verify(ai, facts, nums_set):
-    """防编造：titles/points 整行剔除；xhs 成对校验（t/txt 任一含未知数字整组剔）。"""
+    """防编造：titles/points 整行剔除。"""
     fl = _fact_floats(facts)
 
     def ok(line):
@@ -464,12 +463,7 @@ def _verify(ai, facts, nums_set):
     out = {}
     out['titles'] = [t for t in ai.get('titles') or [] if isinstance(t, str) and ok(t)][:3]
     out['points'] = [p for p in ai.get('points') or [] if isinstance(p, str) and ok(p)][:15]
-    xh = []
-    for x in (ai.get('xhs') or []):
-        if isinstance(x, dict) and isinstance(x.get('t'), str) and isinstance(x.get('txt'), str):
-            if ok(x['t']) and ok(x['txt']):
-                xh.append({'t': x['t'].strip(), 'txt': x['txt'].strip()})
-    out['xhs'] = xh[:5]
+    out['xhs'] = []
     return out
 
 
@@ -501,20 +495,16 @@ def glm_copy(model, kind, data, log):
         # 价格尾巴兜底：AI 没听话写出 1649.0元 → 1649元（4.5kg 这类真小数不受影响）
         for _k in ('titles', 'points'):
             res[_k] = [re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', s) for s in res[_k]]
-        for x in res['xhs']:
-            x['t'] = re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', x['t'])
-            x['txt'] = re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', x['txt'])
-        # 质量闸：卖点 8-60 字（剔「智能生活新选择」类口水话）；配文 ≥50 字且带#话题
+        # 质量闸：卖点 8-60 字（剔「智能生活新选择」类口水话）
         res['points'] = [p for p in res['points'] if 8 <= len(p) <= 60]
-        res['xhs'] = [x for x in res['xhs'] if len(x.get('txt', '')) >= 50 and '#' in x.get('txt', '')]
-        score = len(res['xhs']) * 10 + len(res['points']) + len(res['titles'])
+        score = len(res['points']) + len(res['titles'])
         if score > best_score:
             best, best_score = res, score
-        if len(res['xhs']) >= 4 and len(res['points']) >= 12:
+        if len(res['points']) >= 12:
             break
-        log("第 %d 次生成质量不够（配文 %d/5、卖点 %d/15），自动重试" % (attempt + 1, len(res['xhs']), len(res['points'])))
+        log("第 %d 次生成质量不够（卖点 %d/15），自动重试" % (attempt + 1, len(res['points'])))
     res = best or {'titles': [], 'points': [], 'xhs': []}
-    dropped = ((3 - len(res['titles'])) + (15 - len(res['points'])) + (5 - len(res['xhs'])))
+    dropped = ((3 - len(res['titles'])) + (15 - len(res['points'])))
     if dropped > 0:
         log("防编造/质量闸共剔除 %d 条不合格内容" % dropped)
     return res
@@ -695,7 +685,7 @@ def generate(model, kind='l', force=0, log=None):
            "titles": ai['titles'], "points": ai['points'],
            "desc_nat": build_desc(model, kk, data, pts, 'nat'),
            "desc_rep": build_desc(model, kk, data, pts, 'rep'),
-           "xhs": ai['xhs'],
+           "xhs": ai.get('xhs') or [],
            "images": images}
     try:
         with io.open(cache, "w", encoding="utf-8") as f:

@@ -15,7 +15,7 @@ import state
 from config import CLEAN_XLSX, PRICE_XLSX, PAYLOAD_VER, SOURCES, ONLINE_SHARE, FILE_ID, SUBSIDY_XLSX
 from paths import rp
 from parsers_yr import load_records_from_path, merge_records, parse_subsidy_rows
-from normalize import norm_model
+from normalize import norm_model, is_err_val
 from paths import rp, wp
 
 
@@ -330,10 +330,11 @@ def rebuild(log):
                     or _m2.get(str(r.get("c") or "")))
             if not meta:
                 continue
-            if not r.get("code") and meta.get("code"):
+            # 「空」的口径包括公式报错值（#N/A 等）——金山滞销明细里它们非空但是废值
+            if (not r.get("code") or is_err_val(r.get("code"))) and meta.get("code"):
                 r["code"] = meta["code"]
                 _n_fix += 1
-            if not r.get("n") and meta.get("n"):
+            if (not r.get("n") or is_err_val(r.get("n"))) and meta.get("n"):
                 r["n"] = meta["n"]
         if _n_fix:
             log("用友对码补上 %d 张卡缺的物料编码/名称" % _n_fix)
