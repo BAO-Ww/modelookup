@@ -54,6 +54,9 @@ body{
 }
 .yyalert b{color:#912018}
 .yyalert .close{margin-left:auto;border:0;background:none;color:#b42318;font-size:16px;cursor:pointer;padding:0 4px;line-height:1}
+/* 2026-11-06 用户令「只有通知我？」：红条加立即更新按钮，报停摆也给自救入口 */
+.yyalert .retry{border:0;background:#c0392b;color:#fff;border-radius:8px;padding:5px 14px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.yyalert .retry:disabled{opacity:.55;cursor:default}
 /* 亏钱哨兵（2026-10-10）：已发布型号按选定口径算要亏了 → 黄条提醒 */
 .lossalert{background:#fff7e6;border-color:#ffd591;color:#ad6800;flex-wrap:wrap;row-gap:4px}
 .lossalert b{color:#874d00;white-space:normal}
@@ -7605,6 +7608,7 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
      wf = all（表格+库存）/ kd（只表格）/ yy（只库存）；原生菜单的「从金山文档更新数据」
      和「更新实时库存」也走这里（startCloud），只是 wf 不同。 */
   function startCloud(wf){
+    window.startCloud = startCloud;   /* 2026-11-06：数据链路红条的「立即更新」按钮复用这条链路 */
     if (all && all.disabled) return;
     busy(true, '正在云端更新…');
     /* 2026-11-05：子账号不发云端任务，文案别说「触发 GitHub Actions」 */
@@ -7785,8 +7789,18 @@ document.getElementById('impimg').addEventListener('click', importMyImgs);
       if (m && da.dataset.m !== m){
         da.dataset.m = m;
         da.innerHTML = '<b>⚠ 数据链路异常</b><span>' + esc(m) + '</span>'
+          + '<button class="retry" title="马上重新触发云端抓取并同步（跟侧栏「全部更新」同一条链路）">立即更新</button>'
           + '<button class="close" title="先收起（修好自动消失）">×</button>';
         da.hidden = false;
+        da.querySelector('.retry').addEventListener('click', function(){
+          var b = da.querySelector('.retry');
+          b.disabled = true; b.textContent = '触发中…';
+          try {
+            if (typeof window.startCloud === 'function') window.startCloud('all');
+            else if (typeof startCloud === 'function') startCloud('all');
+          } catch (e) {}
+          setTimeout(function(){ b.disabled = false; b.textContent = '立即更新'; }, 8000);
+        });
         da.querySelector('.close').addEventListener('click', function(){ da.hidden = true; });
       } else if (!m && da.dataset.m){
         da.dataset.m = '';        // 修好了：自动消失（哪怕被手动收起过）

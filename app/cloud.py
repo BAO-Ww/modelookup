@@ -191,7 +191,8 @@ def stock_push_cloud(log):
     """管理号拉完用友 → 整包上传云端，全员共享。失败只记日志，不影响本机。"""
     with state.STOCK_LOCK:
         obj = {"ts": state.STOCK.get("ts"), "rows": state.STOCK.get("rows"), "stock": state.STOCK.get("stock"),
-               "sbc": state.STOCK.get("sbc") or None}
+               "sbc": state.STOCK.get("sbc") or None,
+               "mo2meta": state.STOCK.get("mo2meta") or None}
     j, err = cloud_req("/stockcloud", "POST", obj, timeout=180)
     if err or not j or not j.get("ok"):
         log("⚠ 库存上传云端失败（子账号拿不到这次的更新）：%s" % (err or (j or {}).get("msg")))
@@ -247,7 +248,7 @@ def stock_pull_cloud(log, force=True):
         return
     with state.STOCK_LOCK:
         state.STOCK = {"ts": j.get("ts"), "rows": j.get("rows") or 0, "stock": j["stock"],
-                       "sbc": j.get("sbc") or None}
+                       "sbc": j.get("sbc") or None, "mo2meta": j.get("mo2meta") or None}
     state.stock_save()
     ts = j.get("ts") or ""
     log("云端库存同步完成：%s 行（%s）" % (j.get("rows") or 0, ts))
@@ -320,6 +321,19 @@ def _data_sentinel(j, err, ts):
         up2 = int((js or {}).get("up") or 0) if (js and js.get("ok")) else 0
         if up2 and _t.time() * 1000 - up2 > 2 * 3600 * 1000 and yyok:
             msgs.append(_stale_msg("用友库存", up2, 2))
+    except Exception:
+        pass
+    # ③ GitHub 令牌临期提醒（2026-11-06 用户令「快过期了要通知我啊」）：本机触发器
+    #   每次调 GitHub 都会把令牌过期时间落到 pat_expiry.json；剩 7 天内亮提醒——
+    #   令牌一过期三层触发全瘫（11-05 实锤），必须提前换。
+    try:
+        _pe = json.loads(io.open(wp("pat_expiry.json"), encoding="utf-8").read() or "{}")
+        _exp = float(_pe.get("utc_ts") or 0)
+        if _exp:
+            _left = (_exp - _t.time()) / 86400.0
+            if 0 < _left <= 7:
+                msgs.append("GitHub 令牌 %s 过期（还剩 %.0f 天），到期抓取会全停——提前在 GitHub 重新生成并更新" % (
+                    _t.strftime("%m-%d", _t.localtime(_exp)), _left))
     except Exception:
         pass
     if msgs:

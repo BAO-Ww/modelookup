@@ -1366,8 +1366,11 @@ async function route(request, env, path, ctx) {
     // sbc = 按物料编码聚合的库存桶（2026-10-10「编码优先」）：编码是 SKU 唯一码，
     // 前端有编码的卡片走它做一对一硬核对。可选字段，旧客户端不带也能传。
     const sbc = (b.sbc && typeof b.sbc === "object" && !Array.isArray(b.sbc)) ? b.sbc : null;
+    // mo2meta = 型号→{code,n} 对码（2026-11-06「物料编码没读取到，读取到再加上去」）：
+    // 金山清理明细 YS物料编码 可能是 #N/A，用友行里有真编码 —— 随库存一起共享，可选字段。
+    const mo2meta = (b.mo2meta && typeof b.mo2meta === "object" && !Array.isArray(b.mo2meta)) ? b.mo2meta : null;
     const obj = { ts: String(b.ts || "").slice(0, 64), rows: +b.rows || 0, stock: b.stock,
-                  sbc: sbc || undefined, by: who, up: Date.now() };
+                  sbc: sbc || undefined, mo2meta: mo2meta || undefined, by: who, up: Date.now() };
     const payload = JSON.stringify(obj);
     if (payload.length > 3000000) return jerr("库存数据过大（" + (payload.length / 1048576).toFixed(1) + "MB），拒收", 413);
     await env.KV.put("stocklive", payload);
@@ -1377,7 +1380,8 @@ async function route(request, env, path, ctx) {
   if (path === "/stockcloud" && request.method === "GET") {
     const obj = await getJSON(env, "stocklive", null);
     if (!obj) return jerr("云端还没有共享库存（管理号更新一次后这里就有了）", 404);
-    return J({ ok: true, ts: obj.ts, rows: obj.rows, stock: obj.stock, sbc: obj.sbc || null, by: obj.by });
+    return J({ ok: true, ts: obj.ts, rows: obj.rows, stock: obj.stock, sbc: obj.sbc || null,
+               mo2meta: obj.mo2meta || null, by: obj.by });
   }
   // 轻量探测：只回时间戳/行数/谁更新的（子账号后台轮询用，不用每次拉 ~0.4MB 全量）
   // 数据过期自动触发（2026-10-10）：软件开着时每 60~90 秒探一次 meta，

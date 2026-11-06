@@ -619,7 +619,14 @@ def gen_style(model, style, sell_price=None, version="N", entry_title=None):
             _kinfo = _ks.load_kinfo(model) or info
             info = dict(_kinfo)
             if entry_title:
-                info["title"] = entry_title
+                # 2026-11-06 防呆：条目标题里混进表格公式报错值（#N/A 实锤印上聚光首图）
+                # → 剔掉报错段再给；剔完为空就不覆盖（退回官网抓取链的标题兜底）
+                import re as _re
+                _et = _re.sub(r"#\s*(N/A|NA|REF!|VALUE!|NAME\?|DIV/0!|NULL!|NUM!|SPILL!|CALC!)",
+                              " ", str(entry_title), flags=_re.I)
+                _et = _re.sub(r"\s{2,}", " ", _et).strip()
+                if _et:
+                    info["title"] = _et
             info["dir"] = _ks.model_dir(model)
             src = os.path.join(info["dir"], "官网")
             os.makedirs(src, exist_ok=True)

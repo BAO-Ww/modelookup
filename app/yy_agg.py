@@ -70,6 +70,10 @@ def yy_finish(recs, log):
         pass                              # 表拿不到就退回纯拼接口径，不影响出数
     agg = {}
     agg_code = {}                          # 编码桶（2026-10-10 深夜「编码优先」）：与型号桶并行
+    mo2meta = {}                           # 型号→编码/物料名称（2026-11-06 用户令「物料编码没读取到，
+                                           # 读取到再加上去」：金山清理明细的 YS物料编码 本身可能是
+                                           # VLOOKUP #N/A（JSQ30-16WM7DPTGU1 实锤），用友行里有真
+                                           # 编码跟型号同行 —— 聚一份映射给 payload 重建时补缺）
     for r0 in recs:
         # 2026-11-05 仓库黑名单：整行剔除（型号桶/编码桶都不进，q/a/wt/whs 全干净）
         if wh_excluded(r0.get(YY_K_WH)):
@@ -122,6 +126,15 @@ def yy_finish(recs, log):
             ac["a"] += av
             ac["wt"][wt] = round(ac["wt"].get(wt, 0.0) + av, 2)
             ac["whs"][k2] = round(ac["whs"].get(k2, 0.0) + av, 2)
+        # 型号→编码/物料名称对码（同 key 多行取第一个非空干净值）
+        _cc = str(r0.get("productsku_cCode") or "").strip()
+        _sn = str(r0.get(YY_K_SKUNAME) or "").strip()
+        if _cc or _sn:
+            m2 = mo2meta.setdefault(key, {})
+            if _cc and not _cc.startswith("#") and not m2.get("code"):
+                m2["code"] = _cc
+            if _sn and not _sn.startswith("#") and not m2.get("n"):
+                m2["n"] = _sn
 
     # whs: {(仓名, 类型): 数量} → 排序列表 [{w, t, n}]（数量多的在前）
     for a in agg.values():
@@ -141,7 +154,8 @@ def yy_finish(recs, log):
 
     ts = time.strftime("%Y-%m-%d %H:%M")   # 2026-10-14 带年份（体检 P1-A1：旧 %m-%d 跨年字典序比较必炸）
     with state.STOCK_LOCK:
-        state.STOCK = {"ts": ts, "rows": len(recs), "stock": agg, "sbc": agg_code}
+        state.STOCK = {"ts": ts, "rows": len(recs), "stock": agg, "sbc": agg_code,
+                       "mo2meta": mo2meta or None}
     state.stock_save()
     log("实时库存更新完成：%d 行 · %d 个型号 · 命中表中 %d 个型号" % (len(recs), len(agg), hit))
     state._STK_DETAIL[0] = "%d 行现存量 · %d 个型号有货 · 命中表中 %d 个，已共享云端" % (len(recs), len(agg), hit)

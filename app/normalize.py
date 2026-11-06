@@ -72,10 +72,26 @@ def nat_kind(v):
     return t, cat
 
 
+# Excel/WPS 公式报错值（2026-11-06 用户实锤：JSQ30-16WM7DPTGU1 卡片标题变成 #N/A，
+# 聚光首图大字直接印在机器上）。金山表里 VLOOKUP 没匹配上就落这种值，
+# 解析时一律当空处理 —— 空出来的名字由合并阶段用价格表的干净名称补位。
+_ERR_VALS = ("#N/A", "#REF!", "#VALUE!", "#NAME?", "#DIV/0!", "#NULL!", "#NUM!", "#SPILL!", "#CALC!")
+
+
+def is_err_val(v):
+    """是不是表格公式报错值（#N/A 这类）——是就返回 True。"""
+    t = str(v if v is not None else "").strip().upper()
+    if not t.startswith("#"):
+        return False
+    return any(t == e or t.startswith(e) for e in _ERR_VALS) or t in ("#N/A", "#NA")
+
+
 def sx(v):
     if v is None:
         return None
     t = str(v).strip()
+    if is_err_val(t):
+        return None
     return t or None
 
 
@@ -86,6 +102,8 @@ def num(v):
         return int(v) if float(v).is_integer() else float(v)
     t = str(v).strip().replace(",", "")
     if not t or t in ("-", "--", "—", "无"):
+        return None
+    if is_err_val(t):                      # 公式报错值（#N/A 等）不进任何数字字段
         return None
     try:
         f = float(t)
