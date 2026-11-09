@@ -6,6 +6,16 @@ from normalize import norm_model, nat_kind
 from xlsx_core import col_of, header_map, nc, rows_of, sc
 
 
+def _pan_of(r):
+    """货盘标记（2026-11-09 用户令）：表最后一列没有表头，行里写「皓群货盘」这类字样。
+    取该行最后一个非空单元格，内容含「货盘」才算（全国可发列的「不能发/0/广东省内可发」都不会误中）。"""
+    for v in reversed(r):
+        t = str(v).strip() if v is not None else ""
+        if t:
+            return t if "货盘" in t else ""
+    return ""
+
+
 def parse_clean(ws, kind):
     """公布版清理明细。kind: 'l'=滞销  's'=样机。"""
     rows = rows_of(ws)
@@ -34,6 +44,7 @@ def parse_clean(ws, kind):
             "lp": nc(col_of(col, "零售指导价"), r), "nat": nat_raw, "natk": nat_k,
             "q": nc(i_q, r), "p": nc(i_p, r), "rb": nc(i_rb, r), "av": nc(i_av, r),
             "st": sc(col_of(col, "产品状态"), r),
+            "hp": _pan_of(r),
         })
     return out
 

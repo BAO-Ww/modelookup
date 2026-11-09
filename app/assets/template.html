@@ -3456,18 +3456,53 @@ function renderItem(it){
         if (pok('p_pt') && isNum(sc.pt) && sc.pt > 0) g.push(prCell('价格含税·' + (sc.sfrom || '未标货源'), sc.pt, 'tax', '价格含税（' + (sc.sfrom || '未标货源') + '）'));
       });
     } else if (pok('p_pt') && isNum(it.pt) && it.pt > 0) g.push(prCell('价格含税', it.pt, 'tax', '价格含税'));
-    if (pok('p_lpz') && ((isNum(it.lpz) && it.lpz > 0) || it.lpz === '送')) { g.push(prCell('滞销清理价', it.lpz, 'hot', '滞销清理价')); hot = isNum(it.lpz) ? it.lpz : 0; }
-    if (pok('p_spz') && ((isNum(it.spz) && it.spz > 0) || it.spz === '送')) { g.push(prCell('样机清理价', it.spz, hot == null ? 'hot' : '', '样机清理价')); if (hot == null) hot = isNum(it.spz) ? it.spz : 0; }
+    /* 多货源清理明细（2026-11-09 用户令）：隆阳 + 皓群货盘是两个拿货价，两个都显示不能只留一个；
+       主价 = 最后一行（lsrcs/ssrcs 末条），挂 hot 供计算器，其它货源并列不抢 hot */
+    if (it.lsrcs && it.lsrcs.length > 1){
+      it.lsrcs.forEach(function(_s, _i){
+        if (pok('p_lpz') && ((isNum(_s.p) && _s.p > 0) || _s.p === '送')){
+          var _nm = '滞销清理价·' + (_s.hp || '隆阳');
+          var _main = (_i === it.lsrcs.length - 1);
+          g.push(prCell(_nm, _s.p, _main ? 'hot' : '', _nm));
+          if (_main) hot = isNum(_s.p) ? _s.p : 0;
+        }
+      });
+    } else if (pok('p_lpz') && ((isNum(it.lpz) && it.lpz > 0) || it.lpz === '送')) { g.push(prCell('滞销清理价', it.lpz, 'hot', '滞销清理价')); hot = isNum(it.lpz) ? it.lpz : 0; }
+    if (it.ssrcs && it.ssrcs.length > 1){
+      it.ssrcs.forEach(function(_s, _i){
+        if (pok('p_spz') && ((isNum(_s.p) && _s.p > 0) || _s.p === '送')){
+          var _nm = '样机清理价·' + (_s.hp || '隆阳');
+          var _main = (_i === it.ssrcs.length - 1);
+          g.push(prCell(_nm, _s.p, (hot == null && _main) ? 'hot' : '', _nm));
+          if (hot == null && _main) hot = isNum(_s.p) ? _s.p : 0;
+        }
+      });
+    } else if (pok('p_spz') && ((isNum(it.spz) && it.spz > 0) || it.spz === '送')) { g.push(prCell('样机清理价', it.spz, hot == null ? 'hot' : '', '样机清理价')); if (hot == null) hot = isNum(it.spz) ? it.spz : 0; }
     /* 价格含税（2026-10-10 用户拍板）：价格表（LYDF）只剩这一个价了，
        放下来跟清理价并成一排（原来单独一行的「滞销价格/样机价格」随 LYDF 停读一并删掉） */
     /* 官方售价（2026-10-12）：欣盛官方商城按物料编码对上的，命中即以商城为准；
        没对上的维持金山表「零售指导价」 */
     if (pok('p_lp') && isNum(it.xp) && it.xp > 0) g.push(prCell('官方售价', it.xp, 'rp', '官方售价 · 欣盛官方商城'));
     else if (pok('p_lp') && isNum(it.lp) && it.lp > 0) g.push(prCell('零售指导价', it.lp, 'rp'));
-    /* 出库奖励「点了才算」状态跟发布记录走（2026-10-13）：已点过的渲染回 on 高亮 */
+    /* 出库奖励「点了才算」状态跟发布记录走（2026-10-13）：已点过的渲染回 on 高亮；
+       多货源（2026-11-09 用户令二改）：奖励也逐货源各一格，格头注明隆阳/皓群货盘；
+       点了哪格按哪格的金额算（data-bnlb 存点中那格的值），回显高亮金额匹配的那格 */
     var _bnr = MARKED[it.c] && MARKED[it.c].bn || null;
-    if (pok('p_lb') && isNum(it.lb) && it.lb > 0) g.push(prCell('滞销出库奖励', it.lb, 'bonus' + (_bnr && +_bnr.lb > 0 ? ' on' : ''), 'bonus-lb'));
-    if (pok('p_sb') && isNum(it.sb) && it.sb > 0) g.push(prCell('样机出库奖励', it.sb, 'bonus' + (_bnr && +_bnr.sb > 0 ? ' on' : ''), 'bonus-sb'));
+    var _bnCells = function(_ss, _lbl, _mv, _perm, _bk){
+      if (!_ss || _ss.length < 2){                      /* 单货源：维持原样一格 */
+        if (pok(_perm) && isNum(_mv) && _mv > 0)
+          g.push(prCell(_lbl + '出库奖励', _mv, 'bonus' + (_bnr && +_bnr[_bk] > 0 ? ' on' : ''), 'bonus-' + _bk));
+        return;
+      }
+      _ss.forEach(function(_s){
+        if (!pok(_perm) || !isNum(_s.rb) || _s.rb <= 0) return;
+        var _nm = _lbl + '出库奖励·' + (_s.hp || '隆阳');
+        var _on = _bnr && +_bnr[_bk] > 0 && +_bnr[_bk] === +_s.rb;
+        g.push(prCell(_nm, _s.rb, 'bonus' + (_on ? ' on' : ''), 'bonus-' + _bk));
+      });
+    };
+    _bnCells(it.lsrcs, '滞销', it.lb, 'p_lb', 'lb');
+    _bnCells(it.ssrcs, '样机', it.sb, 'p_sb', 'sb');
     /* 清理数量（2026-10 三次改版）：= 用友实时库存各仓数量加总。
        2026-10-09 晚（用户：库存对不对是重中之重）：实时已拉过就以用友为准——
        报表里查不到这台 = 没有现存 = 0（不再拿金山表的计划清理数量冒充库存，
@@ -3517,8 +3552,23 @@ function renderItem(it){
     return { t: '不可发全国 · 广州可发+100', cls: 'nat-s',
              tt: '只能发深圳/惠州/广州/东莞：深圳/东莞/惠州包邮，广州加 100 运费' };
   }
-  var _toks = [['正品', _zTok], ['滞销机', _bTok(it.natkl, it.natl)], ['样机', _bTok(it.natks, it.nats)]]
-    .filter(function(x){ return x[1]; });
+  /* 多货源口径不同 → 逐货源一块牌（2026-11-09 用户令：可送地址不一样要注明，一样就不动）；
+     口径一致时返回 null 回落主牌，不制造重复牌 */
+  function _srcNatToks(srcs, _pre){
+    if (!srcs || srcs.length < 2) return null;
+    var _ts = [];
+    srcs.forEach(function(s){
+      var _b = _bTok(s.natk, s.nat);
+      if (_b) _ts.push([_pre + '·' + (s.hp || '隆阳'), _b]);
+    });
+    if (_ts.length < 2) return null;
+    return _ts.every(function(x){ return x[1].t === _ts[0][1].t; }) ? null : _ts;
+  }
+  var _toks = [['正品', _zTok]];
+  var _lm = _srcNatToks(it.lsrcs, '滞销'), _sm = _srcNatToks(it.ssrcs, '样机');
+  if (_lm) _toks = _toks.concat(_lm); else _toks.push(['滞销机', _bTok(it.natkl, it.natl)]);
+  if (_sm) _toks = _toks.concat(_sm); else _toks.push(['样机', _bTok(it.natks, it.nats)]);
+  _toks = _toks.filter(function(x){ return x[1]; });
   if (_toks.length === 1){
     var _t1 = _toks[0][1];
     natHTML += '<span class="pill ' + _t1.cls + '"' + (_t1.tt ? ' title="' + esc(_t1.tt) + '"' : '') + '>' + esc(_t1.t) + '</span> ';
@@ -7608,9 +7658,16 @@ function pickCell(cell){
   if (cell.dataset.bonus){
     var isLb = cell.dataset.bonus === 'lb';
     var k = isLb ? 'data-bnlb' : 'data-bnsb';
-    var _on = !box.getAttribute(k);
+    /* 多货源奖励格并列（2026-11-09）：同一金额再点=取消；点另一货源=换这笔奖励，不是关 */
+    var _cur = box.getAttribute(k);
+    var _on = !(_cur !== null && _cur === (cell.dataset.v || '0'));
     if (!_on){ box.removeAttribute(k); cell.classList.remove('on'); }
-    else { box.setAttribute(k, cell.dataset.v || '0'); cell.classList.add('on'); }
+    else {
+      box.setAttribute(k, cell.dataset.v || '0'); cell.classList.add('on');
+      Array.prototype.forEach.call(card.querySelectorAll('.pr.bonus'), function(_c){
+        if (_c !== cell && _c.dataset.bonus === cell.dataset.bonus) _c.classList.remove('on');
+      });
+    }
     saveBonusSel(box.dataset.key, isLb, cell.dataset.v, _on);   /* 已发布的跟记录走（2026-10-13） */
     calcUpdate(box);
     return;

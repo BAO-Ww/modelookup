@@ -135,10 +135,17 @@ def merge_records(allrecs):
             if "l" not in r["k"]:
                 r["k"] += "l"
             r.update(lq=rec["q"], lpz=rec["p"], lb=rec["rb"], lav=rec["av"])
+            _srcs = r.setdefault("_lsrcs", [])
         else:
             if "s" not in r["k"]:
                 r["k"] += "s"
             r.update(sq=rec["q"], spz=rec["p"], sb=rec["rb"], sav=rec["av"], st=rec["st"])
+            _srcs = r.setdefault("_ssrcs", [])
+        # 每行都留档（2026-11-09 用户令：隆阳 + 皓群货盘是两个拿货价，都要显示不能盖）：
+        # 主字段仍取最后一行（老口径、利润计算不变），全部货源挂 lsrcs/ssrcs 供前端并列。
+        _srcs.append({"hp": rec.get("hp") or "", "q": rec["q"], "p": rec["p"],
+                      "rb": rec["rb"], "av": rec["av"], "nat": rec["nat"],
+                      "natk": rec.get("natk")})
         if rec.get("mo") and len(str(rec["mo"])) > len(str(r.get("mo") or "")):
             r["mo"] = rec["mo"]
         if rec.get("nat") is not None:
@@ -149,6 +156,16 @@ def merge_records(allrecs):
             r["natl"], r["natkl"] = rec["nat"], rec.get("natk")
         else:
             r["nats"], r["natks"] = rec["nat"], rec.get("natk")
+
+    # 清理明细多货源收口（2026-11-09）：只剩一行（多数型号）就不挂 lsrcs/ssrcs，
+    # payload 不膨胀；两个及以上才挂，前端据此并列显示两个拿货价。
+    # 2026-11-09 用户令（二改）：**不去重** —— 隆阳/皓群是两个拿货价，
+    # 就算两行价格数量全同也要拆开各显示各的，去重会把「同价不同盘」吞掉。
+    for r in rows.values():
+        for _kk, _sk in (("_lsrcs", "lsrcs"), ("_ssrcs", "ssrcs")):
+            _list = r.pop(_kk, None)
+            if _list and len(_list) > 1:
+                r[_sk] = _list
 
     # ---- 第二批：价格表
     #   精准归卡（2026-10-10 两轮定稿）：

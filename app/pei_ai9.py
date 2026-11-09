@@ -695,18 +695,30 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
             _l1, _l2 = "", ""
         if not _l1:
             _l1, _l2 = _spot_title(), ""
+        # 标题黄底胶囊（2026-11-09 用户令「白字也要加上黄色的底色」）：跟型号胶囊同款
+        # 黄底(255,199,0)白字，宽高全跟文字走；返回胶囊底边 y 供下一行排版。
+        def _spot_pill(_yc, _txt, _sz):
+            _tw = int(dr.textlength(_txt, font=font(_sz, True)))
+            _pw = _tw + int(_sz * 1.6)
+            _ph = int(_sz * 1.45)
+            _x0 = W // 2 - _pw // 2
+            dr.rounded_rectangle([_x0, _yc - _ph // 2, _x0 + _pw, _yc + _ph // 2],
+                                 _ph // 2, fill=(255, 199, 0, 255))
+            T(dr, (W // 2, _yc + 2), _txt, _sz, "#ffffff", "mm")
+            return _yc + _ph // 2
         _s1 = 92
-        while _s1 > 40 and dr.textlength(_l1, font=font(_s1, True)) > W * 0.86:
+        while _s1 > 40 and dr.textlength(_l1, font=font(_s1, True)) > W * 0.80:
             _s1 -= 2
         _y1 = 424 if _l2 else 452
-        dr.text((W // 2, _y1), _l1, font=font(_s1, True), fill="#ffffff",
-                anchor="mm", stroke_width=8, stroke_fill=(10, 12, 17, 210))
+        _bot1 = _spot_pill(_y1, _l1, _s1)
         if _l2:
             _s2 = 62
-            while _s2 > 32 and dr.textlength(_l2, font=font(_s2, True)) > W * 0.80:
+            while _s2 > 32 and dr.textlength(_l2, font=font(_s2, True)) > W * 0.74:
                 _s2 -= 2
-            dr.text((W // 2, _y1 + 82), _l2, font=font(_s2, True), fill="#e9eef7",
-                    anchor="mm", stroke_width=6, stroke_fill=(10, 12, 17, 200))
+            _y2 = _bot1 + 16 + int(_s2 * 1.45) // 2
+            _bot2 = _spot_pill(_y2, _l2, _s2)
+        else:
+            _bot2 = _bot1
         # 型号胶囊（2026-10-30 样张 v2 用户定稿「用这个」）：字号/宽/高全部跟着型号文字走，
         # 超长型号整颗缩号防顶出画面（常规 XQG100-H28E≈54号，超长 BCD-522… 17 位自动缩到放得下）
         _mt = P['model']
@@ -718,7 +730,7 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
             _tw_ = dr.textlength(_mt, font=font(_cb))
             _pw = int(_tw_) + int(_cb * 2.5)
         _ph = int(_cb * 2.1)                      # 高也跟字号走
-        _py = 562 if _l2 else 546
+        _py = max(546, _bot2 + 26)                # 型号胶囊跟着标题胶囊底走：单行维持原位，双行自动下让
         _px = W // 2 - _pw // 2
         dr.rounded_rectangle([_px, _py, _px + _pw, _py + _ph], _ph // 2, fill=(255, 199, 0, 255))
         T(dr, (W // 2, _py + _ph // 2 + 2), _mt, _cb, "#ffffff", "mm")
