@@ -159,13 +159,24 @@ def merge_records(allrecs):
 
     # 清理明细多货源收口（2026-11-09）：只剩一行（多数型号）就不挂 lsrcs/ssrcs，
     # payload 不膨胀；两个及以上才挂，前端据此并列显示两个拿货价。
-    # 2026-11-09 用户令（二改）：**不去重** —— 隆阳/皓群是两个拿货价，
-    # 就算两行价格数量全同也要拆开各显示各的，去重会把「同价不同盘」吞掉。
+    # 去重口径（2026-11-09 用户令二改）：键 = 货源名 hp + 清理价 + 出库奖励 + 可发口径，
+    # **不含数量/可用量** —— 同一型号在「清理明细」和「价格表」各来一条时只有计划数量不同
+    # （BCD-540/550 实测），价格奖励一模一样，留两格就是卡上两个「·隆阳 ¥6,599」；
+    # 保留先到的（清理明细在前，数量更准）。隆阳 vs 皓群 hp 不同 ⇒ 哪怕同价也各占一格。
     for r in rows.values():
         for _kk, _sk in (("_lsrcs", "lsrcs"), ("_ssrcs", "ssrcs")):
             _list = r.pop(_kk, None)
-            if _list and len(_list) > 1:
-                r[_sk] = _list
+            if not _list:
+                continue
+            _seen, _keep = set(), []
+            for _s in _list:
+                _key = (_s["hp"], str(_s["p"]), str(_s["rb"]), _s["nat"])
+                if _key in _seen:
+                    continue
+                _seen.add(_key)
+                _keep.append(_s)
+            if len(_keep) > 1:
+                r[_sk] = _keep
 
     # ---- 第二批：价格表
     #   精准归卡（2026-10-10 两轮定稿）：
