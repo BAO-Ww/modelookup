@@ -5180,7 +5180,23 @@ function openPickKind(k, recKey){
         }
       }
       var _bn = _mk.bn ? ((+_mk.bn.lb || 0) + (+_mk.bn.sb || 0)) : 0;
-      var _fr = earnFreight(_mk, itemOf(k), curKindOf() || 'l');
+      /* 运费跟成本口径走（2026-11-09 用户实测「选的是价格含税的为什么会亏」）：
+         弹窗原来按发布记录的品类 k（正品→滞销口径）判运费，卡片计算器却按成本口径判
+         ——含税货 ship=「全国，含运费」卡上不扣、弹窗扣 100，同一笔账两个结果。
+         改成与卡片同源：口径是清理价 → 按滞销/样机判；价格含税等价格表口径 → 走发货区域
+         （「全国，含运费」族不扣）；没落库口径退回卡片当前下拉，再退发布品类 k */
+      var _csL = _mk.cs && _mk.cs.l ? String(_mk.cs.l) : null;
+      if (!_csL){
+        var _fbs = document.querySelectorAll('.calc');
+        for (var _fbi = 0; _fbi < _fbs.length; _fbi++){
+          if (_fbs[_fbi].getAttribute('data-key') === k){
+            var _fcs = _fbs[_fbi].querySelector('.costsel');
+            if (_fcs && _fcs.selectedIndex >= 0) _csL = _fcs.options[_fcs.selectedIndex].getAttribute('data-l');
+            break;
+          }
+        }
+      }
+      var _fr = earnFreight(_mk, itemOf(k), _csL ? kindOfBasis(_csL) : (curKindOf() || 'l'));
       if (!isFinite(_v) || _v <= 0){ _ke.textContent = '挣：填了价就算给你看（按卡片上的成本口径）'; return; }
       if (!isFinite(_cost) || _cost <= 0){ _ke.textContent = '挣：—（这张卡还没有成本口径，先在卡片上选一个）'; return; }
       var _e = Math.round((_v * (1 - FEE) - _cost + _bn - _fr) * 100) / 100;
