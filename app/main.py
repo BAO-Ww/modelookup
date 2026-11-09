@@ -252,6 +252,15 @@ def main():
     _tick("实时库存缓存：%s" % ("上次更新 " + str(state_stock_ts()) if state_stock_ts() else "还没有"))
     httpd, port = start_server()
     _tick("本地服务已起")
+    # 2026-11-09：登录令牌剩 ≤7 天就静默续期（30 天周期，不续的话每 30 天被踢一次）
+    try:
+        import threading as _thr
+        import cloud as _cl
+        import state as _st
+        _thr.Thread(target=lambda: _cl.renew_token_bg(_st.LOG.append),
+                    name="token-renew", daemon=True).start()
+    except Exception:
+        pass
     # 2026-11-04：goofish 内嵌页自动点已删（用户令「闲鱼自动化彻底删除」）
     run_app(httpd, port, arg)
 

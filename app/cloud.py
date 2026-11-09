@@ -71,6 +71,70 @@ def _cloud_token():
 _PROXY_BAD = [0.0]          # 代理连挂的话 5 分钟内不再试（免得每个请求都白等一次）
 
 
+# ---------------- 令牌有效期 / 自动续期（2026-11-09） ----------------
+# 背景：worker 发的登录令牌 30 天到期，人和子账号每 30 天被踢出去一次（CI 更惨，直接断数据）。
+# 现在的口径：人用的令牌剩 7 天内静默续期（滚动 30 天，日常永不掉线）；
+# 机器账号（CI）发永久令牌（exp="0"），不参与续期。
+def _token_exp(tok):
+    """从令牌里读 exp（毫秒字符串，"0"=永久）。读不出返回 None。"""
+    try:
+        raw = base64.b64decode(str(tok) + "=" * (-len(str(tok)) % 4)).decode("utf-8")
+        parts = raw.split("|")
+        if len(parts) in (3, 4):
+            return str(parts[1])
+    except Exception:
+        pass
+    return None
+
+
+def token_days_left(tok=None):
+    """还剩几天（9999=永久；None=读不出）。"""
+    exp = _token_exp(tok or _cloud_token())
+    if exp is None:
+        return None
+    if exp == "0":
+        return 9999
+    try:
+        return (int(exp) - time.time() * 1000) / 86400000.0
+    except Exception:
+        return None
+
+
+def renew_token_bg(log=None):
+    """剩 ≤7 天时静默续期。失败只记日志，绝不打扰用户（登录态还能用就继续用）。"""
+    tok = _cloud_token()
+    if not tok:
+        return
+    left = token_days_left(tok)
+    if left is None or left > 7:
+        return
+    j, err = cloud_req("/renew", "POST", {})
+    if not j or not j.get("ok") or not j.get("token"):
+        if log:
+            log("[令牌] 自动续期失败：%s（不影响使用，下次启动再试）"
+                % (err or (j or {}).get("msg") or "接口没返回"))
+        return
+    try:
+        p = wp("auth_token.json")
+        d = {}
+        try:
+            with io.open(p, encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:
+            d = {}
+        if not isinstance(d, dict):
+            d = {}
+        d["token"] = j["token"]
+        d["renewed_at"] = int(time.time())
+        with io.open(p, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+        if log:
+            log("[令牌] 已自动续期：剩 %.1f 天 → 30 天" % max(left, 0))
+    except Exception as e:
+        if log:
+            log("[令牌] 续期写盘失败：%s" % e)
+
+
 def cloud_req(path, method="GET", obj=None, timeout=90, progress=None):
     """调云端 worker（带页面登录态）。返回 (dict|None, err|None)。
     2026-11-01：settings.json 配了 net_proxy（"auto"=自动探测本机代理端口）就先走代理，

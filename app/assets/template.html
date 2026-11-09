@@ -1215,7 +1215,15 @@ function pubPush(c, on, xy){
                    xid: (on && typeof xy === 'string' && xy && MARKED[c] && MARKED[c].xys && MARKED[c].xys[xy] && MARKED[c].xys[xy].xid) || undefined };
   authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(_pubBody) }, true)
-    .then(function(j){ if (j && j._st === 0) cloudFail('/pub', _pubBody); });
+    .then(function(j){
+      if (j && j.ok) return;
+      /* 2026-11-09：断网（_st=0）/ 令牌过期（401、403）都**不许把改动吞掉**——
+         本地已经生效，进落盘队列，联网或重新登录后自动补推。 */
+      if (j && (j._st === 0 || j._st === 401 || j._st === 403)){
+        cloudFail('/pub', _pubBody);
+      }
+    })
+    .catch(function(){ cloudFail('/pub', _pubBody); });
 }
 /* 批量 /pub 串行队列（2026-10-14 深夜实锤）：迁移/改名这类一次几十条的批量操作，
    原来 forEach 一瞬间全发出去——每个 /pub 在 worker 端都是「读 pub_B→改→写回」，
@@ -1235,10 +1243,51 @@ function pubQueue(tasks){
                xid: (t.on && typeof t.xy === 'string' && t.xy && MARKED[t.c] && MARKED[t.c].xys && MARKED[t.c].xys[t.xy] && MARKED[t.c].xys[t.xy].xid) || undefined };
     authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(_b) }, true)
-      .then(function(){ setTimeout(step, 250); })
-      .catch(function(){ setTimeout(step, 900); });
+      .then(function(j){
+        if (j && !j.ok && (j._st === 0 || j._st === 401 || j._st === 403)) cloudFail('/pub', _b);
+        setTimeout(step, 250);
+      })
+      .catch(function(){ cloudFail('/pub', _b); setTimeout(step, 900); });
   }
   step();
+}
+/* ---------- 2026-11-09 用户令「已发布 / 要标记发布的，没联网的话不能改」 ----------
+   断网时的标记/取消/改价必须**当场在本地生效并留底**，联网后补推。两条硬要求：
+   ① 队列落盘（ml_cloudq_v1）——关软件、重启都还在，不然一关就丢；
+   ② 登录对账「云端为准」时，先把队列里还没推上去的 /pub 按本地意图重新盖回去——
+      否则云端那份（还没收到这次改动）会把断网期间的标记整个抹掉，用户看到的就是
+      「没联网改不了」（改完一联网又变回去）。
+   applyPubLocal：把一条 /pub 的意图重新应用到本地 MARKED/PRICES（不碰网络）。 */
+function applyPubLocal(b){
+  if (!b || !b.c) return false;
+  var c = String(b.c), rk = (typeof b.xy === 'string' && b.xy) ? b.xy : null;
+  var now = Date.now();
+  if (b.on){
+    var cur = MARKED[c];
+    if (!cur){ cur = MARKED[c] = { t: now, k: b.k === 's' ? 's' : 'l', xys: {} }; }
+    if (!cur.xys) cur.xys = {};
+    if (rk){
+      var e = cur.xys[rk] || {};
+      var nk = b.k || e.k || 'l';
+      cur.xys[rk] = { t: e.t || now, k: nk === 's' ? 's' : 'l',
+                      p: (b.p != null) ? +b.p : (e.p != null ? e.p : null) };
+      if (e.xid && !cur.xys[rk].xid) cur.xys[rk].xid = e.xid;
+      cur.k = nk === 's' ? 's' : 'l'; cur.t = cur.t || now;
+    } else {
+      cur.t = cur.t || now; cur.k = (b.k === 's' || cur.k === 's') ? 's' : 'l';
+      if (!Object.keys(cur.xys).length) cur.xys['默认'] = { t: now, k: cur.k, p: (b.p != null ? +b.p : null) };
+    }
+    if (b.p != null) PRICES[c] = +b.p;
+  } else {
+    var cu = MARKED[c];
+    if (!cu) return false;
+    if (rk && cu.xys){
+      delete cu.xys[rk];
+      if (!Object.keys(cu.xys).length) delete MARKED[c];
+    } else delete MARKED[c];
+    if (!MARKED[c]) delete PRICES[c];
+  }
+  return true;
 }
 function syncMarks(tries){
   if (!AUTH || !AUTH.token) return;
@@ -1267,7 +1316,20 @@ function syncMarks(tries){
         });
         var pruned = prunePrices();
         if (filled || pruned) savePrices();
-        if (changed || filled || pruned){ run(); pubStockWarn(); }
+        /* 2026-11-09「没联网不能改」：云端为准这一步会把断网期间本地标的/取消的
+           整个抹掉（云端还没收到那些改动）。队列里的 /pub 按本地意图重新盖回来，
+           再让 cloudFlush 按序补推——用户看到的就是「改了就是改了，联网自动同步」。 */
+        var _re = 0;
+        for (var _qi = 0; _qi < _cloudQ.length; _qi++){
+          var _qb = _cloudQ[_qi];
+          if (_qb && _qb.p === '/pub' && applyPubLocal(_qb.b)) _re++;
+        }
+        if (_re){
+          normMarksLocal(); saveMarks(); savePrices();
+          prunePrices();
+          cqKick(2500);
+        }
+        if (changed || filled || pruned || _re){ run(); pubStockWarn(); }
       } else if (j && j._st === 0 && (tries || 0) < 6){
         setTimeout(function(){ try { syncMarks((tries || 0) + 1); } catch(e){} }, 10000);
       }
@@ -2068,6 +2130,27 @@ function fetchAdminList(force){
    /pubsync 带整包 prices 的补推时永远用当前本机数据重建（不回放过期快照）；
    图片不进队列（体积大，syncImgs 本来就有自愈）。 */
 var _cloudQ = [], _cloudQT = null, _netToastEl = null, _netToastT = null;
+/* 2026-11-09「没联网不能改」：队列必须落盘——断网期间标记/取消/改价先在本机生效，
+   关软件、重启都还留着；下次联网自动补推（以前只在内存，一关全丢）。 */
+var CQ_KEY = 'ml_cloudq_v1';
+function cqSave(){
+  try { localStorage.setItem(CQ_KEY, JSON.stringify(_cloudQ)); } catch(e){}
+}
+function cqLoad(){
+  var arr = [];
+  try { arr = JSON.parse(localStorage.getItem(CQ_KEY) || '[]') || []; } catch(e){ arr = []; }
+  var u = (AUTH && AUTH.u) || '';
+  /* 换账号登录：别人名下的待推改动不能拿本账号去推（会串号），直接丢弃 */
+  _cloudQ = (arr || []).filter(function(x){ return x && x.p && (!x.u || !u || x.u === u); });
+  return _cloudQ.length;
+}
+function cqKick(ms){
+  if (!_cloudQ.length) return;
+  clearTimeout(_cloudQT);
+  _cloudQT = setTimeout(cloudFlush, ms || 1200);
+}
+/* 网线插回 / WiFi 回来：立刻补推，别等 30 秒那一轮 */
+try { window.addEventListener('online', function(){ if (_cloudQ.length) cqKick(800); }); } catch(e){}
 function netToast(msg){
   if (!_netToastEl){
     _netToastEl = document.createElement('div');
@@ -2082,10 +2165,21 @@ function netToast(msg){
   _netToastT = setTimeout(function(){ _netToastEl.style.opacity = '0'; }, 2800);
 }
 function cloudFail(path, body){
-  _cloudQ.push({ p: path, b: body });
+  /* 同一型号同一记录键只留最后一条意图：断网期间来回改价/重复点标记别堆一串 */
+  if (path === '/pub' && body && body.c){
+    for (var _ci = _cloudQ.length - 1; _ci >= 0; _ci--){
+      var _cq = _cloudQ[_ci];
+      if (_cq && _cq.p === '/pub' && _cq.b && _cq.b.c === body.c
+          && (_cq.b.xy || null) === (body.xy || null) && _cq.b.on === body.on){
+        _cloudQ.splice(_ci, 1);
+      }
+    }
+  }
+  _cloudQ.push({ p: path, b: body, u: (AUTH && AUTH.u) || '' });
   if (_cloudQ.length > 80) _cloudQ.shift();     // 兜底防无限膨胀
+  cqSave();
   netToast('网络不通：改动已存本机，联网后自动同步');
-  if (!_cloudQT) _cloudQT = setTimeout(cloudFlush, 30000);
+  if (!_cloudQT) _cloudQT = setTimeout(cloudFlush, 15000);
 }
 function cloudFlush(){
   _cloudQT = null;
@@ -2097,12 +2191,14 @@ function cloudFlush(){
     .then(function(j){
       if (j && j._st !== 0){
         _cloudQ.shift();
+        cqSave();
         if (_cloudQ.length) _cloudQT = setTimeout(cloudFlush, 1200);
         else netToast('已恢复联网，待同步的改动全部补推完成');
       } else {
         _cloudQT = setTimeout(cloudFlush, 30000);
       }
-    });
+    })
+    .catch(function(){ _cloudQT = setTimeout(cloudFlush, 30000); });
 }
 /* ---------- 登录遮罩 + 账号管理面板（用到时才插进 DOM） ---------- */
 var AUTH_CSS = ''
@@ -2254,6 +2350,19 @@ function afterAuth(){
   try {
     fetch('/api/perm', { method: 'POST', body: JSON.stringify(
       { u: AUTH.u, role: AUTH.role, perm: AUTH.perm || {} }) });
+  } catch(e){}
+  /* 2026-11-09「没联网不能改」：把上次断网留下的待补推队列捞回来（落盘的），
+     先按本地意图盖到 MARKED 上再补推——重启软件也照样是「已经改过了」的状态。 */
+  try {
+    if (cqLoad()){
+      var _ra = 0;
+      for (var _rj = 0; _rj < _cloudQ.length; _rj++){
+        var _rb = _cloudQ[_rj];
+        if (_rb && _rb.p === '/pub' && applyPubLocal(_rb.b)) _ra++;
+      }
+      if (_ra){ normMarksLocal(); saveMarks(); savePrices(); }
+      cqKick(4000);
+    }
   } catch(e){}
   syncMarks();   // 发布记录并到云端（本地旧记录也会被合并上去）
   /* 我的显示开关上云拉取（2026-10-09）：云端有 → 以云端为准；云端还没存过 → 把本机的推上去 */

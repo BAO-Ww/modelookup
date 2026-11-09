@@ -425,11 +425,23 @@ function cheapHash(s) {
 // ---------------- token ----------------
 // 2026-10-10 审计修复（静态2）：token 里烤进密码版本号 pv——改密码后旧 token（含被偷的）全部作废。
 // 旧格式 3 段（u|exp|sig，无 pv）兼容读取：视为 pv="0"，等价于用户从未改过密。
-async function makeToken(env, u, pv) {
-  const exp = Date.now() + 30 * 86400 * 1000;
+async function makeToken(env, u, pv, permanent) {
+  /* 2026-11-09：permanent=true 发永久令牌（exp 记 "0"，checkToken 不做过期判断）。
+     只给「机器专用账号」（CI 抓取链）用——人用的令牌仍然 30 天 + 客户端自动续期，
+     因为永久令牌一旦泄漏等于永久授权。 */
+  const exp = permanent ? "0" : String(Date.now() + 30 * 86400 * 1000);
   const payload = u + "|" + exp + "|" + String(pv || 0);
   const sig = await hmac(hmacKey(env), payload);
   return btoa(unescape(encodeURIComponent(payload + "|" + sig)));
+}
+/* 读 token 里的 exp（不解签名，只给「还剩几天 / 是否永久」这类本机判断用） */
+function tokenExp(token) {
+  try {
+    const raw = decodeURIComponent(escape(atob(token)));
+    const parts = raw.split("|");
+    if (parts.length !== 3 && parts.length !== 4) return null;
+    return parts[1];
+  } catch (e) { return null; }
 }
 async function checkToken(env, token, users) {
   try {
@@ -439,7 +451,7 @@ async function checkToken(env, token, users) {
     const u = parts[0], exp = parts[1];
     const pv = parts.length === 4 ? parts[2] : "0";
     const sig = parts[parts.length - 1];
-    if (parseInt(exp) < Date.now()) return null;
+    if (exp !== "0" && parseInt(exp) < Date.now()) return null;   // "0" = 永久令牌
     const want = await hmac(hmacKey(env),
       u + "|" + exp + (parts.length === 4 ? "|" + pv : ""));
     if (!ctEq(sig, want)) return null;
@@ -803,6 +815,58 @@ async function route(request, env, path, ctx) {
     if (!user || user.disabled) return jerr("账号不存在或已停用", 403);
     return J({ ok: true, u: who, role: user.role || "sub",
                perm: user.role === "admin" ? {} : migratePerm(user.perm) });
+  }
+
+  // ---------- 令牌自动续期（2026-11-09） ----------
+  // 背景：令牌 30 天到期 → 用户/子账号每 30 天被踢一次（CI 更惨，直接断数据）。
+  // 客户端在「剩 7 天内」或启动时调这里，用当前有效令牌换一枚新的（同账号同密码版本）。
+  // 永久令牌（exp="0"）续出来的还是永久，不会因为续期降级。
+  if (path === "/renew" && request.method === "POST") {
+    const users = await getUsers(env);
+    const me = users[who];
+    if (!me) return jerr("账号不存在", 403);
+    const oldExp = tokenExp(token) || "";
+    const token2 = await makeToken(env, who, me.pv, oldExp === "0");
+    return J({ ok: true, token: token2, u: who, permanent: oldExp === "0",
+               exp: tokenExp(token2) });
+  }
+
+  // 管理号发永久令牌（2026-11-09）：只给机器专用账号用（CI 抓取链）。
+  // 发完在 GitHub Secrets 里替换 CLOUD_TOKEN 即可；令牌与密码版本绑定，改密自动作废。
+  if (path === "/admin/permtoken" && request.method === "POST") {
+    const me = usersGate[who];
+    if (!me || me.role !== "admin") return jerr("只有管理号能发永久令牌", 403);
+    const b = await request.json().catch(() => ({}));
+    const tu = String(b.u || "").trim();
+    if (!tu) return jerr("要指定账号");
+    const users = await getUsers(env);
+    const tgt = users[tu];
+    if (!tgt) return jerr("账号不存在：" + tu);
+    const token2 = await makeToken(env, tu, tgt.pv, true);
+    return J({ ok: true, u: tu, token: token2, permanent: true });
+  }
+
+  // 管理号建「机器专用账号」（2026-11-09）：CI 抓取链要管理号权限（/kdauth /xlsxcloud /stockcloud
+  // 都只认 admin），但它的令牌必须是永久的，所以不能跟人用的号共用。
+  // 只新建，绝不覆盖已有账号（同名直接拒），密码同样走 PBKDF2。
+  if (path === "/admin/newacct" && request.method === "POST") {
+    const me = usersGate[who];
+    if (!me || me.role !== "admin") return jerr("只有管理号能建号", 403);
+    const b = await request.json().catch(() => ({}));
+    const nu = String(b.u || "").trim(), np = String(b.p || "");
+    const role = b.role === "admin" ? "admin" : "sub";
+    if (!/^[A-Za-z0-9_\-\u4e00-\u9fa5]{2,20}$/.test(nu)) return jerr("账号名不合法（2-20位字母数字中文）");
+    if (BAD_KEY.test(nu)) return jerr("账号名不合法");
+    if (np.length < 4) return jerr("密码至少 4 位");
+    const users = await getUsers(env);
+    if (users[nu]) return jerr("账号已存在：" + nu + "（不会覆盖）");
+    const salt = crypto.randomUUID().replaceAll("-", "");
+    users[nu] = { salt, role, note: String(b.note || "").slice(0, 50),
+                  disabled: false, perm: {},
+                  ph: "pbkdf2$" + PBKDF2_ITER + "$" + salt + "$" + (await pbkdf2hex(np, salt, PBKDF2_ITER)),
+                  pv: 0 };
+    await putUsers(env, users);
+    return J({ ok: true, u: nu, role });
   }
 
   // 管理号「我的显示开关」上云（2026-10-09）：跟账号走，换电脑登录不用重弄
