@@ -2727,69 +2727,28 @@ def _parse_ai9_copy(text):
 
 
 def zhipu_product_read(api_key, src_dir, info, log=None):
-    """用 GLM-4V 看这台机器的真实官方图，提炼「图里看得见」的机型专属卖点，
-    产出与 zhipu_ai9_copy 同 schema 的九张海报文案 JSON。
-    相比纯文本的 zhipu_ai9_copy，本函数以真实产品图为依据，每台机器文案不同（非品类模板），
-    即「AI 发挥到极致」的核心：逐台机器读懂 + 出题。
-    硬约束不变：容量/能效/门数等参数取自 info，AI 只碰图里可见特征与软表达，不编数字。
-    提示词里会带上 info["intro"]（第一步爬虫抓的官网产品介绍原文），让软卖点贴官方口径。
-    结果缓存到 <src_dir>/_ai_read_v2.json。无 key / 失败 / 图太少 -> 返回 None（generate 回退）。"""
+    """2026-11-10 用户令「不需要它去读图，要它去读抓取下来的信息」：
+    改成纯文本读 info（品牌/型号/品类/真实参数 props + 官网产品介绍原文 intro），
+    走免费文本模型 glm-4.5-flash（zhipu_ai9_copy 同一条路）提炼机型专属软卖点。
+    不再拼版喂图、商汤/GLM-4V 视觉额度一分不烧。
+    结果仍缓存到 <src_dir>/_ai_read_v2.json（跟旧视觉版同一个缓存文件，
+    已有缓存的型号直接复用、一次都不用调）。无 key / 失败 -> 返回 None。"""
     if not api_key or not str(api_key).strip():
         return None
     p = Path(src_dir)
-    cands = [f for f, _r in _src_cands(p)]     # 根目录 + 官网/欣盛/其他 子文件夹（A 方案）
-    if len(cands) < 2:
-        return None
-    # v2：提示词加入「官网产品介绍原文」后改版本号，让旧缓存失效、重新生成一次（只一次，之后照旧缓存）
     cache = p / "_ai_read_v2.json"
     try:
         if cache.exists():
             return json.loads(cache.read_text(encoding="utf-8"))
     except Exception:
         pass
-    sheet = _build_contact_sheet(cands)
-    data_url = "data:image/jpeg;base64," + base64.b64encode(sheet).decode("ascii")
-    b = (info.get("brand") or "").strip()
-    model = (info.get("model") or "").strip()
-    cat = cat_name(info)
-    door_txt = real_door(info)
-    prompt = (
-        "这是 %s %s（%s）的真实商品官方图拼版，每张左上角有红色编号。\n"
-        "请只看【图里真实可见】的特征，提炼这台机器独有的可卖点，并生成 9 张闲鱼海报的文案 JSON。\n"
-        "禁止编造参数；只写图里能确认的（如：双层抽屉、超薄机身、玻璃面板、触控屏、万向轮等）。\n"
-        "真实门结构：%s（凡涉及「门」的文案都用它，禁止写不符的「三门/对开门/四门」）。\n"
-        "%s"
-        "只输出一个 JSON 对象（不要 markdown、不要解释）。字段：\n"
-        '{"tag":"品类卖点短句8-14字",'
-        '"o_soft":[["短标签","体验描述"],["短标签","体验描述"],["短标签","体验描述"]],'
-        '"o_title":"容量/内部页大标题4-8字","o_sub":"副标题10-18字",'
-        '"r_soft":[["",""],["",""],["",""]],'
-        '"r_title":"尺寸/场景页大标题","r_sub":"副标题",'
-        '"e_soft":[["",""],["",""],["",""]],'
-        '"e_title":"能效页大标题","e_sub":"副标题",'
-        '"d_soft":[["",""],["",""],["",""]],'
-        '"d_title":"品质细节页大标题","m_soft":[["",""],["",""],["",""]],'
-        '"angle_title":"立体角度页大标题","angle_sub":"副标题"}\n'
-        "硬性要求：短标签2-5字、体验描述4-10字；禁止 emoji/特殊符号；只输出 JSON。"
-        # 官网产品介绍原文：卖点措辞对齐官方口径；转义 % 以免原文里的百分号破坏格式化
-    ) % (b, model, cat, (door_txt or "未知"), _intro_block(info).replace("%", "%%"))
-    try:
-        if log:
-            try:
-                log("正在用 AI 视觉读懂产品 ...")
-            except Exception:
-                pass
-        txt = _vision_call(api_key, data_url, prompt, log=log)
-        obj = _parse_ai9_copy(txt)
-        if obj:
-            try:
-                cache.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
-            except Exception:
-                pass
-            return obj
-    except Exception:
-        pass
-    return None
+    obj = zhipu_ai9_copy(api_key, info)          # 纯文本：只喂抓到的资料，GLM-4.5-Flash 免费
+    if obj:
+        try:
+            cache.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    return obj
 
 
 def norm_sev(v):

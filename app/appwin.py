@@ -179,12 +179,23 @@ def _menu_pick_sub(u):
                      args=(state.PERM_STATE.get("role") or "admin",), daemon=True).start()
 
 
+def _menu_load_subs():
+    """2026-11-10 菜单恢复配套：子账号列表还没拉过时，点占位项就地触发 loadSubRec
+    （后台拉 /puball + /admin/list，回来经 sync_subusers 重画菜单，再点一次就有名字）。"""
+    try:
+        webview.windows[0].evaluate_js(
+            "var _s=document.getElementById('subrecsel');"
+            "if(_s&&!_s.dataset.loaded){_s.dataset.loaded='1';loadSubRec();}")
+    except Exception:
+        pass
+
+
 def _sub_menu_items():
     """「子用户(&U)」下拉的条目：不筛选 + 每个子账号名，当前选中的带 ✓。"""
     from webview.menu import MenuAction      # 模块级不能碰 webview.menu（PyInstaller 规矩，与 build_menu 同源）
     items = []
     if not _SUB_USERS:
-        items.append(MenuAction("（登录后自动列出子账号）", lambda: None))
+        items.append(MenuAction("（点开加载子账号…）", _menu_load_subs))
         return items
     items.append(MenuAction(("✓ " if not _SUB_SEL else "") + "不筛选（看全部）",
                             lambda: _menu_pick_sub("")))
@@ -425,6 +436,11 @@ def build_menu(sub=False):
         # 2026-11-03 用户令：点了就开始，别再弹一层「干没干活一眼看全」——
         # pywebview 顶层 MenuAction 在 WinForms 下就是直点直跑的菜单项
         MenuAction("云端体检(&T)", lambda: js_click("extdiag")),
+        # 2026-11-10 用户令「子用户收到帮助隔壁，我点击了再显示出来」：
+        # 恢复 2026-10-31 晚三批的原生菜单「子用户」（帮助隔壁），侧栏常驻下拉块撤掉。
+        # 菜单点开才列子账号（_SUB_USERS 由页面 loadSubRec 经 sync_subusers 同步进来，
+        # 首次点选未加载时 exPickSub 会先拉列表再选值）；✓ 标当前选中，点名字直切视角。
+        Menu("子用户(&U)", _sub_menu_items()),
         Menu("帮助(&H)", [
             MenuAction("软件更新", upd_app),
             MenuAction("更新日志", lambda: js_click("extver")),

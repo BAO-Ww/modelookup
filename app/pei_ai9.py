@@ -1737,18 +1737,15 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
     out.mkdir(parents=True, exist_ok=True)
 
     # 1) 内嵌 AI 写软卖点（九张图不再复读参数）
+    #    2026-11-10 用户令「不需要它去读图，要它去读抓取下来的信息」：
+    #    不再喂图给视觉模型，改成纯文本读 info（真实参数 + 官网介绍原文），
+    #    免费文本模型 glm-4.5-flash 出软卖点；视觉额度一分不烧。
     if ai_copy is None and api_key and core is not None:
-        step(3, "正在让 AI 视觉读懂产品 ...")
+        step(3, "正在让 AI 读懂产品资料 ...")
         try:
             ai_copy = core.zhipu_product_read(api_key, src_dir, info)
         except Exception:
             ai_copy = None
-        if ai_copy is None:
-            step(3, "视觉读取失败，改用文本 AI 写卖点 ...")
-            try:
-                ai_copy = core.zhipu_ai9_copy(api_key, info, version)
-            except Exception:
-                ai_copy = None
     P = build_text(info, version, sell_price, ai_copy)
     P["title"] = str(info.get("title") or "").strip()   # 软件条目标题（聚光首图标题用，2026-10-30）
     if GEN_STYLE == "spot":

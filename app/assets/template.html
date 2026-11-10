@@ -2480,8 +2480,6 @@ function refreshPerm(){
     var after = JSON.stringify(j.perm || {});
     AUTH.perm = j.perm || {};
     authSave();
-    var sr2 = document.getElementById('subrec');
-    if (sr2 && AUTH.role === 'admin' && pok('pubview') && sr2.hidden){ sr2.hidden = false; loadSubRec(); }
     applyPermBar();
     if (before !== after) run();      // 权限真变了：价格列/成本下拉/按钮全按新表重排
   }).catch(function(){});
@@ -2499,26 +2497,12 @@ function applyPermBar(){
   // 闲鱼宝贝数据入口（2026-10-17）：权限键 xysj，账号管理里勾（后台入口已删）
   var kj = document.getElementById('xysjbtn');
   if (kj) kj.hidden = !pok('xysj');
-  // 侧栏「子用户发布」块：只有管理号有（子账号看自己的发布走「已发布」chip + 顶栏）
+  // 侧栏「子用户发布」块：2026-11-10 用户令「收到帮助隔壁，我点击了再显示出来」——
+  // 管理号走原生菜单栏「子用户」菜单（帮助隔壁）选人：点开菜单才列子账号、
+  // 点名字直切视角（appwin _sub_menu_items → exPickSub → subrecsel change 既有流程）。
+  // 侧栏这块常驻撤销；select 元素留在 DOM（hidden）供菜单流程复用，别删节点。
   var sr = document.getElementById('subrec');
-  if (sr){
-    var srShow = !!(AUTH && AUTH.role === 'admin' && pok('pubview'));
-    sr.hidden = !srShow;   /* 2026-10-31 晚：用户改口，放回侧栏（原生菜单那份已撤） */
-    /* 2026-11-05 A（治「管理号进已发布要等好久」）：不再首屏自动拉 /admin/list + /puball——
-       这两趟大多数时候用不上，还容易在主域抖动时超时、把主域记进失效名单 10 分钟，
-       连累你接下来点的 /pub（已发布）排到国内不通的备线上白等。改成首次点开下拉才拉。 */
-    if (srShow && !sr.dataset.loaded){
-      sr.dataset.loaded = '1';
-      var _srsel = document.getElementById('subrecsel');
-      if (_srsel){
-        _srsel.innerHTML = '<option value="">（点开加载子账号…）</option>';
-        var _srFired = false;
-        var _srGo = function(){ if (_srFired) return; _srFired = true; loadSubRec(); };
-        _srsel.addEventListener('mousedown', _srGo, { once: true });
-        _srsel.addEventListener('focus', _srGo, { once: true });
-      }
-    }
-  }
+  if (sr) sr.hidden = true;
   // 「已发布」「没库存」筛选按钮：管理号默认有（可在「我的显示开关」里自己关）；子账号由权限决定
   var pb = document.querySelector('.chip[data-flag="pub"]');
   if (pb) pb.hidden = !pok('pubview');
