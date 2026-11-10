@@ -129,20 +129,31 @@ def _http(url, referer=None, ajax=False, timeout=None):
         h["Accept"] = "application/json, text/javascript, */*; q=0.01"
         h["X-Requested-With"] = "XMLHttpRequest"
     req = urllib.request.Request(url, headers=h)
-    with urlopen_ssl(req, timeout=timeout or FETCH_TIMEOUT) as r:
-        raw = r.read()
-        # 手动解 gzip：urllib 不认站点返回的「Content-Encoding: gzip」时不会自己解
-        if r.headers.get("Content-Encoding") == "gzip":
-            try:
-                raw = gzip.decompress(raw)
-            except Exception:
-                pass
-        for enc in ("utf-8", "gbk", "gb18030"):
-            try:
-                return raw.decode(enc)
-            except Exception:
-                continue
-        return raw.decode("utf-8", "replace")
+    try:
+        with urlopen_ssl(req, timeout=timeout or FETCH_TIMEOUT) as r:
+            raw = r.read()
+            # 手动解 gzip：urllib 不认站点返回的「Content-Encoding: gzip」时不会自己解
+            if r.headers.get("Content-Encoding") == "gzip":
+                try:
+                    raw = gzip.decompress(raw)
+                except Exception:
+                    pass
+    except Exception:
+        # 2026-11-10：海尔系官网对本机出口 IP 段封禁（leader 全站 403），换 CF 出口代抓
+        try:
+            from net import PX_HOST_RE, relay_fetch
+            if PX_HOST_RE.match(url or ""):
+                raw = relay_fetch(url, binary=True, timeout=45)
+            else:
+                raise
+        except Exception:
+            raise
+    for enc in ("utf-8", "gbk", "gb18030"):
+        try:
+            return raw.decode(enc)
+        except Exception:
+            continue
+    return raw.decode("utf-8", "replace")
 
 
 def _abs_url(u, home):

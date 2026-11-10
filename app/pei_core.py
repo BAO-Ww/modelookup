@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """闲鱼配文 · 核心模块：官网抓取 + 文案生成 + 拼版主图"""
-import os, re, json, ssl, gzip, time, shutil, zipfile, threading, sys, io, base64
+import os, re, json, ssl, gzip, time, shutil, zipfile, threading, sys, io, base64, random
 from pathlib import Path
 import urllib.request, urllib.error, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
@@ -151,6 +151,24 @@ def http(url, n=None, tries=3):
             return d
         except Exception:
             time.sleep(0.5)
+    # 2026-11-10：海尔系官网/图床对本机出口 IP 段封禁（leader 全站 403、image.haier.com
+    # TCP RST，换 UA/真浏览器/机场节点全无解）。常规路走不通就对海尔系域名换 CF 出口
+    # 代抓（worker /osfetch，实测 200）——fetch_product 的页面和图片下载都从这里过，
+    # 一处兜底全链路吃到。
+    try:
+        from net import PX_HOST_RE, relay_fetch
+        if PX_HOST_RE.match(url or ""):
+            d = relay_fetch(url, binary=True, timeout=45)
+            if n:
+                d = d[:n]
+            if d[:2] == b"\x1f\x8b":
+                try:
+                    d = gzip.decompress(d)
+                except Exception:
+                    pass
+            return d if d else None
+    except Exception:
+        pass
     return None
 
 
@@ -1639,49 +1657,161 @@ _VISION_429_TRIES = 3      # 同通道最多试 3 次（原 1 次 + 退避重试
 
 
 def _vision_gate():
-    """全局排队：任意线程的视觉 HTTP 请求之间至少隔 _VISION_GAP 秒。"""
+    """全局排队：进程内锁 + 跨进程文件锁（2026-11-10 表格令：宝窗/婷窗双开
+    共享同一出口额度，任意两次视觉 HTTP 请求至少隔 _VISION_GAP 秒）。"""
     with _VISION_GATE_LOCK:
         _wait = _VISION_GAP - (time.monotonic() - _VISION_GATE_LAST[0])
         if _wait > 0:
             time.sleep(_wait)
         _VISION_GATE_LAST[0] = time.monotonic()
+        _vision_gate_file()
 
 
 def _vision_is_rate(e):
-    """判定异常是不是限流/额度类（HTTPError 429，或各家错误文案里的 429/rate/频繁/额度/限流/quota）。"""
-    s = str(e or "")
+    """限流判定（2026-11-10 表格令收窄）：只认 HTTP 429，或响应体/报错文案里
+    明确的 rate limit / quota / too many request / 1302 / 限流 / 额度 字样。
+    超时、空 content、网络错误、鉴权失败不再被贴限流标签——真故障立即抛别拖。"""
+    if getattr(e, "code", None) == 429:
+        return True
+    s = (_vision_err_body(e) + " " + str(e)).lower()
+    return ("429" in s or "rate limit" in s or "too many request" in s
+            or "requests per" in s or "quota" in s or "1302" in s
+            or "限流" in s or "额度" in s or "配额" in s)
+
+
+def _vision_err_body(e):
+    """HTTPError 响应体原文（各家 429 的 error.type/message/request_id 都在 body 里）。"""
     try:
-        if getattr(e, "code", None) == 429:
-            return True
+        raw = e.read()
+    except Exception:
+        return ""
+    if isinstance(raw, bytes):
+        try:
+            raw = raw.decode("utf-8", "replace")
+        except Exception:
+            raw = str(raw)
+    return str(raw or "")
+
+
+def _vision_429_detail(e):
+    """429 响应体结构化（2026-11-10 表格令）：坐实是 rate 还是 quota 还是出口代理。
+    返回 (tag, 明细串)，tag ∈ rate / quota / unknown。"""
+    body = _vision_err_body(e)
+    tag, det = "unknown", ""
+    try:
+        j = json.loads(body)
+        err = j.get("error") if isinstance(j.get("error"), dict) else {}
+        det = "type=%s msg=%s code=%s req_id=%s" % (
+            err.get("type") or j.get("type") or "?",
+            (err.get("message") or j.get("message") or "?")[:120],
+            err.get("code") or j.get("code") or "?",
+            err.get("request_id") or j.get("request_id") or "?")
+        low = json.dumps(j, ensure_ascii=False).lower()
+        if "quota" in low or "balance" in low or "arrears" in low or "额度" in low:
+            tag = "quota"
+        elif "rate" in low or "频繁" in low or "限流" in low or "1302" in low:
+            tag = "rate"
+    except Exception:
+        det = (body or str(e))[:200]
+    return tag, det
+
+
+def _vision_gate_file():
+    """跨进程闸（2026-11-10 表格令「先把并发压到 1 路」）：宝窗+婷窗双开共享同一
+    商汤/智谱出口额度，进程内闸管不到隔壁进程。锁住 gate 时间戳文件再读写，
+    两个进程的视觉请求至少隔 _VISION_GAP 秒；锁不可用（平台差异/被占超 10s）
+    就退化只走进程内闸，绝不因闸失败拦住出图。"""
+    try:
+        from paths import wp
+        p = wp("_vision_gate.ts")
+    except Exception:
+        return
+    try:
+        f = io.open(p, "a+")
+    except Exception:
+        return
+    try:
+        if os.name == "nt":
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)   # 阻塞抢锁（1s×10 次）
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.seek(0)
+            raw = (f.read() or "").strip()
+            try:
+                last = float(raw)
+            except Exception:
+                last = 0.0
+            _w = _VISION_GAP - (time.time() - last)
+            if _w > 0:
+                time.sleep(_w)
+            f.seek(0)
+            f.truncate()
+            f.write("%.3f" % time.time())
+            f.flush()
+        finally:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
     except Exception:
         pass
-    s = s.lower()
-    return ("429" in s or "rate" in s or "quota" in s
-            or "频繁" in s or "额度" in s or "限流" in s)
+    finally:
+        try:
+            f.close()
+        except Exception:
+            pass
 
 
 def _vision_attempt(fn, api_key, data_url, prompt, log=None):
-    """单通道视觉请求：过全局门 → 调用；撞限流等 15s/30s 退避重试，用完才抛给上层切通道。
-    非限流错误（超时/鉴权/网络）不重试立即抛——别把真故障拖成慢死。"""
+    """单通道视觉请求：过全局门 → 调用。分层处理（2026-11-10 表格令）：
+    · HTTP 429 → 打出响应体 error.type/message/request_id，指数退避+抖动重试
+      （6s→12s，不再死等固定秒数）；quota 类重试也没用，直接抛给上层切通道
+    · 空 content / None（安全拒答、截断、超时被吞）→ 短隔重试，日志写「空返回」
+      不再一律叫限流
+    · 其他错误（超时/鉴权/网络）→ 立即抛，别把真故障拖成慢死"""
+    _last_rate_exc = None
     for _i in range(_VISION_429_TRIES):
         _vision_gate()
         try:
-            return fn(api_key, data_url, prompt)
+            txt = fn(api_key, data_url, prompt)
         except Exception as e:
             if _i < _VISION_429_TRIES - 1 and _vision_is_rate(e):
-                # 2026-11-10：退避 15s/30s → 6s/12s。实测免费额度滚动窗口烧满时，
-                # 15 秒起步的等待把整套出图拖成分钟级排队（用户实锤「卡的都是聚光的」）；
-                # 快速重试两次还不行就立刻切 GLM 兜底通道（flash 模型额度宽裕）。
-                _back = 6 + 6 * _i
+                _tag, _det = _vision_429_detail(e) if getattr(e, "code", None) == 429 \
+                    else ("rate", "")
+                if _tag == "quota":
+                    raise   # 额度烧完了，重试只是白等——立刻切兜底通道
+                _back = min(6 * (2 ** _i), 15) + random.uniform(0, 1.5)
                 try:
                     if log:
-                        log("视觉请求被限流，等 %d 秒自动重试（第 %d/%d 次）"
-                            % (_back, _i + 1, _VISION_429_TRIES - 1))
+                        log("视觉请求限流（%s），等 %.0f 秒重试（第 %d/%d 次）%s"
+                            % (_tag, _back, _i + 1, _VISION_429_TRIES - 1, _det))
                 except Exception:
                     pass
+                _last_rate_exc = e
                 time.sleep(_back)
-            else:
-                raise
+                continue
+            raise
+        if txt and str(txt).strip():
+            return txt
+        if _i < _VISION_429_TRIES - 1:
+            try:
+                if log:
+                    log("视觉返回空 content（非限流），重试（第 %d/%d 次）"
+                        % (_i + 1, _VISION_429_TRIES - 1))
+            except Exception:
+                pass
+    if _last_rate_exc is not None:
+        raise _last_rate_exc
     return None
 
 

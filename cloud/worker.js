@@ -782,6 +782,86 @@ async function route(request, env, path, ctx) {
     } catch (e) { return jerr("图库读取失败：" + e.message, 500); }
   }
 
+  // GET /kitidx?m=<型号> → {ok, model, keys:["官网/01.png", "src_2.jpg", ...]}
+  // 2026-11-10 用户令「顺序错了，是先去 R2 云端找没有再去爬」：客户端抓素材前先问一句
+  // 云端有没有这个型号的图，有就直接拉下来出图，绝不白爬一遍。官网抓不动时云端图是
+  // 唯一活路（leader.com.cn 整站 403、连 CF 边缘 fetch 都 522 实锤，真浏览器也进不去）。
+  // 免登录放行（同 /kitimg2：官网图本来就是公开产品图）；边缘缓存 5 分钟，
+  // 客户端只在「本地无图」时问一次，量很小。
+  if (path === "/kitidx" && request.method === "GET") {
+    if (!env.IMG) return jerr("图库未启用（worker 缺 IMG binding）", 503);
+    const m = (url.searchParams.get("m") || "").trim();
+    if (!m || m === "." || m === ".." || /[\\:*?"<>|\x00-\x1f]/.test(m) || m.length > 80)
+      return jerr("型号不合法", 400);
+    const pre = m + "/";
+    const keys = [];
+    let cursor = undefined;
+    for (let i = 0; i < 6; i++) {
+      const lst = await env.IMG.list({ prefix: pre, limit: 1000, cursor });
+      for (const o of (lst.objects || [])) {
+        const k = String(o.key || "").slice(pre.length);
+        if (k) keys.push(k);
+      }
+      if (!lst.truncated || !lst.cursor) break;
+      cursor = lst.cursor;
+    }
+    return new Response(JSON.stringify({ ok: true, model: m, keys }), {
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "public, max-age=300",
+        ...CORS,
+      },
+    });
+  }
+
+  // GET /imgpx?u=<图片URL> → 由 CF 边缘代拉海尔系图床（2026-11-10）
+  // 背景：本机/机场出口 IP 被网宿按 IP 段封死——image.leader.com.cn 与 image.haier.com
+  // 一个 403、一个 TCP RST，换节点/换 UA/真浏览器/多 DNS 全试过无解。CF 出口与我们完全
+  // 不同，可能就是那条活路。**严格 host 白名单**（只放行海尔系图床），绝不做开放代理
+  // （开放代理会被秒滥用、也会连累 worker 域名）。结果进边缘缓存 7 天，同一张图只回源一次。
+  if (path === "/imgpx" && request.method === "GET") {
+    const u = (url.searchParams.get("u") || "").trim();
+    if (!u) return jerr("缺 u 参数", 400);
+    let t;
+    try { t = new URL(u); } catch (e) { return jerr("u 不是合法 URL", 400); }
+    if (t.protocol !== "https:" && t.protocol !== "http:") return jerr("只支持 http(s)", 400);
+    const host = t.hostname.toLowerCase();
+    const ALLOW = ["image.haier.com", "image.leader.com.cn", "image.casarte.com",
+                   "www.haier.com", "www.leader.com.cn", "www.casarte.com",
+                   "dms.haier.net"];
+    const okHost = ALLOW.some(h => host === h || host.endsWith("." + h.replace(/^www\./, "")));
+    if (!okHost) return jerr("域名不在白名单：" + host, 403);
+    // 走 CF 缓存：同一 URL 只回源一次
+    const cache = caches.default;
+    const ck = new Request(t.toString(), { method: "GET" });
+    let hit = null;
+    try { hit = await cache.match(ck); } catch (e) { hit = null; }
+    if (hit) return hit;
+    let r;
+    try {
+      r = await fetch(t.toString(), {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          "Referer": t.origin + "/",
+          "Accept": "image/avif,image/webp,image/png,image/*,*/*;q=0.8",
+          "Accept-Language": "zh-CN,zh;q=0.9",
+        },
+        redirect: "follow",
+      });
+    } catch (e) { return jerr("回源失败：" + e.message, 502); }
+    if (!r.ok) return jerr("图床返回 " + r.status + "（" + t.hostname + "）", r.status === 404 ? 404 : 502);
+    const h = new Headers();
+    h.set("Content-Type", r.headers.get("Content-Type") || "image/jpeg");
+    const cl = r.headers.get("Content-Length");
+    if (cl) h.set("Content-Length", cl);
+    h.set("Cache-Control", "public, max-age=604800");
+    h.set("Access-Control-Allow-Origin", "*");
+    const out = new Response(r.body, { status: 200, headers: h });
+    try { await cache.put(ck, out.clone()); } catch (e) {}
+    return out;
+  }
+
   // ---------- 救火通道（2026-10-13）：users 账本整包恢复 ----------
   // POST /admin/restore，鉴权走 X-Cloud-Key（CI 同款，范本就是上面的 /mpayload）。
   // 故意不用登录态：要用它的场景恰恰是「账本坏了谁都登不进去」，要求先登录等于

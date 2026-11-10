@@ -70,6 +70,33 @@ def http_get(url, headers=None, timeout=180):
     raise RuntimeError("网络请求失败：" + url[:80])
 
 
+# ---------- 海尔系 CDN 出口被封的代抓兜底（2026-11-10） ----------
+# 背景：网宿按 IP 段封了本机宽带 + 全部机场节点——image.leader.com.cn 与 www.leader.com.cn
+# 全站 403（连 robots.txt）、image.haier.com 直接 TCP RST；换 UA/真浏览器/四个地区节点/
+# 多 DNS 全试过无解。唯一实测活路 = 自己的 CF Worker /osfetch 代抓（CF 全球出口不在封锁
+# 名单，leader 产品图/详情页/haier 图全 200，_test_osfetch 实锤）。只对海尔系域名生效，
+# 其他站点绝不代抓（省额度也避免被当成开放代理滥用）。
+import re as _re
+import urllib.parse as _uparse
+
+PX_HOST_RE = _re.compile(r"^https?://[^/]*(?:haier\.com|haier\.net|casarte\.com|leader\.com\.cn)/", _re.I)
+
+
+def relay_fetch(url, binary=True, timeout=45):
+    """经 CF Worker /osfetch 代抓海尔系 URL。要登录令牌；失败抛异常由调用方兜底。"""
+    from cloud import CLOUD_HOST, _CLOUD_UA, _cloud_token
+    tok = _cloud_token()
+    if not tok:
+        raise RuntimeError("无云端令牌，代抓不可用")
+    u = CLOUD_HOST + "/osfetch?u=" + _uparse.quote(url, safe="")
+    req = urllib.request.Request(u, headers={"X-Token": tok, "User-Agent": _CLOUD_UA})
+    with urlopen_ssl(req, timeout=timeout) as r:
+        raw = r.read()
+        if not binary:
+            raw = raw.decode("utf-8", "replace")
+        return raw
+
+
 def fetch_xlsx_by_url(url, log):
     code, raw = http_get(url, timeout=300)
     if raw[:2] == b"PK":

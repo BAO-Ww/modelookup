@@ -337,11 +337,89 @@ def _kitset_info_to_pub(cand, model, d):
     return info
 
 
+def _kitset_imgs_to_pub(model, kd, d, log=None):
+    """kitset/<型号>/ 有图但没 info.json → 合成一份素材 info（2026-11-10）。
+    R2 云端图库拉的型号只落图片不落参数（JSQ22-12LVS(12T) 实锤：蓝底四张完成、
+    聚光却报「素材抓取没成功」——旧复用逻辑只认 info.json，把这批漏了）。
+    图硬链进素材目录；标题/品牌取 set.json；参数尽量从云端参数库 par_cloud.json 补，
+    补不到就空着（渲染端胶囊行自动退化）——绝不为此再爬一遍官网（用户令：蓝底用
+    什么图聚光直接用）。"""
+    try:
+        import kitset as _ks
+    except Exception:
+        return None
+    imgs, srcmap = [], {}
+    for sub in ("官网", "欣盛", "其他"):
+        sd = os.path.join(kd, sub)
+        if not os.path.isdir(sd):
+            continue
+        try:
+            fns = sorted(fn for fn in os.listdir(sd)
+                         if fn.lower().endswith((".jpg", ".jpeg", ".png"))
+                         and os.path.isfile(os.path.join(sd, fn)))
+        except Exception:
+            fns = []
+        for fn in fns:
+            rel = sub + "/" + fn
+            imgs.append({"f": rel, "src": sub})
+            srcmap[rel] = sub
+    if not imgs:
+        return None
+    os.makedirs(d, exist_ok=True)
+    n = 0
+    for x in imgs:
+        if _ks._link_or_copy(os.path.join(kd, x["f"]), os.path.join(d, x["f"])):
+            n += 1
+    if not n:
+        return None
+    # 标题/品牌：set.json 的 name（文案套）最靠谱，退化用型号名
+    title, model_ = "", str(model)
+    try:
+        with io.open(os.path.join(kd, "set.json"), encoding="utf-8") as f:
+            _set = json.load(f)
+        title = str(_set.get("name") or "")
+        model_ = str(_set.get("model") or model)
+    except Exception:
+        pass
+    brand = next((b for b in ("卡萨帝", "统帅", "海尔") if b in title), "")
+    # 参数：云端参数库本地缓存有就带上（没有就算了，不爬官网）
+    props = []
+    try:
+        import paths as _paths
+        _pj = os.path.join(_paths.data_base(), "par_cloud.json")
+        if os.path.isfile(_pj):
+            with io.open(_pj, encoding="utf-8") as f:
+                _pars = (json.load(f).get("pars") or {})
+            _hit = _pars.get(model) or _pars.get(model_) or {}
+            props = [(str(k), str(v)) for k, v in _hit.items() if k and v][:40]
+    except Exception:
+        props = []
+    _cat = ""
+    try:
+        import pei_core
+        _cat = pei_core.guess_cat(title or model_)
+    except Exception:
+        _cat = ""
+    info = {"site": "kitset", "brand": brand, "model": model_,
+            "title": title or model_, "price": "0", "avail": "",
+            "props": props, "url": "", "cat": _cat,
+            "dir": d, "imgs": imgs, "srcmap": srcmap,
+            "source": "蓝底图库（复用·云端图源）"}
+    info = _normalize_info(info)
+    _save_info(info)
+    if log:
+        log("素材复用蓝底图库：%d 张图（本地无 info.json，参数 %d 条%s）"
+            % (n, len(props), "走云端参数库" if props else "空着·胶囊行退化"))
+    return info
+
+
 def _wait_or_reuse_kitset(model, d, log, prog):
     """素材没有时先看蓝底那边抓好的（2026-11-04 用户令「跑一个就够了吧还要两个一起跑爬虫」）：
     宝窗开窗蓝底/聚光/文案三路同时进，同一台机器不该爬两遍——聚光这边先复用
     kitset/<型号>/info.json；蓝底 job 还在跑就等它抓完（最多 90 秒）再复用；
-    蓝底没在跑也没现成素材 → 返回 None 照旧自己爬（单独生成聚光的场景）。"""
+    蓝底没在跑也没现成素材 → 返回 None 照旧自己爬（单独生成聚光的场景）。
+    2026-11-10 补：kitset 有图没 info.json（R2 云端图库拉的型号）也直接复用，
+    不再自己爬——蓝底 job 在跑就等它落完图再合成。"""
     try:
         import kitset as _ks
     except Exception:
@@ -370,6 +448,10 @@ def _wait_or_reuse_kitset(model, d, log, prog):
         except Exception:
             running = False
         if not running or time.time() >= deadline:
+            # 蓝底没在跑（或等超时）：有图没 info.json（云端图源型号）也合成复用，不重爬
+            info = _kitset_imgs_to_pub(model, kd, d, log)
+            if info:
+                return info
             return None
         if not told:
             told = True
@@ -378,6 +460,119 @@ def _wait_or_reuse_kitset(model, d, log, prog):
             if log:
                 log("蓝底抓取进行中，聚光等它抓完复用素材（不重复爬）")
         time.sleep(2)
+
+
+_R2_OK_SUBS = ("官网", "欣盛")
+
+
+def _r2_pub_rel(k):
+    """云端键是不是「抓取图」（只有 官网/ 欣盛/ 根级 src_* 上云，蓝底/聚光产物永不入云）。
+    2026-11-10：跟 api_get 的 /api/kitimg 云端兜底同一口径，边界不能松。"""
+    k = str(k or "").replace("\\", "/").strip()
+    if not k or k.startswith("/"):
+        return False
+    parts = [p for p in k.split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        return False
+    if len(parts) >= 2 and parts[0] in _R2_OK_SUBS:
+        return True
+    return parts[-1].lower().startswith("src_")
+
+
+def _r2_grab_to_pub(model, d, log=None, prog=None):
+    """本地没图时**先查云端 R2 官网图库**，有就直接拉下来出图（2026-11-10 用户令
+    「顺序错了，是先去 R2 云端找没有再去爬」）。命中就落 kitset/<型号>/<相对路径>
+    再走 `_kitset_imgs_to_pub` 合成素材 info，跟蓝底复用同一条路。
+    云端没这个型号 / 查询失败 → 返回 None，调用方照旧去爬。
+    为什么必须这样：leader.com.cn 整站 403（本机家宽、4 个境外节点、真浏览器、
+    CF 边缘 522 全试过），官网抓不动时云端图就是唯一活路。"""
+    try:
+        import kitset as _ks
+        import cloud as _cl
+    except Exception:
+        return None
+    try:
+        nm = _ks.norm_model(model) or re.sub(r"\s+", "", model)
+        kd = os.path.join(_ks.kit_root(), nm)
+    except Exception:
+        return None
+    keys, err = _cl.kit_list_cloud(nm)
+    if not keys:
+        if log and err:
+            log("云端图库查询失败（%s），照常爬取" % err)
+        return None
+    rels = [k for k in keys if _r2_pub_rel(k)][:40]
+    if not rels:
+        return None
+    if prog:
+        prog(6, "云端图库有 %d 张图，正在拉取 ..." % len(rels))
+    if log:
+        log("云端图库命中 %d 张，拉下来直接用（不爬官网）" % len(rels))
+    got = 0
+    for rel in rels:
+        fp = os.path.join(kd, rel.replace("/", os.sep))
+        try:
+            if os.path.isfile(fp) and os.path.getsize(fp) > 1024:
+                got += 1
+                continue
+        except Exception:
+            pass
+        raw, _e = _cl.kit_fetch_cloud(nm + "/" + rel)
+        if not raw or len(raw) < 512:
+            continue
+        try:
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            with open(fp, "wb") as f:
+                f.write(raw)
+            got += 1
+        except Exception as e:
+            if log:
+                log("云端图落盘失败 %s：%s" % (rel, e))
+    if not got:
+        return None
+    return _kitset_imgs_to_pub(model, kd, d, log)
+
+
+def _xinsheng_fallback(model, d, log, prog=None):
+    """欣盛商城相册兜底（2026-10-23 用户定稿「型号对不上的就不要了」）：
+    官网三站+兴达都没有、**或官网页面抓不开**（2026-11-10 leader 403 实锤）时用。
+    拿到相册返回 info；没相册返回 None（错误文案由调用方按场景给）。"""
+    prog = prog or (lambda p, m: None)
+    prog(18, "试欣盛商城 ...")
+    try:
+        import copywriter
+        xs = copywriter.fetch_xinsheng(model, log=log)
+    except Exception as e:
+        xs = None
+        log("欣盛兜底异常：%s" % e)
+    album = [u for u in ((xs or {}).get("imgs") or []) if u]
+    if not album:
+        return None
+    _pn = str(xs.get("pname") or "")
+    _brand = next((b for b in ("卡萨帝", "统帅", "海尔") if b in _pn), "")
+    try:
+        _price = str(int(float(str(xs.get("price") or "0"))))   # 欣盛价 "1899.0" 浮点串
+    except Exception:
+        _price = "0"
+    import pei_core as _pc
+    _cat = _pc.guess_cat(_pn)   # 品类从商品名猜（空 cat 会让选图/背景风格走不到品类分支）
+    # 整目录重来：能走到这说明没有有效 info.json，目录里只可能是上次失败/错型号的残留
+    # 2026-11-04 P0-2：删前校验归属——realpath 必须真落在图片库根下才许 rmtree
+    import paths as _paths
+    if os.path.realpath(d).startswith(os.path.realpath(_paths.data_base()) + os.sep):
+        shutil.rmtree(d, ignore_errors=True)
+    else:
+        raise RuntimeError("目录越界，拒绝删除：" + d)
+    os.makedirs(d, exist_ok=True)
+    try:
+        imgs = copywriter.dl_images([(u, "欣盛") for u in album], d, log)
+    except Exception as e:
+        log("欣盛图下载失败：%s" % e)
+        raise RuntimeError("欣盛商城图片下载失败，稍后再试")
+    return {"site": "xinsheng", "brand": _brand, "model": model,
+            "title": _pn or model, "price": _price,
+            "avail": "", "props": [], "url": str(xs.get("url") or ""),
+            "cat": _cat, "dir": d, "imgs": imgs, "source": "欣盛商城"}
 
 
 def work(model, prog=None):
@@ -400,6 +595,10 @@ def work(model, prog=None):
     info = _wait_or_reuse_kitset(model, d, log, prog)
     if info:
         return info
+    # 2026-11-10 用户令「顺序错了，是先去 R2 云端找没有再去爬」——本地没图先问云端图库
+    info = _r2_grab_to_pub(model, d, log, prog)
+    if info:
+        return info
     os.makedirs(d, exist_ok=True)
     import pei_core
     import pei_xdjdy
@@ -415,42 +614,7 @@ def work(model, prog=None):
         # 2026-10-23 用户定稿「型号对不上的就不要了」：官网对不上宁可不抓，绝不抓错型号——
         # 欣盛商城相册兜底（写文案 Pro 同款源）。XQG100-28E 实锤：海尔/统帅官网、兴达都没有，
         # 旧逻辑 LCS 前缀误命中统帅 LHD559WU1 白机页，发布图全成别家机器。
-        prog(18, "官网未命中，试欣盛商城 ...")
         log("官网未命中，试欣盛商城 ...")
-        try:
-            import copywriter
-            xs = copywriter.fetch_xinsheng(model, log=log)
-        except Exception as e:
-            xs = None
-            log("欣盛兜底异常：%s" % e)
-        album = [u for u in ((xs or {}).get("imgs") or []) if u]
-        if not album:
-            raise RuntimeError("没找到这个型号，检查一下型号是否正确（海尔/卡萨帝/统帅/实体店）")
-        _pn = str(xs.get("pname") or "")
-        _brand = next((b for b in ("卡萨帝", "统帅", "海尔") if b in _pn), "")
-        try:
-            _price = str(int(float(str(xs.get("price") or "0"))))   # 欣盛价 "1899.0" 浮点串
-        except Exception:
-            _price = "0"
-        import pei_core as _pc
-        _cat = _pc.guess_cat(_pn)   # 品类从商品名猜（空 cat 会让选图/背景风格走不到品类分支）
-        # 整目录重来：能走到这说明没有有效 info.json，目录里只可能是上次失败/错型号的残留
-        # 2026-11-04 P0-2：删前校验归属——realpath 必须真落在图片库根下才许 rmtree
-        import paths as _paths
-        if os.path.realpath(d).startswith(os.path.realpath(_paths.data_base()) + os.sep):
-            shutil.rmtree(d, ignore_errors=True)
-        else:
-            raise RuntimeError("目录越界，拒绝删除：" + d)
-        os.makedirs(d, exist_ok=True)
-        try:
-            imgs = copywriter.dl_images([(u, "欣盛") for u in album], d, log)
-        except Exception as e:
-            log("欣盛图下载失败：%s" % e)
-            raise RuntimeError("欣盛商城图片下载失败，稍后再试")
-        info = {"site": "xinsheng", "brand": _brand, "model": model,
-                "title": _pn or model, "price": _price,
-                "avail": "", "props": [], "url": str(xs.get("url") or ""),
-                "cat": _cat, "dir": d, "imgs": imgs, "source": "欣盛商城"}
     else:
         prog(30, "抓取详情页与图片 ...")
         if site == "xdjdy":
@@ -459,8 +623,17 @@ def work(model, prog=None):
             info = pei_core.fetch_product(site, url, d, log=log, progress=prog)
             if info:
                 info = pei_core.spider_enrich_info(info, site, url, prod, log=log)
+        if not info:
+            # 2026-11-10 实锤（JSQ22-12LVS(12T)）：旧检索给了 URL 但页面 403/已下架，
+            # 旧逻辑一有 URL 就跳过欣盛兜底，直接报「页面抓取失败」白死一回。
+            # 抓空也必须继续兜底。
+            log("官网页面抓不到（%s），转欣盛兜底 ..." % url)
     if not info:
-        raise RuntimeError("页面抓取失败，稍后再试")
+        info = _xinsheng_fallback(model, d, log, prog)
+    if not info:
+        if url:
+            raise RuntimeError("官网页面打不开（整站拒访或已下架），欣盛与云端图库都没有这个型号，稍后再试")
+        raise RuntimeError("没找到这个型号（官网/欣盛/云端图库都没有），检查一下型号是否正确（海尔/卡萨帝/统帅/实体店）")
     info = _normalize_info(info)
     # 逐图来源记录（2026-10-24 用户定稿：原图素材按来源分组 + 官网>欣盛>其他用图优先级）
     if not info.get("srcmap"):

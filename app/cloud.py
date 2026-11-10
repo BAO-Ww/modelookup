@@ -396,6 +396,21 @@ def kit_fetch_cloud(rel, timeout=20):
     return None, last
 
 
+def kit_list_cloud(model, timeout=20):
+    """某型号在云端 R2 图库里的键清单（2026-11-10 用户令「顺序错了，是先去 R2 云端找
+    没有再去爬」）：GET /kitidx?m=<型号> → {ok, keys:["官网/01.png", "src_2.jpg", ...]}。
+    免登录公开读（同 /kitimg2），客户端只在「本地没图」时问一次，量很小。
+    返回 (list|None, err|None)：云端没这个型号 = ([], None)；网络/服务异常 = (None, err)。"""
+    import urllib.parse
+    j, err = cloud_req("/kitidx?m=" + urllib.parse.quote(str(model or ""), safe="()"),
+                       "GET", timeout=timeout)
+    if err or not j:
+        return None, err or "neterr"
+    if not j.get("ok"):
+        return None, str(j.get("msg") or j.get("err") or "bad")
+    return [str(k) for k in (j.get("keys") or []) if k], None
+
+
 def kit_probe_cloud(rel, timeout=15):
     """官网图存在性探测（2026-11-10 任务25 R2 图库）：GET /kitup?k=<rel> → True/False/None。
     None = 探测失败（网络/未登录），调用方当「不确定」处理（同步时宁可跳过别硬传）。"""

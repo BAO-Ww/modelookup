@@ -110,7 +110,7 @@ def fetch(url, extra_headers=None, binary=False, retries=1, timeout=15):
         except urllib.error.HTTPError as e:
             # 2026-11-11：统帅站 leader.com.cn 挂 WAF，本机非浏览器 TLS 指纹全 403。
             # 兜底走 CF Worker /osfetch 代抓（Cloudflare 出口指纹能过盾）。只对海尔系域名生效。
-            if getattr(e, "code", 0) == 403 and _OS_HOST_RE.match(url or ""):
+            if getattr(e, "code", 0) in (403, 404, 503) and _OS_HOST_RE.match(url or ""):
                 try:
                     return _relay_fetch(url, headers, binary=binary, timeout=timeout)
                 except Exception:
@@ -119,6 +119,13 @@ def fetch(url, extra_headers=None, binary=False, retries=1, timeout=15):
             if i < retries:
                 time.sleep(0.8)
         except Exception as e:
+            # 2026-11-10：image.haier.com 对本机出口是 TCP RST（不是 403），网络层异常
+            # 同样可能是 IP 封禁——海尔系域名一律试一次 CF 代抓再认输。
+            if _OS_HOST_RE.match(url or ""):
+                try:
+                    return _relay_fetch(url, headers, binary=binary, timeout=timeout)
+                except Exception:
+                    pass
             last = e
             if i < retries:
                 time.sleep(0.8)
