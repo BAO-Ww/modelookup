@@ -160,8 +160,9 @@ class ApiPostMixin:
             try:
                 if u.path == "/api/copypolish":
                     tgt = 'titles' if d.get("target") == 'titles' else 'desc'
+                    _mode = 'rewrite' if d.get("mode") == 'rewrite' else 'polish'
                     self._send(200, json.dumps(
-                        copywriter.polish(model, kind, tgt, d.get("text") or "", logf),
+                        copywriter.polish(model, kind, tgt, d.get("text") or "", logf, mode=_mode),
                         ensure_ascii=False))
                     return
                 if u.path == "/api/copyqa":

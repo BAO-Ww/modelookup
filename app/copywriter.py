@@ -103,15 +103,45 @@ def fetch(url, extra_headers=None, binary=False, retries=1, timeout=15):
                     raw = gzip.decompress(raw)
                 elif enc and "deflate" in enc:
                     try:
-                        raw = zlib.decompress(raw)
-                    except zlib.error:
                         raw = zlib.decompress(raw, -zlib.MAX_WBITS)
+                    except zlib.error:
+                        pass
                 return raw if binary else raw.decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            # 2026-11-11：统帅站 leader.com.cn 挂 WAF，本机非浏览器 TLS 指纹全 403。
+            # 兜底走 CF Worker /osfetch 代抓（Cloudflare 出口指纹能过盾）。只对海尔系域名生效。
+            if getattr(e, "code", 0) == 403 and _OS_HOST_RE.match(url or ""):
+                try:
+                    return _relay_fetch(url, headers, binary=binary, timeout=timeout)
+                except Exception:
+                    pass
+            last = e
+            if i < retries:
+                time.sleep(0.8)
         except Exception as e:
             last = e
             if i < retries:
                 time.sleep(0.8)
     raise last
+
+
+# 海尔系官网域名（代抓兜底只对这些生效）
+_OS_HOST_RE = re.compile(r"^https?://[^/]*(?:haier\.com|casarte\.com|leader\.com\.cn)/", re.I)
+
+
+def _relay_fetch(url, headers=None, binary=False, timeout=30):
+    """经 CF Worker /osfetch 代抓（2026-11-11 统帅 WAF 兜底）。要登录令牌；失败抛原异常。"""
+    from cloud import CLOUD_HOST, _CLOUD_UA, _cloud_token
+    tok = _cloud_token()
+    if not tok:
+        raise RuntimeError("无云端令牌，代抓不可用")
+    relay = CLOUD_HOST + "/osfetch?u=" + urllib.parse.quote(url, safe="")
+    req = urllib.request.Request(relay)
+    req.add_header("X-Token", tok)
+    req.add_header("User-Agent", _CLOUD_UA)
+    with urlopen_ssl(req, timeout=timeout) as r:
+        raw = r.read()
+        return raw if binary else raw.decode("utf-8", errors="replace")
 
 
 # ---------------------------------------------------------------- 官网抓取
@@ -287,8 +317,38 @@ def extract_images(html):
     return fixed
 
 
+_PAR_LOCAL = {"at": 0.0, "pars": None}
+
+def _par_local():
+    """云端参数库本地副本（par_cloud.json，cloud.par_pull_cloud 拉取落盘）。
+    按 mtime 惰性重载；读不到/没同步过返回空 dict——文案回源爬官网，行为跟以前一样。"""
+    try:
+        p = wp("par_cloud.json")
+        mt = os.path.getmtime(p)
+        if _PAR_LOCAL["pars"] is None or mt != _PAR_LOCAL["at"]:
+            with io.open(p, encoding="utf-8") as f:
+                _PAR_LOCAL["pars"] = (json.load(f).get("pars") or {})
+            _PAR_LOCAL["at"] = mt
+    except Exception:
+        if _PAR_LOCAL["pars"] is None:
+            _PAR_LOCAL["pars"] = {}
+    return _PAR_LOCAL["pars"]
+
 def fetch_official(model, log):
-    """官网三站顺序找；命中详情页→参数/卖点/产品名/价/图。没命中返回 None。"""
+    """官网三站顺序找；命中详情页→参数/卖点/产品名/价/图。没命中返回 None。
+
+    2026-11-10 用户令「写文案是不是不需要再抓取数据就能写」：入口先查云端参数库
+    （par_cloud.json），型号命中（≥3 条参数）直接组 data 返回——完全不打官网，
+    秒级出参数、防反爬；参数库里没有 sellpoints/图，价格靠欣盛兜底（原逻辑不变）。"""
+    try:
+        _kv = _par_local().get(norm_model(model))
+        if _kv and len(_kv) >= 3:
+            log("参数库命中（%d 条参数），跳过官网抓取" % len(_kv))
+            return {'source': '云端参数库', 'brand': '', 'pname': model, 'price': '',
+                    'url': '', 'groups': [[k, v] for k, v in _kv.items()],
+                    'sellpoints': [], 'imgs': []}
+    except Exception:
+        pass
     nm = norm_model(model)
     for sk in ('haier', 'casarte', 'leader'):
         s = SITES[sk]
@@ -722,6 +782,20 @@ POLISH_DESC_PROMPT = """你是闲鱼商品描述润色师。请润色下面这�
 【原描述】
 {orig}"""
 
+REWRITE_DESC_PROMPT = """你是闲鱼商品描述写手。把下面这段商品描述**推倒重写**——换一套完全不同的结构和写法，开场白、卖点措辞、段落顺序、结尾话术都要换新写法，跟原文差异越大越好，不要照抄原句：
+- 只能使用描述原文和【真实数据】里出现的参数/数字，禁止编造任何新参数新数字
+- 必须保留的要素（一个都不能少）：【产品名】行（型号全码保留）、·卖点条目（条数不许减少）、【参数】行、【官网价】行、【交易】行、结尾话术、可发货地区行
+- 仍然分段式排版、一话一行、每段之间空一行
+- 成色词口径：{kk_rule}
+- 不加 emoji，不加 #话题，不出现「最好/第一/顶级」等极限词
+只输出重写后的完整描述正文，不要任何解释。
+
+【真实数据】
+{facts}
+
+【原描述】
+{orig}"""
+
 QA_PROMPT = """你是闲鱼文案审核员。对下面的文案做合规自检，逐条挑毛病：
 1) 成色口径：{kk_rule}
 2) 标题/卖点条目里不许出现人民币价格（如「1899元」「售价」字样）；型号、容量、尺寸这类参数数字不算价格
@@ -768,7 +842,7 @@ def _facts_of(model, kind):
     return _facts_text(d or {'pname': model, 'groups': [], 'sellpoints': []}, model) or ("型号: " + model)
 
 
-def polish(model, kind, target, text, log=None):
+def polish(model, kind, target, text, log=None, mode='polish'):
     """AI 润色：target='titles'（重写三选一）| 'desc'（润色描述正文）。带防编造校验。"""
     log = log or (lambda s: None)
     kk = 's' if kind == 's' else 'l'
@@ -806,10 +880,12 @@ def polish(model, kind, target, text, log=None):
     # desc：正文直出，只做数字防编造校验（不合规段落回退原文）
     kk_rule = ('成色词必须用「全新未拆封/全新原封」，绝不许出现「样机」字样' if kk != 's'
                else '成色词必须用「展示样机/功能完好」，绝不许出现「全新」字样')
-    new = _chat(POLISH_DESC_PROMPT.format(facts=facts, kk_rule=kk_rule, orig=str(text or ''))).strip()
+    _dprompt = REWRITE_DESC_PROMPT if mode == 'rewrite' else POLISH_DESC_PROMPT
+    new = _chat(_dprompt.format(facts=facts, kk_rule=kk_rule, orig=str(text or ''))).strip()
     new = re.sub(r'^```[a-z]*\s*|\s*```$', '', new).strip()
-    # 数字防编造：逐行校验，带未知数字的行回退原文对应行
-    if text:
+    # 数字防编造：逐行校验。润色版=带未知数字的行回退原文对应行（行对行）；
+    # 重写版=结构全换行对不上，带未知数字的行直接剔除。
+    if text and mode != 'rewrite':
         old_lines = str(text).split('\n')
         out = []
         for i, ln in enumerate(new.split('\n')):
@@ -818,6 +894,13 @@ def polish(model, kind, target, text, log=None):
             else:
                 out.append(ln)
         new = '\n'.join(out)
+    elif mode == 'rewrite':
+        bad = [ln for ln in new.split('\n') if ln.strip() and not ok_nums(ln)]
+        if len(bad) > 3:
+            return {"ok": False, "msg": "重写失败：AI 编了 %d 处未知数字，防编造校验整版拒收，再试一次" % len(bad)}
+        new = '\n'.join(ln for ln in new.split('\n') if not (ln.strip() and not ok_nums(ln)))
+        if not new.strip():
+            return {"ok": False, "msg": "重写失败：全被防编造校验剔除，再试一次"}
     return {"ok": True, "desc": new}
 
 

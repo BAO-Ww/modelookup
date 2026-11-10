@@ -233,8 +233,26 @@ class ApiGetMixin:
             root = os.path.abspath(kitset.kit_root())
             fp = os.path.abspath(os.path.join(kitset.kit_root(), core))
             if not fp.startswith(root) or not os.path.isfile(fp):
-                self._send(404, json.dumps({"ok": False, "msg": "no such kit file"}, ensure_ascii=False))
-                return
+                # 本地缺图 → 云端 R2 图库兜底（2026-11-10 任务25）：官网/ 子目录与根级
+                # src_*.jpg 抓取图都在云端 gw/<型号>/...；命中就落盘缓存再回给前端，
+                # 下次走本地。其他路径（蓝底/聚光等本机生成图）不进云端，直接 404。
+                _hit = False
+                try:
+                    _parts = core.replace("\\", "/").split("/")
+                    _base = _parts[-1].lower() if _parts else ""
+                    if (len(_parts) >= 2 and _parts[1] in ("官网", "欣盛")) or _base.startswith("src_"):
+                        import cloud as _cl
+                        _raw, _err = _cl.kit_fetch_cloud(core)
+                        if _raw:
+                            os.makedirs(os.path.dirname(fp), exist_ok=True)
+                            with open(fp, "wb") as _f:
+                                _f.write(_raw)
+                            _hit = True
+                except Exception:
+                    _hit = False
+                if not _hit:
+                    self._send(404, json.dumps({"ok": False, "msg": "no such kit file"}, ensure_ascii=False))
+                    return
             ctype = "image/jpeg" if fp.lower().endswith((".jpg", ".jpeg")) else (
                 "image/png" if fp.lower().endswith(".png") else "application/json")
             with open(fp, "rb") as f:

@@ -1560,7 +1560,9 @@ function buildIndex(){
     r._n  = norm(r.mo);
     r._c2 = coreOf2(r.mo);
     r._cg = catGroup(r.cat);
-    r._h  = norm([r.cat, r.b, r.n, r.code, r.st, r.note].join(' '));
+    // 电机类型进搜索索引（2026-11-10 用户令「搜索就能看到是直驱还是变频」）：
+    // 搜「直驱」「变频」直接命中对应卡；_h 是备注类字段，分数 1 排型号之后不抢排序
+    r._h  = norm([r.cat, r.b, r.n, r.code, r.st, r.note, r.motor].join(' '));
     // 美的 / 容声那张表是另一套报价（拿货价·慧买卖 / 给二批 / 价格取整），
     // 卡片和计算器要跟着换口径 —— 用这三个字段当标记
     r._md = isNum(r.mh) || isNum(r.m2) || isNum(r.mr);
@@ -3694,6 +3696,23 @@ function renderItem(it){
     }
   }
 
+  /* ---------- 电机（2026-11-10 用户令「搜索就能看到是直驱还是变频」）----------
+     参数库（云端 /par 同步）里有 电机类型 才显示；直驱=亮绿、纯变频=灰、
+     其它写法（如 BLDC变频/直驱变频电机）归「变频」灰底。没数据的卡不出这行，不占地方。 */
+  var motorHTML = '';
+  if (it.motor){
+    var _mdd = String(it.motor);
+    var _isDD = _mdd.indexOf('直驱') >= 0;
+    var _tt = _isDD ? '直驱电机：电机直接驱动内筒，无皮带传动'
+                    : '变频电机：皮带传动变频电机';
+    /* 2026-11-10 用户令「把这个放到这里」：电机胶囊进卡片头部徽章行（全新机旁边），
+       尺寸跟 .tag 对齐（11.5px/同内距），直驱=绿底（跟 sellbadge s-ok 同色系）、变频=灰 */
+    motorHTML = '<span class="tag" style="border-radius:999px;font-weight:600;'
+      + (_isDD ? 'background:#e8f6ee;color:#0f7a45;border-color:#b9e2cb'
+               : 'background:#f5f6f9;color:#8b95a6;border-color:#e9edf4')
+      + '" title="' + esc(_tt) + '">' + esc(_mdd) + '</span>';
+  }
+
   var stTxt = it.st || it.t2 || '';
 
   /* 官网按钮：**产品详情页直链优先**（catalog 官网库命中的型号，后台按型号给好 URL）；
@@ -3816,6 +3835,8 @@ function renderItem(it){
        : it.k === 'l' ? '<span class="tag s">滞销清理</span>'
        : it.k === 's' ? '<span class="tag s">样机清理</span>'
        : '<span class="tag np">全新机</span>')
+    /* 电机胶囊进徽章行（2026-11-10 用户令「把这个放到这里」）：跟在全新机/滞销标签后面 */
+    + (motorHTML ? motorHTML : '')
     + '</div>'
     + (nm ? '<div class="nm">' + hl(nm) + '</div>' : '')
     + exTagsHTML(it.c)
@@ -3853,6 +3874,7 @@ function renderItem(it){
     + (pok('sum') && sumHTML ? '<div class="row"><label>汇总</label><span class="vs">' + sumHTML + '</span></div>' : '')
     + (pok('live') && liveHTML ? '<div class="row"><label>库存</label><span class="vs">' + liveHTML + '</span></div>' : '')
     + (pok('supplier') && shipHTML ? '<div class="row"><label>货源</label><span class="vs">' + shipHTML + '</span></div>' : '')
+    // 电机行已并入卡片头部徽章行（2026-11-10 用户令），这里不再单出一行
     // 美的系只在「美的」页里有报价，没有发货区域那一列 —— 不写「发往」免得误导
     + (pok('nat') && !it._md && natHTML ? '<div class="row"><label>发往</label><span class="vs">' + natHTML + '</span></div>' : '')
     + (pok('subsidy') && subHTML ? '<div class="row"><label>补贴</label><span class="vs">' + subHTML + '</span></div>' : '')
@@ -6873,6 +6895,7 @@ function openCopyView(k, kind, force, tb, host){
     h += '<div style="background:#fff;border:1px solid #e5e7eb;padding:5px 9px 7px;display:flex;flex-direction:column;flex:1;min-height:0">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px"><b style="font-size:12.5px">商品描述</b>'
       + '<span style="display:flex;gap:8px;align-items:center">'
+      + '<button id="cv_rewriteD" style="border:1px solid #bcd3e8;background:#eef4fb;color:#185fa5;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer" title="AI 推倒重写一版全新结构的描述">重写文案</button>'
       + '<button id="cv_polishD" style="border:1px solid #bcd3e8;background:#eef4fb;color:#185fa5;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">AI 润色描述</button>'
       + '<button id="cv_descCopy" style="border:none;background:#185fa5;color:#fff;border-radius:6px;padding:4px 12px;font-size:11.5px;font-weight:600;cursor:pointer">一键复制文案</button></span></div>';
     h += '<textarea id="cv_desc" style="width:100%;box-sizing:border-box;flex:1;min-height:0;border:1px solid #e5e7eb;border-radius:7px;padding:7px 10px;font-size:12.5px;line-height:1.6;font-family:inherit;background:#fafbfc;color:#1f2328;resize:none"></textarea>';
@@ -6898,6 +6921,7 @@ function openCopyView(k, kind, force, tb, host){
     for (var i = 0; i < (D.titles || []).length; i++) h += rowABC('ABC'[i], D.titles[i]);
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px"><b>商品描述</b>'
       + '<span style="display:flex;gap:8px;align-items:center">'
+      + '<button id="cv_rewriteD" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:6px 14px;font-size:12.5px;cursor:pointer" title="AI 推倒重写一版全新结构的描述">重写文案</button>'
       + '<button id="cv_polishD" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:6px 14px;font-size:12.5px">AI 润色</button>'
       + '<button id="cv_descCopy" style="border:none;background:#4f46e5;color:#fff;border-radius:8px;padding:6px 14px;font-size:12.5px">一键复制</button></span></div>';
     h += '<textarea id="cv_desc" style="width:100%;box-sizing:border-box;flex:1;min-height:0;border:1px solid #e3e8f0;border-radius:9px;padding:9px 12px;font-size:12.5px;line-height:1.6;font-family:inherit;resize:none"></textarea>';
@@ -6981,6 +7005,23 @@ function openCopyView(k, kind, force, tb, host){
           else { alert((j && j.msg) || '润色失败'); }
         })
         .catch(function(e){ pd.disabled = false; pd.textContent = 'AI 润色'; alert('润色失败：' + e); });
+    };
+    /* 重写文案（2026-11-11 用户令）：AI 推倒重写一版全新结构的描述，防编造校验同口径 */
+    var rw = wrap.querySelector('#cv_rewriteD');
+    if (rw) rw.onclick = function(){
+      var ta = wrap.querySelector('#cv_desc');
+      var orig = ta.value;
+      if (!orig.trim()){ alert('描述是空的，先选好全国版/报备版'); return; }
+      rw.disabled = true; rw.textContent = '重写中…';
+      fetch('/api/copypolish', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({model: k, kind: kind, target: 'desc', mode: 'rewrite', text: orig})})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          rw.disabled = false; rw.textContent = '重写文案';
+          if (j && j.ok && j.desc){ ta.value = j.desc; }
+          else { alert((j && j.msg) || '重写失败'); }
+        })
+        .catch(function(e){ rw.disabled = false; rw.textContent = '重写文案'; alert('重写失败：' + e); });
     };
   }
   function renderTab(t){

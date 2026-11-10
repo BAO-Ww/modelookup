@@ -14,7 +14,8 @@ import urllib.request
 
 import state
 import winref
-from cloud import _cloud_token, cloud_req, stock_pull_cloud, sync_xlsx_cloud
+from cloud import (_cloud_token, cloud_req, kit_sync_cloud, par_pull_cloud,
+                   stock_pull_cloud, sync_xlsx_cloud)
 from config import (APP_VERSION, CLEAN_XLSX, CLOUD_HOST, _CLOUD_UA, FILE_ID,
                     ONLINE_SHARE, PRICE_SHARE, SUBSIDY_FID_CACHE, SUBSIDY_SHARE,
                     SUBSIDY_XLSX,
@@ -323,6 +324,21 @@ def _updateall_bg(log, wf="all"):
                     state.set_state(stock_at=(state.STOCK or {}).get("ts") or time.strftime("%Y-%m-%d %H:%M"))
                     parts.append("库存：云端确认过最新（内容无变化，时间已刷新）")
                     state._STK_DETAIL[0] = "云端库存确认最新"
+        # 官网参数库（2026-11-10）：电机胶囊 + 文案参数复用的数据源，管理号/子账号都拉
+        state._all_stage("正在同步官网参数库…", 94)
+        try:
+            _n = par_pull_cloud(log)
+            if _n:
+                parts.append("参数库：%d 个型号" % _n)
+        except Exception as _e:
+            log("⚠ 参数库同步失败（不影响主流程）：%r" % _e)
+        # 官网图云同步（2026-11-10 任务25 R2 图库）：本机官网图补齐云端（探测后只传缺的）
+        try:
+            _kn, _kerr = kit_sync_cloud(log)
+            if _kn:
+                parts.append("官网图上云：%d 张" % _kn)
+        except Exception as _e:
+            log("⚠ 官网图云同步失败（不影响主流程）：%r" % _e)
     except Exception as e:
         errs.append(str(e))
         parts.append("❌ %s" % e)
@@ -379,6 +395,15 @@ def _suball_bg(log, wf="all"):
                 state.set_state(stock_at=(state.STOCK or {}).get("ts") or time.strftime("%Y-%m-%d %H:%M"))
                 parts.append("库存：云端还没有新数据（时间已刷新）")
                 state._STK_DETAIL[0] = "云端库存确认最新"
+        # 官网参数库（2026-11-10）：子账号同样要电机胶囊 + 文案复用
+        state._all_stage("正在同步官网参数库…", 94)
+        try:
+            _n = par_pull_cloud(log)
+            if _n:
+                parts.append("参数库：%d 个型号" % _n)
+        except Exception as _e:
+            log("⚠ 参数库同步失败（不影响主流程）：%r" % _e)
+        # 子账号：官网图只拉不推（/kitup 校验 admin/addimg），尝试也会 403，直接跳过
     except Exception as e:
         errs.append(str(e))
         parts.append("❌ %s" % e)

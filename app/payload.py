@@ -86,6 +86,47 @@ def set_payload(p):
             state.STATE["rev"] += 1          # 数据换新 → 前端轮询到就无感重载
 
 
+_PAR_CACHE = {"at": 0.0, "pars": None}
+
+def _rows_with_motor(rows):
+    """把参数库里的 电机类型 注进 rows（2026-11-10）：r['motor']。
+    只注电机这一个字段——前端胶囊+搜索够用，payload 不膨胀；文案用整套参数走本地文件。"""
+    pars = _par_cache()
+    if not pars or not rows:
+        return rows
+    try:
+        from normalize import norm_model
+        for r in rows:
+            pv = pars.get(norm_model(r.get("mo") or r.get("c") or ""))
+            if not pv:
+                continue
+            mt = str(pv.get("电机类型") or pv.get("电机") or "").strip()
+            if mt:
+                r["motor"] = mt
+    except Exception:
+        pass
+    return rows
+
+def _par_cache():
+    """官网参数云库本地副本（par_cloud.json，cloud.par_pull_cloud 拉取落盘）。
+    按 mtime 惰性重载；读不到返回空 dict，卡片无胶囊、文案回源爬——永不炸。"""
+    p = wp("par_cloud.json")
+    try:
+        mt = os.path.getmtime(p)
+        if _PAR_CACHE["pars"] is None or mt != _PAR_CACHE["at"]:
+            with io.open(p, encoding="utf-8") as f:
+                _PAR_CACHE["pars"] = (json.load(f).get("pars") or {})
+            _PAR_CACHE["at"] = mt
+    except Exception:
+        if _PAR_CACHE["pars"] is None:
+            _PAR_CACHE["pars"] = {}
+    return _PAR_CACHE["pars"]
+
+def invalidate_data():
+    """/api/data 组包缓存作废（2026-11-10：参数库同步后调用，下组包就带 motor）。"""
+    global _DATA_JSON
+    _DATA_JSON = None
+
 def api_data_bytes():
     """给页面的数据：只有 meta + rows + 图片 key 列表（不含图本身）。"""
     global _DATA_JSON
@@ -106,7 +147,7 @@ def api_data_bytes():
                         kitmain.append(_n)
         except Exception:
             kitmain = []
-        body = json.dumps({"meta": p.get("meta") or {}, "rows": p.get("rows") or [],
+        body = json.dumps({"meta": p.get("meta") or {}, "rows": _rows_with_motor(p.get("rows") or []),
                            "imgkeys": keys, "kitmain": kitmain,
                            "web": p.get("web") or {}}, ensure_ascii=False, separators=(",", ":"))
         _DATA_JSON = body.encode("utf-8")

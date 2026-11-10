@@ -325,6 +325,31 @@ def stock_pull_cloud(log, force=True):
                         stock_at=ts, rev=state.STATE.get("rev", 0) + 1)
 
 
+def par_pull_cloud(log):
+    """官网参数云库拉取（2026-11-10「搜索就能看到是直驱还是变频」+ 文案参数复用）：
+    GET /par 全量 {型号:{参数名:值}} → 落 par_cloud.json（数据根）。
+    payload.api_data_bytes 每次组包时把 电机类型 注进 rows.motor（卡片胶囊+搜索），
+    copywriter 生成文案前优先查这份参数，命中就不再爬官网。"""
+    j, err = cloud_req("/par", "GET", timeout=120)
+    if err or not j or not j.get("ok"):
+        log("⚠ 云端参数库拉取失败（胶囊/文案复用暂不可用）：%s" % (err or (j or {}).get("msg")))
+        return 0
+    pars = j.get("pars") or {}
+    if not pars:
+        log("云端参数库还是空的（等补抓脚本跑完上传）")
+        return 0
+    with io.open(wp("par_cloud.json"), "w", encoding="utf-8") as f:
+        json.dump({"up": j.get("up") or 0, "by": j.get("by") or "", "n": len(pars),
+                   "pars": pars, "at": time.time()}, f, ensure_ascii=False)
+    try:
+        import payload as _pl
+        _pl.invalidate_data()          # /api/data 下次组包就带上 motor
+    except Exception:
+        pass
+    log("云端参数库已同步：%d 个型号" % len(pars))
+    return len(pars)
+
+
 def _ver_gt(a, b):
     """版本号比较：'2.7.2' > '2.7.1'。"""
     def nums(s):
@@ -333,6 +358,179 @@ def _ver_gt(a, b):
         return nums(a) > nums(b)
     except Exception:
         return False
+
+
+def kit_fetch_cloud(rel, timeout=20):
+    """官网图云库直取（2026-11-10 任务25 R2 图库）：GET /kitimg2/<型号>/<相对路径>
+    公开读（worker 免登录路由），返回 (bytes|None, err|None)。404 = 云端没这张（正常回落）。
+    rel 形如 'BCD-251WBIU1/官网/xxx.jpg' 或 'BCD-251WBIU1/src_1.jpg'（R2 键 gw/ 前缀由 worker 补）。"""
+    import urllib.parse
+    from paths import net_proxy as _npx
+    q = urllib.parse.quote(rel, safe="/()")
+    px = None
+    try:
+        px = _npx()
+    except Exception:
+        px = None
+
+    def _do(use_px):
+        req = urllib.request.Request(CLOUD_HOST + "/kitimg2/" + q, method="GET")
+        req.add_header("User-Agent", _CLOUD_UA)
+        with urlopen_ssl(req, timeout=timeout, proxy=use_px) as r:
+            return r.read()
+
+    last = None
+    for use_px in ((px, None) if px else (None,)):
+        try:
+            return _do(use_px), None
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None, "noimg"
+            last = "HTTP %d" % e.code
+            if use_px:
+                _PROXY_BAD[0] = time.time()
+        except Exception as e:
+            last = str(e)
+            if use_px:
+                _PROXY_BAD[0] = time.time()
+    return None, last
+
+
+def kit_probe_cloud(rel, timeout=15):
+    """官网图存在性探测（2026-11-10 任务25 R2 图库）：GET /kitup?k=<rel> → True/False/None。
+    None = 探测失败（网络/未登录），调用方当「不确定」处理（同步时宁可跳过别硬传）。"""
+    import urllib.parse
+    j, err = cloud_req("/kitup?k=" + urllib.parse.quote(rel, safe="/()"), "GET", timeout=timeout)
+    if err or not j or not j.get("ok"):
+        return None
+    return bool(j.get("has"))
+
+
+def kit_push_cloud(rel, data, ctype="image/jpeg", timeout=90):
+    """官网图上传（2026-11-10 任务25 R2 图库）：POST /kitup?k=<rel> body=原始字节。
+    返回 (ok, err)。走 /kitup 鉴权路由（管理号或勾了 addimg 的账号）。"""
+    import urllib.parse
+    tok = _cloud_token()
+    if not tok:
+        return False, "还没有登录态"
+    px = None
+    try:
+        from paths import net_proxy as _npx
+        px = _npx()
+    except Exception:
+        px = None
+
+    def _do(use_px):
+        req = urllib.request.Request(CLOUD_HOST + "/kitup?k=" + urllib.parse.quote(rel, safe="/()"),
+                                     data=data, method="POST")
+        req.add_header("X-Token", tok)
+        req.add_header("Content-Type", ctype or "application/octet-stream")
+        req.add_header("User-Agent", _CLOUD_UA)
+        with urlopen_ssl(req, timeout=timeout, proxy=use_px) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    last = None
+    for use_px in ((px, None) if px else (None,)):
+        try:
+            j = _do(use_px)
+            if j.get("ok"):
+                return True, None
+            return False, j.get("msg") or "云端拒收"
+        except urllib.error.HTTPError as e:
+            try:
+                j = json.loads(e.read().decode("utf-8"))
+                return False, j.get("msg") or ("HTTP %d" % e.code)
+            except Exception:
+                last = "HTTP %d" % e.code
+            if use_px:
+                _PROXY_BAD[0] = time.time()
+        except Exception as e:
+            last = str(e)
+            if use_px:
+                _PROXY_BAD[0] = time.time()
+    return False, last
+
+
+_KIT_IMG_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+_KIT_SRC_SUBS = ("官网", "欣盛")       # 云端图库收录的抓取图子目录（2026-11-10 用户令全型号补图）
+
+def kit_local_images():
+    """本机 kitset 里可上云的抓取图清单：每个型号的 官网/**、欣盛/**（仅图片）
+    + 根级 src_*.jpg，返回 [相对键（'型号/官网/x.jpg'，即 R2 键）]。"""
+    try:
+        import kitset
+        root = kitset.kit_root()
+    except Exception:
+        return []
+    out = []
+    if not os.path.isdir(root):
+        return out
+    for m in sorted(os.listdir(root)):
+        md = os.path.join(root, m)
+        if not os.path.isdir(md):
+            continue
+        for sub in _KIT_SRC_SUBS:
+            sd = os.path.join(md, sub)
+            if os.path.isdir(sd):
+                for r0, _d, fs in os.walk(sd):
+                    rel = os.path.relpath(r0, md).replace("\\", "/")
+                    for f in fs:
+                        lf = f.lower()
+                        if f.startswith(".") or not lf.endswith(_KIT_IMG_EXT):
+                            continue
+                        out.append("%s/%s/%s" % (m, rel, f))
+        for f in os.listdir(md):
+            lf = f.lower()
+            if lf.startswith("src_") and lf.endswith((".jpg", ".jpeg", ".png")):
+                out.append("%s/%s" % (m, f))
+    return out
+
+
+def kit_sync_cloud(log):
+    """官网图云同步（2026-11-10 任务25，挂在「全部更新」末尾）：
+    本机清单 → POST /kitexists 批量探测（500 键一批）→ 只传缺的。
+    管理号机器才推（/kitup 校验 admin/addimg）；返回 (n_push, err|None)。"""
+    rels = kit_local_images()
+    if not rels:
+        return 0, "本机没有官网图"
+    missing = []
+    for i in range(0, len(rels), 500):
+        j, err = cloud_req("/kitexists", "POST", {"keys": rels[i:i + 500]}, timeout=120)
+        if err or not j or not j.get("ok"):
+            return 0, err or (j or {}).get("msg")
+        missing.extend(j.get("missing") or [])
+    if not missing:
+        log("官网图云同步：云端已齐（%d 张）" % len(rels))
+        return 0, None
+    n_ok = 0
+    fails = []
+    try:
+        import kitset as _ks
+        root = _ks.kit_root()
+    except Exception:
+        return 0, "kitset 根不可用"
+    for rel in missing:
+        fp = os.path.join(root, rel.replace("/", os.sep))
+        try:
+            if not os.path.isfile(fp):
+                continue
+            with io.open(fp, "rb") as f:
+                data = f.read()
+            ext = fp.rsplit(".", 1)[-1].lower()
+            ct = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                  "webp": "image/webp", "gif": "image/gif"}.get(ext, "application/octet-stream")
+            okk, err = kit_push_cloud(rel, data, ct)
+            if okk:
+                n_ok += 1
+            else:
+                fails.append("%s:%s" % (rel, err))
+        except Exception as e:
+            fails.append("%s:%r" % (rel, e))
+    if fails:
+        log("⚠ 官网图上传 %d/%d 张失败（下次同步重试）：%s" % (
+            len(fails), len(missing), "；".join(fails[:3])))
+    log("官网图云同步：新传 %d 张（云端补齐，本机共 %d 张）" % (n_ok, len(rels)))
+    return n_ok, None
 
 
 # ---------------- 数据链路哨兵（2026-10-24）----------------

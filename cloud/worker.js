@@ -178,6 +178,25 @@ async function d1List(env) {
 //   · KV 键 "myimgs" 保留作惰性迁移源（D1 首次读到空时整包搬入），迁移后可手动清掉
 //   · env.DB 未绑 → 退 KV 整包（老部署兼容）
 const MI_PFX = "myimg_";
+// 官网参数行级存储（2026-11-10）：par_<norm型号> 一行一型号，值 {参数名:值}；
+// 全量读走前缀分页（同 myimgs 模式，D1 单查询响应有上限）。
+const PAR_PFX = "par_";
+async function parAll(env) {
+  const out = {};
+  if (!(await d1Init(env))) return out;
+  const PAGE = 150;
+  for (let off = 0; ; off += PAGE) {
+    const r = await env.DB.prepare(
+      "SELECT k, v FROM store WHERE substr(k,1,4) = ? ORDER BY k LIMIT ? OFFSET ?"
+    ).bind(PAR_PFX, PAGE, off).all();
+    const rows = r.results || [];
+    for (const x of rows) {
+      try { out[x.k.slice(PAR_PFX.length)] = JSON.parse(x.v); } catch (e) {}
+    }
+    if (rows.length < PAGE) break;
+  }
+  return out;
+}
 async function myimgsD1All(env) {
   const out = {};
   const PAGE = 120;
@@ -743,6 +762,24 @@ async function route(request, env, path, ctx) {
       if (!v0) return jerr("手机端数据还没上云", 404);
       return new Response(v0, { headers: { "Content-Type": "application/json; charset=utf-8", ...CORS } });
     }
+  }
+
+  // ---------- 官网图库（2026-11-10 任务25：R2 直读，免登录） ----------
+  // GET /kitimg2/<型号>/<子目录/文件名>  → R2 桶 modelookup-img 的 gw/<型号>/... 对象。
+  // 免登录放行（同 /m 先例）：官网图本来就是公开的产品图，客户端 <img> 走本地
+  // /api/kitimg 代理时不必带 token；边缘可缓存。写入口在门禁后的 /kitup。
+  if (path.startsWith("/kitimg2/") && request.method === "GET") {
+    if (!env.IMG) return jerr("图库未启用（worker 缺 IMG binding）", 503);
+    const rel = decodeURIComponent(path.slice("/kitimg2/".length));
+    if (!rel || rel.includes("..")) return jerr("bad path", 400);
+    try {
+      const obj = await env.IMG.get(rel);
+      if (!obj) return jerr("no such image", 404);
+      const h = { "Cache-Control": "public, max-age=86400", ...CORS };
+      const ct = obj.httpMetadata && obj.httpMetadata.contentType;
+      if (ct) h["Content-Type"] = ct;
+      return new Response(obj.body, { headers: h });
+    } catch (e) { return jerr("图库读取失败：" + e.message, 500); }
   }
 
   // ---------- 救火通道（2026-10-13）：users 账本整包恢复 ----------
@@ -1416,6 +1453,119 @@ async function route(request, env, path, ctx) {
     if (b.html.length > 1000000) return jerr("html 太大（" + Math.round(b.html.length / 1024) + "KB）");
     await env.KV.put("mhtml", b.html);
     return J({ ok: true, kb: Math.round(b.html.length / 1024) });
+  }
+
+  // ---------- 官网参数云库（2026-11-10）：抓一次全端共享 ----------
+  // 动机（用户问「写文案是不是不需要再抓取数据就能写」+「搜索就能看到是直驱还是变频」）：
+  // 官网参数（电机类型/容量/能效/尺寸…）现在只散在各机器本机 kitset/<型号>/info.json，
+  // 谁抓过谁有；文案每次现场爬官网慢且易被反爬。现在按型号一行 par_<norm型号> 存 D1：
+  //   POST /admin/par {pars:{型号:{参数名:值}}}  → 逐行 UPSERT 增量合并（admin，ci 抓取链上传）
+  //   GET  /par                                   → 全量 {pars:{...}, up, by}（所有登录者可读）
+  // 行级存储理由同 myimgs：无写放大、无原子读改写问题；全量读走前缀分页。
+  // 客户端合并进 payload 的 motor 字段（卡片胶囊 + 搜索「直驱/变频」）+ 文案参数复用。
+  if (path === "/par" && request.method === "GET") {
+    const pars = await parAll(env);
+    const meta = await d1Get(env, "parmeta", null) || {};
+    return J({ ok: true, n: Object.keys(pars).length, pars: pars, up: meta.up || 0, by: meta.by || "" });
+  }
+  if (path === "/par" && request.method === "POST") {
+    const users = await getUsers(env);
+    if ((users[who] || {}).role !== "admin") return jerr("只有管理号能上传参数", 403);
+    const b = await request.json().catch(() => ({}));
+    if (!b || typeof b.pars !== "object" || !b.pars || !Object.keys(b.pars).length)
+      return jerr("参数数据为空，拒收");
+    let n = 0;
+    for (const m of Object.keys(b.pars)) {
+      const v = b.pars[m];
+      if (!v || typeof v !== "object" || Array.isArray(v) || !Object.keys(v).length) continue;
+      await d1Put(env, PAR_PFX + String(m), v);
+      n++;
+    }
+    const meta = { up: Date.now(), by: who };
+    await d1Put(env, "parmeta", meta);   // 键名故意避开 par_ 前缀，否则 parAll 会把它扫进参数集
+    return J({ ok: true, n: n });
+  }
+
+  // ---------- 官网代抓中转（2026-11-11：统帅站 leader.com.cn 挂 WAF，本机非浏览器 TLS 指纹全 403） ----------
+  // GET /osfetch?u=<完整URL>  Header: X-Token  → 用 Cloudflare 出口代抓，原样透传响应。
+  // 防滥用三锁：只 GET、只放行海尔系官网域名（haier/casarte/leader）、必须持有效登录令牌。
+  if (path === "/osfetch" && request.method === "GET") {
+    const u0 = url.searchParams.get("u") || "";
+    let t;
+    try { t = new URL(u0); } catch (e) { return jerr("URL 不合法", 400); }
+    if (!/^https?:$/.test(t.protocol)
+        || !/(^|\.)haier\.com$|(^|\.)casarte\.com$|(^|\.)leader\.com\.cn$/.test(t.hostname))
+      return jerr("只许代抓海尔系官网（haier/casarte/leader）", 403);
+    const home = t.protocol + "//" + t.hostname + "/";
+    let r;
+    try {
+      r = await fetch(u0, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+          "Accept": "*/*", "Accept-Language": "zh-CN,zh;q=0.9",
+          "Accept-Encoding": "identity",
+          "Referer": home,
+        },
+        redirect: "follow",
+      });
+    } catch (e) { return jerr("代抓失败：" + e.message, 502); }
+    const body = await r.arrayBuffer();
+    return new Response(body, {
+      status: r.status,
+      headers: {
+        "Content-Type": r.headers.get("Content-Type") || "application/octet-stream",
+        "Cache-Control": "no-store",
+        ...CORS,
+      },
+    });
+  }
+
+  // ---------- 官网图库上传（2026-11-10 任务25：R2，管理号/有补图权限者） ----------
+  // POST /kitexists {keys:["型号/官网/x.jpg", ...]} → {ok, missing:[...]} 批量探测
+  // （客户端「全部更新」末尾的图库同步只传缺图，省流量省请求数）。
+  if (path === "/kitexists" && request.method === "POST") {
+    if (!env.IMG) return jerr("图库未启用（worker 缺 IMG binding）", 503);
+    const b = await request.json().catch(() => ({}));
+    const keys = Array.isArray(b.keys) ? b.keys.slice(0, 2000) : [];
+    if (!keys.length) return jerr("keys 为空");
+    const missing = [];
+    for (const k0 of keys) {
+      const segs = String(k0).split("/").map(s => s.trim());
+      if (segs.length < 2 || segs.some(s => !s || s === "." || s === ".."
+          || /[\\:*?"<>|\x00-\x1f]/.test(s) || s.length > 80)) continue;
+      try {
+        if (!(await env.IMG.head(segs.join("/")))) missing.push(segs.join("/"));
+      } catch (e) {}
+    }
+    return J({ ok: true, missing: missing, checked: keys.length });
+  }
+  // POST /kitup?k=<型号>/<子目录/文件名>  body = 图片原始字节
+  // 存 R2 桶 modelookup-img 的 gw/<型号>/... ；读走免登录的 /kitimg2/。
+  // 权限：管理号，或勾了 addimg（补图）的子账号 —— 跟「谁会产官网图」同口径。
+  // GET /kitup?k=... → {ok, has} 单键存在性探测（批量场景用 /kitexists）。
+  if (path === "/kitup" && (request.method === "POST" || request.method === "GET")) {
+    if (!env.IMG) return jerr("图库未启用（worker 缺 IMG binding）", 503);
+    const k0 = url.searchParams.get("k") || "";
+    const segs = k0.split("/").map(s => s.trim());
+    if (segs.length < 2 || segs.some(s => !s || s === "." || s === ".."
+        || /[\\:*?"<>|\x00-\x1f]/.test(s) || s.length > 80))
+      return jerr("键名不合法（应为 型号/子目录/文件名）", 400);
+    const key = segs.join("/");
+    if (request.method === "GET") {
+      const head = await env.IMG.head(key);
+      return J({ ok: true, has: !!head, bytes: head ? head.size : 0 });
+    }
+    const usersUp = await getUsers(env);
+    const me = usersUp[who];
+    const can = me && (me.role === "admin" || (me.perm && me.perm.addimg));
+    if (!can) return jerr("没有图库上传权限", 403);
+    const buf = await request.arrayBuffer();
+    if (!buf || buf.byteLength < 64 || buf.byteLength > 20 * 1048576)
+      return jerr("图片字节数异常（64B~20MB）", 413);
+    await env.IMG.put(key, buf, {
+      httpMetadata: { contentType: request.headers.get("Content-Type") || "application/octet-stream" },
+    });
+    return J({ ok: true, key: key, bytes: buf.byteLength });
   }
 
   // ---------- 用友库存云中转（2026-10-08）：管理号更新 → 全员共享 ----------
