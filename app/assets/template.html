@@ -1568,9 +1568,13 @@ function catGroup(v){
 
 /* ================= 建索引（数据到位后才跑） ================= */
 var UID = {}, BRANDS = [], CATS = [];
+/* 2026-11-10：型号 key → 行 的索引，给「已发布但总表没这个型号」的幽灵卡判重
+   （型号下架/改名后侧栏还数着它、中间画不出卡，两边数字对不上） */
+var CIDX = {};
 function buildIndex(){
   var i, r;
   UID = {};
+  CIDX = {};
   for (i = 0; i < ALL.length; i++){
     r = ALL[i];
     r._n  = norm(r.mo);
@@ -1584,6 +1588,7 @@ function buildIndex(){
     r._md = isNum(r.mh) || isNum(r.m2) || isNum(r.mr);
     r._uid = i;
     UID[i] = r;
+    if (r.c) CIDX[r.c] = r;
   }
   var mb = {}, mc = {};
   ALL.forEach(function(it){
@@ -4159,6 +4164,28 @@ function search(qRaw){
     if (!okAll) continue;
     hit.push({ sc: best.sc, it: it, ix: firstIx, tag: best.tag });
   }
+  /* 幽灵型号（已发布但总表里没了）也搜得到：型号串 / 闲鱼ID 匹配，别让下架型号搜不出来 */
+  if (SUBVIEW || flagPub){
+    var _gk = ghostKeys();
+    for (i = 0; i < _gk.length; i++){
+      var _gc = _gk[i];
+      if (CIDX[_gc] || !ghostPass(_gc)) continue;
+      var _gi = ghostInfo(_gc), _gx = (_gi && _gi.xs) || null, _gt = norm(_gc), _gid = '';
+      if (_gx){ for (var _gk2 in _gx){ var _ge = _gx[_gk2] || {}; if (_ge.xid != null) _gid += ' ' + norm(_ge.xid); } }
+      var _gok = true, _gsc = 0, _gtag = '';
+      for (w = 0; w < pre.length; w++){
+        p = pre[w];
+        if (p.qc && _gt.indexOf(p.qc) >= 0){ if (_gsc < 2){ _gsc = 2; _gtag = 'code'; } }
+        else if (p.q && _gt.indexOf(p.q) >= 0){ if (_gsc < 1){ _gsc = 1; _gtag = 'code'; } }
+        else if (p.q && _gid && _gid.indexOf(p.q) >= 0){ if (_gsc < 1){ _gsc = 1; _gtag = 'xid'; } }
+        else { _gok = false; break; }
+      }
+      if (_gok && _gsc){
+        hit.push({ sc: _gsc, ix: -1, tag: _gtag,
+                   it: { c: _gc, mo: _gc, _n: _gt, _ghost: 1, k: (_gi && _gi.k) || 'l' } });
+      }
+    }
+  }
   hit.sort(function(a,b){
     if (b.sc !== a.sc) return b.sc - a.sc;
     if (qCJK && a.ix !== b.ix && a.ix >= 0 && b.ix >= 0) return a.ix - b.ix;
@@ -4211,6 +4238,43 @@ function isBlankCard(it){
   if (sQty > 0 && sj) return false;           // 样机有货有样机价
   return true;                                // 其余（样机货没样机价 / 无货有价 / 三无）浏览全藏，搜索照常
 }
+/* 2026-11-10 用户令「中间也显示出来」：已发布记录里有、价格总表里已经没有的型号
+   （下架 / 改名 / 换编码）——侧栏统计还在数它，中间却画不出卡，于是出现
+   「37 个型号 / 筛选到 36 条」。这里把这类型号补成幽灵卡列进列表，两边数字一致。
+   卡片数据全部来自发布记录（类型/闲鱼定价/口径/时间/闲鱼ID），可取消发布、可开卖家中心。 */
+function ghostKeys(){
+  var out = [], seen = {}, k;
+  if (SUBVIEW && SUBVIEW.u != null){
+    for (k in SUBVIEW.set){ if (!seen[k]){ seen[k] = 1; out.push(k); } }
+  } else if (flagPub){
+    for (k in MARKED){ if (!seen[k]){ seen[k] = 1; out.push(k); } }
+  }
+  return out;
+}
+function ghostInfo(c){
+  return (SUBVIEW && SUBVIEW.info && SUBVIEW.info[c]) || MARKED[c] || {};
+}
+/* 幽灵型号同样要吃已发布视图的几个筛选（正品/样机、没ID、闲鱼号）；
+   亏钱算不出来（总表没成本），开着亏钱筛选时不列 */
+function ghostPass(c){
+  var info = ghostInfo(c), xs = (info && info.xs) ? info.xs : null, k, e, hasXid = false, hitXy;
+  if (SUBVIEW && SUBVIEW.floss) return false;
+  if (selXy){
+    hitXy = false;
+    if (xs){ for (k in xs){ if ((String(k).split('|')[0] || k) === selXy){ hitXy = true; break; } } }
+    else if (selXy === '默认') hitXy = true;      // 老格式记录只挂「默认」
+    if (!hitXy) return false;
+  }
+  if (SUBVIEW && SUBVIEW.fk){
+    if (((info && info.k) || 'l') !== SUBVIEW.fk) return false;
+  }
+  if (SUBVIEW && SUBVIEW.fxid){
+    if (xs){ for (k in xs){ e = xs[k] || {}; if (e.xid != null && String(e.xid) !== ''){ hasXid = true; break; } } }
+    if (SUBVIEW.fxid === 'no' && hasXid) return false;
+    if (SUBVIEW.fxid === 'has' && !hasXid) return false;
+  }
+  return true;
+}
 function allFiltered(){
   var hit = [], i;
   for (i = 0; i < ALL.length; i++){
@@ -4219,6 +4283,15 @@ function allFiltered(){
        没库存的照样藏（搜索照常能搜到，不显示≠搜不到）。
        老口径「点全部=一张不藏」实锤漏洞：品类/方式点全部后无货卡全涌出来。 */
     if (pass(it) && !isBlankCard(it)) hit.push({ sc: 0, it: it, ix: -1 });
+  }
+  /* 幽灵型号补进来（只在「已发布 / 看谁的发布」视图；纯浏览不掺） */
+  var _gk = ghostKeys();
+  for (i = 0; i < _gk.length; i++){
+    var _gc = _gk[i];
+    if (CIDX[_gc]) continue;                       // 总表里有 → 正常卡片已经列了，别重复
+    if (!ghostPass(_gc)) continue;
+    hit.push({ sc: 0, ix: -1, it: { c: _gc, mo: _gc, _n: norm(_gc), _ghost: 1,
+                                    k: (ghostInfo(_gc) || {}).k || 'l' } });
   }
   /* 2026-10-21 用户定稿：「已发布」视图（自看 u='0' / 管理号看子账号）按标记时间降序——
      最新标的排最上面，越早发的越靠后。时间口径 = SUBVIEW.info[c].t（该型号最新一次
@@ -4256,7 +4329,11 @@ var cur = [], shown = 0, BATCH = 40;
 
 function renderBatch(){
   var n = Math.min(shown + BATCH, cur.length), html = '';
-  for (var i = shown; i < n; i++) html += renderItem(cur[i].it);
+  for (var i = shown; i < n; i++){
+    var _it = cur[i].it;
+    /* 幽灵卡（已发布但总表没这型号）：只亮发布记录里的字段，画不出正常卡 */
+    html += _it && _it._ghost ? ghostCardHTML(_it.c) : renderItem(_it);
+  }
   if (html) listEl.insertAdjacentHTML('beforeend', html);
   shown = n;
   if (shown < cur.length){ moreEl.hidden = false; moreEl.textContent = '向下滚动加载更多（已显示 ' + shown + ' / ' + cur.length + '）'; }
@@ -8384,10 +8461,11 @@ function ghostCardHTML(c){
   var canUnmark = (SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0')
     ? !!(AUTH && AUTH.role === 'admin')
     : true;
-  var h = '<article class="card" style="border-color:#f0b9b3">';
+  var h = '<article class="card" style="border:1px dashed #cfd6e0;background:#fafbfc">';
   h += '<h3 style="margin:0 0 6px">' + esc(c)
      + ' <span style="font-size:12px;font-weight:600;color:#0f7b3a;background:#e6f6ec;border:1px solid #bfe3cd;border-radius:99px;padding:1px 8px;vertical-align:2px">已发布</span>'
-     + ' <span style="font-size:12px;font-weight:600;color:#d92d20;background:#fdeceb;border:1px solid #f0b9b3;border-radius:99px;padding:1px 8px;vertical-align:2px">⚠ 已不在价格总表</span></h3>';
+     + ' <span style="font-size:12px;font-weight:600;color:#d92d20;background:#fdeceb;border:1px solid #f0b9b3;border-radius:99px;padding:1px 8px;vertical-align:2px">⚠ 已不在价格总表</span>'
+     + ' <span style="font-size:12px;font-weight:600;color:#667085;background:#eef1f6;border:1px solid #d7dce6;border-radius:99px;padding:1px 8px;vertical-align:2px">仅存发布记录</span></h3>';
   h += '<div class="row"><label>发布类型</label><span class="v">' + (kind === 's' ? '样机' : '正品') + '</span></div>';
   if (latest && isNum(latest.e.p)) h += '<div class="row"><label>闲鱼定价</label><span class="v mono" style="font-weight:600">' + money(latest.e.p) + '</span></div>';
   if (cs) h += '<div class="row"><label>价格口径</label><span class="v">' + esc(cs.l || '') + (isNum(cs.v) ? ' ' + money(cs.v) : '') + '</span></div>';
