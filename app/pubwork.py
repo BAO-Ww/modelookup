@@ -587,9 +587,28 @@ def _auto_qa_spot(model, info, src, out, style, paths, prog=None):
         return
     _logf()("AI 复检发现 %d 处问题：%s" % (
         len(res), "；".join("%s(%s)" % (x["issue"], x["severity"]) for x in res)))
+    # 2026-11-10：AI 老报「图片背景颜色与其他图片不一致」。聚光四张底色是深色系
+    # 渐变（实测 (32,32,48) vs (0,0,0) 同族，人眼看是统一深色底），先像素实测——
+    # 同族就是误报，别让它挤掉真正要修的布局问题、也别占「需人工」的坑。
+    try:
+        _bad_bg, _ref_bg = pei_core.bg_mismatch_slots(paths)
+    except Exception:
+        _bad_bg, _ref_bg = [], None
+    _res2 = []
+    for x in res:
+        if x.get("code") == "style_mismatch" and x.get("slot") not in _bad_bg:
+            _c = tuple(_ref_bg or (0, 0, 0))
+            _logf()("  %s —— 像素实测底色同族（#%02X%02X%02X），判 AI 误报，忽略"
+                    % ((x.get("issue"),) + _c))
+            continue
+        _res2.append(x)
+    if not _res2:
+        _logf()("AI 复检其余均为误报，无需修复")
+        return
     import pei_ai9
-    r = pei_ai9.auto_optimize(key, info, src, out, style, res, rounds=2,
-                              progress=_prog, log=lambda s: _logf()(s))
+    r = pei_ai9.auto_optimize(key, info, src, out, style, _res2, rounds=2,
+                              progress=_prog, log=lambda s: _logf()(s),
+                              skip_scale_slots=(4,))
     if r.get("fixed"):
         _logf()("AI 自动修复槽位 %s，重渲完成" % r["fixed"])
     for x in (r.get("remaining") or []):

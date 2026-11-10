@@ -1699,6 +1699,87 @@ def _ai_is_sizeimg(im, log=None):
         return None
 
 
+def _sizeimg_sheet(ims, cell=340, cols=4, pad=14, head=46):
+    """把尺寸图候选拼成带大红编号的网格（contain 不裁切，线稿四边不会被切掉）。
+    粗筛只判「线框/标注/毫米数字」这类特征，不读具体数字，340px 足够；
+    数字精读留给命中的单张确认那一步。"""
+    from PIL import ImageDraw
+    n = len(ims)
+    if not n:
+        return None
+    cols = max(1, min(cols, n))
+    rows = (n + cols - 1) // cols
+    cw, ch = cell + pad * 2, cell + pad * 2 + head
+    W, H = cols * cw + pad, rows * ch + pad
+    cv = Image.new("RGB", (W, H), (236, 238, 242))
+    dr = ImageDraw.Draw(cv)
+    for i, im in enumerate(ims):
+        r, c = divmod(i, cols)
+        x, y = pad + c * cw, pad + r * ch
+        try:
+            s_ = _flat_white(im).convert("RGB")
+            sc = min(cell / float(s_.width), cell / float(s_.height))
+            s_ = s_.resize((max(1, int(s_.width * sc)), max(1, int(s_.height * sc))),
+                           Image.LANCZOS)
+            cv.paste(s_, (x + (cell - s_.width) // 2, y + (cell - s_.height) // 2))
+        except Exception:
+            continue
+        dr.rectangle([x, y, x + 52, y + 44], fill=(206, 54, 44))
+        dr.text((x + 26, y + 22), str(i + 1), fill=(255, 255, 255),
+                anchor="mm", font=_font(F_BOLD, 30))
+    buf = io.BytesIO()
+    cv.save(buf, "JPEG", quality=88)
+    return buf.getvalue()
+
+
+def _ai_pick_sizeimgs(ims, log=None):
+    """拼版一次问：这些候选里哪几张是官方尺寸图（2026-11-10 用户令
+    「尺寸图判定别一张张问完十多张」）。
+
+    原实现是逐张问、最多问 10 张才敢下「没有尺寸图」的结论——一个没尺寸图的
+    型号光这一步就烧 10~26 次视觉请求。拼版一次返回编号，「有没有」的探测成本
+    从 10 次压到 1 次；命中后仍逐张单问确认（AI 否决权不放）。
+
+    返回 (命中编号列表[1基], AI是否可用)。AI 不可用返回 ([], False)，调用方
+    别再逐张空烧——同一个模型每张都会失败。"""
+    if not ims:
+        return [], False
+    try:
+        import base64
+        import pei_core
+        sheet = _sizeimg_sheet(ims)
+        if not sheet:
+            return [], False
+        data_url = "data:image/jpeg;base64," + base64.b64encode(sheet).decode("ascii")
+        n = len(ims)
+        txt = pei_core._vision_call(_vision_key(), data_url,
+            "下面是同一家电产品的 %d 张官方图片，每张左上角有红底白字的编号（1 到 %d）。\n"
+            "请找出其中属于「官方尺寸示意图」的图，三条必须同时满足：\n"
+            "① 画的是整机外形轮廓（正视图/侧视图/俯视图之一，通常是线框风格）；\n"
+            "② 带尺寸标注线或箭头；\n"
+            "③ 标注上印有毫米数字。\n"
+            "产品照片、局部零件渲染图、内部结构图、场景图、促销海报、参数表格、"
+            "保修/安装收费表，一律不算。\n"
+            "只输出 JSON 数组，内容是命中的编号（例如 [3,7]），一张都没有输出 []。\n"
+            "不要解释，不要 markdown 代码块。" % (n, n), log=log)
+        if not txt:
+            return [], False
+        arr = pei_core._extract_json_array(txt)
+        if not isinstance(arr, list):
+            return [], False
+        hit = []
+        for it in arr:
+            try:
+                k = int(it)
+            except Exception:
+                continue
+            if 1 <= k <= n and k not in hit:
+                hit.append(k)
+        return sorted(hit), True
+    except Exception:
+        return [], False
+
+
 def _looks_like_sizeimg(im):
     """尺寸线框图特征：底色黑白主导、线框像素占比小（<22%）、彩色占比极小（<6%）。
     官网尺寸图（细线+数字标注）都能命中；产品照片/促销横幅不会。"""
@@ -1881,15 +1962,82 @@ def _hunt_sizeimg_page(page_url, sizeimg, log, skip_urls=(), prod_path=None):
             continue
         if _try_save_sizeimg(u, sizeimg, log, prod_path=prod_path, ai_budget=ai_budget):
             return True
+    # 2026-11-10 用户令「尺寸图判定别一张张问完十多张」：generic 这 12 张不再逐张问 AI。
+    # 先全部下到内存，像素像线框的照旧单张确认（准确率优先，通常 0~2 张），
+    # 剩下的拼版粗筛一次，只对命中的做单张确认。原实现最坏 12+4 次，现在 2~4 次。
+    bufs = []
     for u in dict.fromkeys(generic):
         if tried >= 12:
             break
         if u in skip_urls:
             continue
         tried += 1
-        if _try_save_sizeimg(u, sizeimg, log, prod_path=prod_path, ai_budget=ai_budget):
-            return True
+        im = _fetch_img(u)
+        if im is None:
+            continue
+        bufs.append((u, im))
+    if not bufs:
+        return False
+    rest = []
+    for u, im in bufs:
+        if _looks_like_sizeimg(im):
+            # 2026-11-04 HP-35 实锤：保修/安装收费表像素上像线框（满页表格线）。
+            # 像素像线框的必须 AI 明确点头才收，限流答不上（None）也宁可不收。
+            v = _ai_is_sizeimg(im, log)
+            if v is not True:
+                if log and v is False:
+                    log("详情页候选 %s 像素像线框图但 AI 否掉，跳过" % u.split("/")[-1])
+                if log and v is None:
+                    log("详情页候选 %s AI 没给准话（限流/无应答），宁可不用" % u.split("/")[-1])
+                continue
+            if _accept_sizeimg(im, sizeimg, prod_path, log, u):
+                return True
+            continue
+        rest.append((u, im))
+    if rest:
+        hit, ok = _ai_pick_sizeimgs([im for _u, im in rest], log)
+        if ok and hit:
+            if log:
+                log("详情页拼版粗筛：%d 张候选，AI 点名 %s" % (len(rest), hit))
+            for k in hit:
+                if not (1 <= k <= len(rest)):
+                    continue
+                u, im = rest[k - 1]
+                if _ai_is_sizeimg(im, log) is not True:
+                    continue
+                if _accept_sizeimg(im, sizeimg, prod_path, log, u):
+                    return True
     return False
+
+
+def _fetch_img(u, timeout=20):
+    """下载官网图并过最小尺寸闸，返回 PIL Image 或 None。"""
+    try:
+        raw = fetch(u, extra_headers={
+            "Referer": u.split("/")[0] + "//" + u.split("/")[2] + "/"},
+            binary=True, timeout=timeout)
+        if len(raw) < 3000:
+            return None
+        im = Image.open(io.BytesIO(raw))
+        if min(im.size) < 250:
+            return None
+        im.load()
+        return im
+    except Exception:
+        return None
+
+
+def _accept_sizeimg(im, sizeimg, prod_path=None, log=None, url=""):
+    """收下这张尺寸图：与产品主图同图则丢（那是产品照），否则垫白存盘。"""
+    try:
+        if prod_path and os.path.isfile(prod_path) and _same_img(im, Image.open(prod_path)):
+            return False
+        _flat_white(im).save(sizeimg, quality=92)
+        if log:
+            log("官网详情页命中官方尺寸图：%s" % (url.split("/")[-1] or "本地图"))
+        return True
+    except Exception:
+        return False
 
 
 def _try_save_sizeimg(u, sizeimg, log, prod_path=None, ai_budget=None):
@@ -2446,24 +2594,53 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 return c / 6400.0
             except Exception:
                 return 1.0
-        for pth in sorted(_ai_cand[:20], key=_color_ratio)[:10]:
-            if pth in _ai_rej:
-                continue   # 上面主循环已由 AI 明确否掉，别再问一次
+        # 2026-11-10 用户令「尺寸图判定别一张张问完十多张」：先拼版一次问「哪几张是
+        # 尺寸图」（1 次），只对命中的 + 最黑白 3 张做单张确认（≤4 次）。
+        # 原来没尺寸图的型号要逐张问满 10 次才敢下结论，现在是 1+3 次。
+        _ordered = [p for p in sorted(_ai_cand[:20], key=_color_ratio)[:10]
+                    if p not in _ai_rej]
+        _ims = []
+        for _p in _ordered:
             try:
-                im2 = Image.open(pth)
+                _ims.append(Image.open(_p))
             except Exception:
-                continue
-            r = _ai_is_sizeimg(im2, log)
-            if r:
-                _flat_white(im2).save(sizeimg, quality=92)
-                have_size = True
-                if log:
-                    log("AI 视觉认出官方尺寸图：%s" % os.path.basename(pth))
-                break
-            if r is None:
+                _ims.append(None)
+        _ok_idx = [i for i, _im in enumerate(_ims) if _im is not None]
+        _ordered = [_ordered[i] for i in _ok_idx]
+        _ims = [_ims[i] for i in _ok_idx]
+        if _ordered:
+            _hit, _ai_ok = _ai_pick_sizeimgs(_ims, log)
+            if not _ai_ok:
                 if log:
                     log("视觉 AI 不可用，尺寸图复核跳过")
-                break
+            else:
+                if log:
+                    log("尺寸图拼版粗筛：%d 张候选，AI 点名 %s"
+                        % (len(_ordered), _hit if _hit else "无"))
+                # 命中的优先，再补最黑白 3 张兜底（粗筛缩图可能漏判线稿）
+                _try = []
+                for _k in _hit:
+                    if 1 <= _k <= len(_ordered) and _ordered[_k - 1] not in _try:
+                        _try.append(_ordered[_k - 1])
+                for _p in _ordered[:3]:
+                    if _p not in _try:
+                        _try.append(_p)
+                for pth in _try[:4]:
+                    try:
+                        im2 = Image.open(pth)
+                    except Exception:
+                        continue
+                    r = _ai_is_sizeimg(im2, log)
+                    if r:
+                        _flat_white(im2).save(sizeimg, quality=92)
+                        have_size = True
+                        if log:
+                            log("AI 视觉认出官方尺寸图：%s" % os.path.basename(pth))
+                        break
+                    if r is None:
+                        if log:
+                            log("视觉 AI 不可用，尺寸图复核跳过")
+                        break
     if not have_size and page_url and mdir and not _neg_get(mdir, "sizeimg_official", ttl_days=2):
         # 候选图里没认出尺寸图：去官网详情页定向翻一遍（有官方尺寸图就不用手绘）。
         # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 2 天内不再跑（重出会清掉重试）
@@ -3404,14 +3581,43 @@ def _qa_blue(model, info, mdir, cfg, points, prod, log):
             return
         log("AI 复检发现 %d 处问题：%s" % (
             len(res), "；".join("%s(%s)" % (x.get("issue"), x.get("severity")) for x in res)))
+        # 2026-11-10：AI 老报「背景颜色与其他图片不一致」，但蓝底是程序画的纯色底
+        # （实测四张边缘全是 #F0F0F0，不可能不一致）→ 先像素实测，同族就当误报忽略。
+        try:
+            _bad_bg, _ref_bg = pei_core.bg_mismatch_slots(paths)
+        except Exception:
+            _bad_bg, _ref_bg = [], None
         FIX = {"text_overlap", "text_clip", "product_clip"}
         for x in res:
             slot = x.get("slot")
             code = x.get("code") or ""
-            if code not in FIX or not (1 <= slot <= 4):
-                log("  需人工确认：%s（%s）" % (x.get("issue"), x.get("severity")))
+            _iss = x.get("issue")
+            if code == "style_mismatch":
+                if slot not in _bad_bg:
+                    _c = tuple(_ref_bg or (0, 0, 0))
+                    log("  %s —— 像素实测四张同族（#%02X%02X%02X），判 AI 误报，忽略"
+                        % ((_iss,) + _c))
+                    continue
+                log("  第 %d 张底色实测确实不同，重渲该张" % slot)
+                if slot == 1:
+                    _render_img1(cfg, Image.open(prod), p1, safe=True)
+                elif slot == 2:
+                    _render_img2(cfg, Image.open(prod), p2, safe=True)
+                elif slot == 3:
+                    _render_img3(cfg, points, p3, safe=True)
+                elif slot == 4:
+                    _render_img4(cfg, p4, prod, safe=True)
                 continue
-            log("  自动修复第 %d 张（%s，保守档重渲）" % (slot, code))
+            if code not in FIX or not (1 <= slot <= 4):
+                log("  需人工确认：%s（%s）" % (_iss, x.get("severity")))
+                continue
+            if slot == 4 and code == "product_clip":
+                # 2026-11-10：尺寸图缩小后，标注的毫米数字跟着变小反而更看不清；
+                # 真出画的正确处理是换官方图/重排版式，不是缩机器。
+                log("  第 4 张是尺寸图，不参与缩放修复（缩了标注数字更小），如真出画请换图")
+                continue
+            log("  自动修复第 %d 张（%s，保守档重渲：标题 58→52pt、副标题 50→45pt）"
+                % (slot, code))
             if slot == 1:
                 _render_img1(cfg, Image.open(prod), p1, safe=True)
             elif slot == 2:

@@ -8,7 +8,8 @@ BAND_MAXW / TX1..TX3 / SCRIM_* / TUNE …），设计上「一次只画一个型
 
 做法：所有出图入口统一过一把 RLock——拿到锁才画，拿不到就排队等（不是报错）。
 用 RLock 是为了同线程可重入：generate 内部再调别的出图入口时不会自己锁死。
-超时 10 分钟兜底（正常出图最慢 1~3 分钟），超了抛错让 jobman 记成失败，
+超时 15 分钟兜底（正常出图最慢 1~3 分钟，2026-11-10 由 10 分钟放宽：连点多型号
++限流退避叠加时 10 分钟会误杀排队任务），超了抛错让 jobman 记成失败，
 绝不「等不到就硬画」——宁可失败也不出一张串味的图。
 """
 import functools
@@ -16,7 +17,8 @@ import threading
 
 RENDER_LOCK = threading.RLock()
 
-_WAIT_TIMEOUT = 600          # 排队上限（秒）
+_WAIT_TIMEOUT = 900          # 排队上限（秒）；2026-11-10 600→900：用户连点 3 个型号时
+                             # 限流退避 + 串行渲染叠加，10 分钟兜底会误杀第 3 个任务
 
 
 def serialized(fn):
@@ -32,7 +34,7 @@ def serialized(fn):
             except Exception:
                 pass
             if not RENDER_LOCK.acquire(timeout=_WAIT_TIMEOUT):
-                raise RuntimeError("出图排队超过 10 分钟，先算了（稍后再点一次）")
+                raise RuntimeError("出图排队超过 15 分钟，先算了（稍后再点一次）")
         try:
             return fn(*args, **kw)
         finally:

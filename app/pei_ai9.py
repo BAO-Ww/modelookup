@@ -1910,9 +1910,11 @@ def _infer_code(issue):
 
 
 def auto_optimize(api_key, info, src_dir, out_dir, style, issues,
-                  rounds=2, progress=None, log=None):
+                  rounds=2, progress=None, log=None, skip_scale_slots=()):
     """issues: qa_render 返回的问题列表（含 slot/issue/severity/code）。
     返回 dict: {"fixed":[槽位], "remaining":[仍需人工的 issue], "tune":{...}, "rounds": n}。
+    skip_scale_slots：不许做缩放修复的槽位（尺寸图）。2026-11-10 用户令——
+    尺寸图缩小会让标注的毫米数字跟着变小，反而更看不清，出画该换图不是缩机器。
     无 key 时仍按给定 issues 应用一轮保守微调（无法复检）。"""
     def step(p, m):
         if progress:
@@ -1928,15 +1930,23 @@ def auto_optimize(api_key, info, src_dir, out_dir, style, issues,
             except Exception:
                 pass
 
-    det = []
+    det, skipped = [], []
     for it in (issues or []):
         code = it.get("code") or _infer_code(it.get("issue"))
         if code in _QA_DET and "slot" in it:
+            if code == "product_clip" and it["slot"] in (skip_scale_slots or ()):
+                skipped.append(it)
+                lg("  第 %s 张是尺寸图，不参与缩放修复（缩了标注数字更小），如真出画请换图"
+                   % it["slot"])
+                continue
             det.append({"slot": it["slot"], "code": code,
                         "issue": it.get("issue"), "severity": it.get("severity")})
     if not det:
-        lg("自检无确定性布局类问题，无需自动优化")
-        return {"fixed": [], "remaining": [i for i in (issues or [])],
+        if skipped:
+            lg("自检只报了尺寸图的缩放类问题，不处理；其余无确定性布局问题")
+        else:
+            lg("自检无确定性布局类问题，无需自动优化")
+        return {"fixed": [], "remaining": [i for i in (issues or []) if i not in skipped],
                 "tune": {}, "rounds": 0}
 
     affected = sorted(set(d["slot"] for d in det))
@@ -1956,6 +1966,10 @@ def auto_optimize(api_key, info, src_dir, out_dir, style, issues,
                 cur["top_pad"] += 10
             elif d["code"] == "text_clip":
                 cur["font_scale"] *= f
+        # 2026-11-10 用户令：日志要能看出到底改了什么，不能只说「修了第几张」
+        lg("  第 %d 轮微调参数：机器×%.3f 字号×%.3f 顶部边距+%dpx（重渲第 %s 张）"
+           % (r + 1, cur["machine_scale"], cur["font_scale"], cur["top_pad"],
+              sorted(set(d["slot"] for d in det))))
         step(20 + r * 30, "按自检结果微调重渲 第 %d/%d 轮 ..." % (r + 1, rounds))
         paths = generate(info, src_dir, out_dir, style=style, slots=affected,
                          tune=dict(cur), overview=False, api_key=api_key,

@@ -1497,6 +1497,74 @@ def _build_contact_sheet(cands, cols=4):
     return buf.getvalue()
 
 
+def _edge_bg(im, band=10, step=3):
+    """取图片边缘一圈（离边界 band 像素处）的量化 16 级主色。
+    2026-11-10 加：AI 复检老报「底色与其他张不一致」，实测蓝底四张边缘
+    全是 #F0F0F0（程序渲染，不可能不一致）→ 先像素实测再决定信不信。"""
+    try:
+        im = im.convert("RGB")
+        w, h = im.size
+        if w < band * 3 or h < band * 3:
+            return None, 0.0
+        cnt, n = {}, 0
+
+        def _add(x, y):
+            r, g, b = im.getpixel((x, y))
+            k = (r // 16 * 16, g // 16 * 16, b // 16 * 16)
+            cnt[k] = cnt.get(k, 0) + 1
+
+        for y in range(0, h, step):
+            _add(band, y); _add(w - 1 - band, y)
+            n += 2
+        for x in range(0, w, step):
+            _add(x, band); _add(x, h - 1 - band)
+            n += 2
+        if not cnt or not n:
+            return None, 0.0
+        k, c = max(cnt.items(), key=lambda kv: kv[1])
+        return k, c / float(n)
+    except Exception:
+        return None, 0.0
+
+
+def _color_dist(a, b):
+    try:
+        return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
+    except Exception:
+        return 999.0
+
+
+def bg_mismatch_slots(paths, tol=96):
+    """像素实测「底色不一致」到底成不成立。
+    返回 (异常槽位列表, 参考色)，槽位从 1 开始。
+    · 空列表 = 实测同族（AI 报的 style_mismatch 是误报，不该当问题处理）
+    · 非空   = 这几张确实跟多数不是同一底色，才是真要修
+    tol=96：蓝底纯色 0 差异；聚光深色渐变 (32,32,48) vs (0,0,0) 距离 66 算同族；
+    真出现白底 vs 深底（距离 380+）才判异常。"""
+    cols = []
+    for p in paths:
+        try:
+            im = Image.open(p)
+        except Exception:
+            cols.append(None)
+            continue
+        c, _ = _edge_bg(im)
+        cols.append(c)
+    idx = [i for i, c in enumerate(cols) if c]
+    if len(idx) < 2:
+        return [], None
+    best = None
+    for i in idx:
+        fam = [j for j in idx if _color_dist(cols[i], cols[j]) < tol]
+        if best is None or len(fam) > len(best[1]):
+            best = (i, fam)
+    if not best:
+        return [], None
+    ref = cols[best[0]]
+    bad = [i + 1 for i in idx if i not in best[1]]
+    return bad, ref
+
+
 def _zhipu_vision(api_key, data_url, prompt):
     req = urllib.request.Request(
         "https://open.bigmodel.cn/api/paas/v4/chat/completions",
@@ -1601,7 +1669,10 @@ def _vision_attempt(fn, api_key, data_url, prompt, log=None):
             return fn(api_key, data_url, prompt)
         except Exception as e:
             if _i < _VISION_429_TRIES - 1 and _vision_is_rate(e):
-                _back = 15 + 15 * _i
+                # 2026-11-10：退避 15s/30s → 6s/12s。实测免费额度滚动窗口烧满时，
+                # 15 秒起步的等待把整套出图拖成分钟级排队（用户实锤「卡的都是聚光的」）；
+                # 快速重试两次还不行就立刻切 GLM 兜底通道（flash 模型额度宽裕）。
+                _back = 6 + 6 * _i
                 try:
                     if log:
                         log("视觉请求被限流，等 %d 秒自动重试（第 %d/%d 次）"

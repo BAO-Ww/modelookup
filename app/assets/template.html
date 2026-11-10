@@ -1020,26 +1020,42 @@ function saveXyNames(){ /* 号名单只存云端，本地不再落盘（2026-10-
 var MYXY = null;                    // null=还没拉到；数组=云端配置（含「默认」可选不配置）
 function xyOptions(){ return (MYXY && MYXY.length ? MYXY : XY_NAMES); }
 function loadXy(){
-  if (!AUTH || !AUTH.token) return;
-  authFetch('/xy').then(function(j){
-    if (j && j.ok && Array.isArray(j.list)){
-      MYXY = j.list;
-      /* 2026-10-13 修「另一台电脑没同步」：号名单云化之前的号只存在本机 localStorage，
-         从没上过云——云端拉到后把本机有、云端没有的号自动补传（合并只增不删），
-         这台补上去，其它电脑登录同账号就能拉到 */
-      var miss = (XY_NAMES || []).filter(function(x){
-        return x && x !== '默认' && MYXY.indexOf(x) < 0;
-      });
-      if (miss.length){
-        MYXY = MYXY.concat(miss);
-        authFetch('/xy', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                           body: JSON.stringify({ list: MYXY }) }, true)
-          .then(function(jj){ if (jj && jj.ok && Array.isArray(jj.list)) MYXY = jj.list; refreshXySel(); })
-          .catch(function(){});
-      }
-      refreshXySel();
+  /* 2026-11-10 修「闲鱼号没了」：本函数原来只在启动时调一次，那次 /xy 失败
+     （网络抖动/CF 抽风）MYXY 永远 null，发布弹窗就只剩「默认」——云端配置明明
+     好好的（实测 KV xy_<u> 完好）。现在：①返回 Promise 供弹窗等待；
+     ②失败 20 秒后自动重试一次；③online 事件也补拉（见 2155 行监听）。 */
+  if (!AUTH || !AUTH.token) return Promise.resolve(null);
+  function _xyFail(){                      // 失败补拉：只补一次，防网络长挂时无限循环
+    if (!loadXy._retry){
+      loadXy._retry = 1;
+      setTimeout(function(){ try { loadXy(); } catch(e){} }, 20000);
     }
-  }).catch(function(){});
+    return null;
+  }
+  return authFetch('/xy').then(function(j){
+    /* authFetch 网络不通时 resolve({ok:false}) 而非 reject——失败判定必须在这里
+       做，光靠 .catch 永远等不到（2026-11-10 修「闲鱼号没了」实测） */
+    if (!(j && j.ok && Array.isArray(j.list))) return _xyFail();
+    loadXy._retry = 0;
+    MYXY = j.list;
+    /* 2026-10-13 修「另一台电脑没同步」：号名单云化之前的号只存在本机 localStorage，
+       从没上过云——云端拉到后把本机有、云端没有的号自动补传（合并只增不删），
+       这台补上去，其它电脑登录同账号就能拉到 */
+    var miss = (XY_NAMES || []).filter(function(x){
+      return x && x !== '默认' && MYXY.indexOf(x) < 0;
+    });
+    if (miss.length){
+      MYXY = MYXY.concat(miss);
+      authFetch('/xy', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify({ list: MYXY }) }, true)
+        .then(function(jj){ if (jj && jj.ok && Array.isArray(jj.list)) MYXY = jj.list; refreshXySel(); })
+        .catch(function(){});
+    }
+    refreshXySel();
+    return MYXY;
+  }).catch(function(){
+    return _xyFail();                        // fetch 真 reject（断网/DNS）也走同一条补拉
+  });
 }
 function rememberXy(x){
   if (!x) return;
@@ -2152,7 +2168,7 @@ function cqKick(ms){
   _cloudQT = setTimeout(cloudFlush, ms || 1200);
 }
 /* 网线插回 / WiFi 回来：立刻补推，别等 30 秒那一轮 */
-try { window.addEventListener('online', function(){ if (_cloudQ.length) cqKick(800); }); } catch(e){}
+try { window.addEventListener('online', function(){ if (_cloudQ.length) cqKick(800); loadXy(); }); } catch(e){}
 function netToast(msg){
   if (!_netToastEl){
     _netToastEl = document.createElement('div');
@@ -5090,6 +5106,18 @@ function openXyMgr(onchg){
    ② 没定价不许标记——价从卡片定价框收，框空着但该号之前标过价也算有价 */
 function openPickKind(k, recKey){
   var old = document.getElementById('kindmask'); if (old) old.remove();
+  /* 2026-11-10 修「闲鱼号没了」：启动时 /xy 那次没拉到的话，弹窗只剩「默认」。
+     打开弹窗时发现云端配置还是空的 → 现场补拉一次，拉到就把弹窗原样重开
+     （重开幂等：开头先 remove 旧 mask；_xyPulled 防止网络真挂时反复重开闪屏） */
+  if ((!MYXY || !MYXY.length) && AUTH && AUTH.token && !openPickKind._xyPulled){
+    openPickKind._xyPulled = 1;
+    loadXy().then(function(list){
+      if (list && list.length && document.getElementById('kindmask')){
+        openPickKind._xyPulled = 0;
+        openPickKind(k, recKey);
+      }
+    });
+  }
   var LASTXY = '默认';
   try { LASTXY = localStorage.getItem('ml_lastxy') || '默认'; } catch(e){}
   /* 2026-10-13 用户实况「怎么只能点正品两个字」：从胶囊点进来的带 recKey（号|口径）——
