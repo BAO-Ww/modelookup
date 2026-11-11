@@ -591,6 +591,12 @@ mark.hlm{background:#fff3bf;color:inherit;padding:0 1px;border-radius:3px}
         <input id="q" placeholder="型号 / 品类：BCD-501… / 冰箱" autocomplete="off" spellcheck="false">
         <button class="clr" id="clr" hidden title="清空">×</button>
       </div>
+      <!-- 子用户下拉（2026-11-11 用户令「点击了就在这里加一个下拉的子用户列表」）：
+           菜单「子用户(U)」点了才在侧栏顶部出现，选谁就切到看谁的发布；再点菜单收起 -->
+      <div class="fgroup" id="subrec" hidden>
+        <div class="fhead"><span class="flbl" id="subreclbl">子用户</span></div>
+        <select id="subrecsel" style="width:100%;box-sizing:border-box;padding:4px 8px;border:1px solid #d7dce6;border-radius:8px;font-size:12px;background:#fff;outline:0;color:#333;cursor:pointer"></select>
+      </div>
       <div class="fgroup" id="brandbox">
         <div class="fhead"><span class="flbl">品牌</span><span class="fcount" id="brandcount"></span></div>
         <div class="chips" id="chips"></div>
@@ -612,26 +618,13 @@ mark.hlm{background:#fff3bf;color:inherit;padding:0 1px;border-radius:3px}
       <!-- 闲鱼号格子（2026-10-30 用户令「挪到左边栏里面去新增个格子」）：看发布横幅 + 号筛选 + 管理/数据。
            平时收起；进「已发布/看发布」视图时出现——横幅显示正在看谁的发布，
            号筛选/管理/数据仍只在自看时亮（2026-10-23 定稿不变） -->
-      <!-- 子用户发布（2026-10-31 晚用户令：放侧栏状态栏「闲鱼号」块上面）：管理号选一个子用户，整个界面切到看 TA 的发布 -->
-      <div class="fgroup" id="subrec" hidden>
-        <div class="fhead"><span class="flbl" id="subreclbl">子用户</span></div>
-        <select id="subrecsel" style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #d7dce6;border-radius:8px;font-size:12.5px;background:#fff;outline:0;color:#333;cursor:pointer"></select>
-      </div>
       <div class="fgroup" id="xybox" hidden>
         <div class="fhead"><span class="flbl">闲鱼号</span></div>
         <div id="xyboxbanner" hidden style="display:none;font-size:12.5px;font-weight:500;color:#475467;line-height:1.55;word-break:break-all;margin:1px 0 7px"></div>
         <div id="xyseg" style="display:none;flex-direction:column;align-items:stretch;gap:6px">
-          <!-- 2026-11-11 用户令「有几个闲鱼号就显示几个，还要有个全部的按键」：下拉改一号一钮 -->
-          <div id="xybtns" style="display:flex;flex-direction:column;align-items:stretch;gap:6px"></div>
-          <div style="display:flex;gap:6px">
-            <!-- 状态栏「管理」键（2026-10-14）：不用进发布弹窗，这里直达「管理我的闲鱼号」 -->
-            <button id="xymgrbtn" title="管理我的闲鱼号：改名（同步所有发布记录）/ 修复旧号名 / 一键全部取消标记发布"
-                    style="flex:1;padding:4px 10px;border:1px solid #c6d8ff;border-radius:8px;font-size:12px;background:#eaf1ff;color:#2e6be6;cursor:pointer;font-weight:600;white-space:nowrap">管理</button>
-            <!-- 闲鱼宝贝数据（2026-10-17 用户定稿）：只留数据入口（后台入口 15:47 删），主区内嵌显示不开小窗；
-                 权限键 xysj（账号管理里勾），显隐在 applyPermBar 管 -->
-            <button id="xysjbtn" hidden title="在主区里打开闲鱼宝贝数据（数据管家，内嵌显示；再点一次收起）"
-                    style="flex:1;padding:4px 10px;border:1px solid #c6d8ff;border-radius:8px;font-size:12px;background:#eaf1ff;color:#2e6be6;cursor:pointer;font-weight:600;white-space:nowrap">数据</button>
-          </div>
+          <!-- 2026-11-11 用户令「有几个闲鱼号就显示几个，还要有个全部的按键」：下拉改一号一钮；
+               19:25 用户令：全部单独整行，下面各号两排一、尺寸跟管理/数据一样 -->
+          <div id="xybtns" style="display:flex;flex-wrap:wrap;gap:6px"></div>
         </div>
       </div>
       <div class="fgroup" id="tools">
@@ -1421,9 +1414,10 @@ function refreshXySel(){
   if (cur && opts.indexOf(cur) < 0){ cur = ''; selXy = ''; }
   var _chip = function(v, lbl){
     var on = (v || '') === (cur || '');
+    var _all = !v;                       // 「全部」= 单独整行；各号 = 两排一（跟管理/数据同尺寸）
     return '<button data-xy="' + esc(v) + '" title="' + (v ? '只看标记到「' + esc(v) + '」名下的型号' : '全部=不按号筛') + '"'
-      + ' style="width:100%;box-sizing:border-box;padding:5px 10px;border:1px solid ' + (on ? '#2e6be6' : '#d7dce6')
-      + ';border-radius:8px;font-size:12.5px;font-weight:600;background:' + (on ? '#2e6be6' : '#fff')
+      + ' style="flex:' + (_all ? '1 1 100%' : '1 1 calc(50% - 3px)') + ';min-width:0;box-sizing:border-box;padding:4px 8px;border:1px solid ' + (on ? '#2e6be6' : '#d7dce6')
+      + ';border-radius:8px;font-size:12px;font-weight:600;background:' + (on ? '#2e6be6' : '#fff')
       + ';color:' + (on ? '#fff' : '#333') + ';cursor:pointer;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
       + esc(lbl) + '</button>';
   };
@@ -2504,12 +2498,8 @@ function applyPermBar(){
   // 闲鱼宝贝数据入口（2026-10-17）：权限键 xysj，账号管理里勾（后台入口已删）
   var kj = document.getElementById('xysjbtn');
   if (kj) kj.hidden = !pok('xysj');
-  // 侧栏「子用户发布」块：2026-11-10 用户令「收到帮助隔壁，我点击了再显示出来」——
-  // 管理号走原生菜单栏「子用户」菜单（帮助隔壁）选人：点开菜单才列子账号、
-  // 点名字直切视角（appwin _sub_menu_items → exPickSub → subrecsel change 既有流程）。
-  // 侧栏这块常驻撤销；select 元素留在 DOM（hidden）供菜单流程复用，别删节点。
-  var sr = document.getElementById('subrec');
-  if (sr) sr.hidden = true;
+  // 侧栏「子用户」下拉（2026-11-11 用户令「点了才显示」）：显隐只由菜单开关
+  // window.toggleSubRec 管，这里不再强制隐藏（否则权限重画会把用户开着的下拉关掉）。
   // 「已发布」「没库存」筛选按钮：管理号默认有（可在「我的显示开关」里自己关）；子账号由权限决定
   var pb = document.querySelector('.chip[data-flag="pub"]');
   if (pb) pb.hidden = !pok('pubview');
@@ -3156,6 +3146,24 @@ function loadSubRec(){
    菜单点名字 → Python evaluate_js 调这里 → 走下拉 change 的既有流程切视角。
    2026-11-05 A 配套：下拉改「点开才加载」后，菜单直选不能假设已加载——
    未加载就先触发 loadSubRec，等列表回来（或失败）再选值切视角。 */
+/* 2026-11-11 用户实锤「子用户菜单还是不行」：主脚本整个在 IIFE 闭包里，
+   Python 菜单 evaluate_js 引用不到闭包内的 loadSubRec（ReferenceError 被 try 吞掉，
+   菜单永远停在「正在加载子账号」）——挂上 window 才够得着。 */
+window.loadSubRec = loadSubRec;
+/* 子用户下拉（2026-11-11 用户令「主区不要，点击了就在这里（侧栏顶部）加一个下拉的子用户列表」）：
+   菜单「子用户(U)」= 开关——点了才在侧栏顶部显出这个下拉（不筛选 + 每个子账号带发布数），
+   再点一次收起；选人走 subrecsel change 的既有流程切视角。 */
+window.toggleSubRec = function(){
+  var box = document.getElementById('subrec');
+  var sel = document.getElementById('subrecsel');
+  if (!box || !sel) return;
+  if (!box.hidden){ box.hidden = true; return; }        // 再点一次菜单 = 收起
+  box.hidden = false;
+  if (!sel.dataset.loaded){                             // 首次点开才拉列表（不点不占额度）
+    sel.dataset.loaded = '1';
+    try { loadSubRec(); } catch(e){}
+  }
+};
 window.exPickSub = function(u){
   var s = document.getElementById('subrecsel'); if (!s) return;
   var _u = String(u || '');
@@ -4475,7 +4483,30 @@ function run(){
     bits = '找到 <b>' + res.length + '</b> 条'
       + (_lab.length ? '（' + _lab.join(' · ') + '）' : '');
   } else {
-    bits = '筛选到 <b>' + res.length + '</b> 条';
+    var _nres = res.length;
+    /* 2026-11-11 用户实锤「筛选到 78 条 vs 东星斑 77 个型号」：两个型号挂同一个闲鱼ID
+       （同一个宝贝，G100578BD14LS / G100578HBD14LS 实锤）——侧栏横幅按用户 11-02 定的
+       「同一个闲鱼ID算1个型号」去重算 77，顶栏按卡片数算 78 就对不上。这里同口径去重：
+       有 xid 的按 xid 归一，没 xid 的按型号算，跟侧栏横幅一致。 */
+    if (SUBVIEW && SUBVIEW.u != null){
+      var _seenX = {}, _mm = 0;
+      for (var _ri = 0; _ri < res.length; _ri++){
+        var _rc = res[_ri].it.c;
+        var _riv = (SUBVIEW.info && SUBVIEW.info[_rc]) || MARKED[_rc] || {};
+        var _rxs = _riv.xs || null, _rid = '';
+        if (_rxs){
+          for (var _rk in _rxs){
+            if (selXy && (String(_rk).split('|')[0] || _rk) !== selXy) continue;
+            var _rx = String((_rxs[_rk] || {}).xid || '');
+            if (_rx){ _rid = _rx; break; }
+          }
+        }
+        var _rkey = _rid ? ('id:' + _rid) : ('c:' + _rc);
+        if (!_seenX[_rkey]){ _seenX[_rkey] = 1; _mm++; }
+      }
+      _nres = _mm;
+    }
+    bits = '筛选到 <b>' + _nres + '</b> 条';
   }
   hintEl.innerHTML = (SUBVIEW ? subHeaderHTML() + ' <span class="dot"></span> ' : '')
     + bits

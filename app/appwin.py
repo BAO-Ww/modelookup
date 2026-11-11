@@ -160,54 +160,20 @@ def rebuild_menu_for(role):
         state.LOG.append("菜单重画失败：%s" % e)
 
 
-# 2026-10-31 用户令（晚三批）：子用户发布挪进顶部菜单栏（「帮助」前面）。
-# 列表由页面 loadSubRec 拉到后经 js_api sync_subusers 同步进来；✓ 标当前选中；
-# 菜单点名字 → _menu_pick_sub → 页面 exPickSub 走既有下拉 change 流程切视角。
-_SUB_USERS = []      # 子账号名列表（不含自己）
-_SUB_SEL = ""        # 当前在看谁的发布（"" = 不筛选）
-_SUB_LOADING = False # 菜单占位项已触发过加载（只影响占位文案，不挡重试）
+# 2026-10-31 用户令（晚三批）：子用户发布入口放顶部菜单栏（「帮助」前面）。
+# 2026-11-11 用户令：菜单直点 → 主区弹出子用户 chips 条（全部+一号一钮），点了才显示，
+# 不点不占版面；点名字走 exPickSub 切视角。
+_SUB_USERS = []      # 子账号名列表（不含自己，仅记账）
+_SUB_SEL = ""        # 当前在看谁的发布（"" = 不筛选，仅记账）
 
 
-def _menu_pick_sub(u):
-    global _SUB_SEL
-    _SUB_SEL = str(u or "")
+def _menu_toggle_subbar():
+    """菜单「子用户(U)」= 开关：点了才在侧栏顶部显出「子用户」下拉（不筛选 + 各子账号
+    带发布数），再点一次收起；选人走 subrecsel change 的既有流程切视角。"""
     try:
-        webview.windows[0].evaluate_js(
-            "window.exPickSub && exPickSub(%s)" % json.dumps(_SUB_SEL, ensure_ascii=False))
+        webview.windows[0].evaluate_js("window.toggleSubRec && window.toggleSubRec();")
     except Exception:
         pass
-    threading.Thread(target=rebuild_menu_for,
-                     args=(state.PERM_STATE.get("role") or "admin",), daemon=True).start()
-
-
-def _menu_load_subs():
-    """2026-11-10 深夜修「点了没用」：占位项无条件触发 loadSubRec——
-    之前有 dataset.loaded 一次性闸，第一次点了之后无论成败再点都不动（用户实锤）；
-    现在每次点都重新拉，失败可反复重试。同时置 loading 态重画菜单，点了看得见反应。"""
-    global _SUB_LOADING
-    _SUB_LOADING = True
-    try:
-        webview.windows[0].evaluate_js("loadSubRec && loadSubRec();")
-    except Exception:
-        pass
-    threading.Thread(target=rebuild_menu_for,
-                     args=(state.PERM_STATE.get("role") or "admin",), daemon=True).start()
-
-
-def _sub_menu_items():
-    """「子用户(&U)」下拉的条目：不筛选 + 每个子账号名，当前选中的带 ✓。"""
-    from webview.menu import MenuAction      # 模块级不能碰 webview.menu（PyInstaller 规矩，与 build_menu 同源）
-    items = []
-    if not _SUB_USERS:
-        items.append(MenuAction(("（正在加载子账号… 再点一次重试）" if _SUB_LOADING
-                                 else "（点开加载子账号…）"), _menu_load_subs))
-        return items
-    items.append(MenuAction(("✓ " if not _SUB_SEL else "") + "不筛选（看全部）",
-                            lambda: _menu_pick_sub("")))
-    for _u in _SUB_USERS:
-        items.append(MenuAction(("✓ " if _SUB_SEL == _u else "") + _u,
-                                (lambda uu: (lambda: _menu_pick_sub(uu)))(_u)))
-    return items
 
 
 def build_menu(sub=False):
@@ -441,11 +407,9 @@ def build_menu(sub=False):
         # 2026-11-03 用户令：点了就开始，别再弹一层「干没干活一眼看全」——
         # pywebview 顶层 MenuAction 在 WinForms 下就是直点直跑的菜单项
         MenuAction("云端体检(&T)", lambda: js_click("extdiag")),
-        # 2026-11-10 用户令「子用户收到帮助隔壁，我点击了再显示出来」：
-        # 恢复 2026-10-31 晚三批的原生菜单「子用户」（帮助隔壁），侧栏常驻下拉块撤掉。
-        # 菜单点开才列子账号（_SUB_USERS 由页面 loadSubRec 经 sync_subusers 同步进来，
-        # 首次点选未加载时 exPickSub 会先拉列表再选值）；✓ 标当前选中，点名字直切视角。
-        Menu("子用户(&U)", _sub_menu_items()),
+        # 2026-11-11 用户令：菜单「子用户(U)」保留，点了才弹主区那条子用户按钮
+        #（全部+一号一钮），再点一次收起（条尾 ✕ 同效）。
+        MenuAction("子用户(&U)", _menu_toggle_subbar),
         Menu("帮助(&H)", [
             MenuAction("软件更新", upd_app),
             MenuAction("更新日志", lambda: js_click("extver")),
@@ -624,29 +588,21 @@ def run_app(httpd, port, startup_xlsx=None):
                 return ""
 
         def sync_subusers(self, payload="[]"):
-            """2026-10-31 晚三批：页面 loadSubRec 拉到子账号列表后同步进来，
-            原生菜单「子用户」跟着重画（列表变了才重画，省得闪）。"""
-            global _SUB_LOADING
+            """页面 loadSubRec 拉到子账号列表后同步进来。2026-11-11 菜单项撤掉后
+            只记账，不再触发菜单重画（子用户条由页面自己画）。"""
             try:
                 us = json.loads(payload or "[]")
                 if isinstance(us, list):
                     us = [str(x) for x in us if str(x)]
-                    _SUB_LOADING = False          # 列表回来了（哪怕空），loading 态复位
                     if us != _SUB_USERS:
                         _SUB_USERS[:] = us
-                        threading.Thread(target=rebuild_menu_for, args=(
-                            state.PERM_STATE.get("role") or "admin",), daemon=True).start()
             except Exception:
                 pass
 
         def sub_sel(self, u=""):
-            """页面侧子用户选择变化（含菜单点回来的回声）→ 同步 ✓ 到菜单。"""
+            """页面侧子用户选择变化 → 只记账（菜单 ✓ 同步已随菜单撤掉）。"""
             global _SUB_SEL
-            u = str(u or "")
-            if u != _SUB_SEL:
-                _SUB_SEL = u
-                threading.Thread(target=rebuild_menu_for, args=(
-                    state.PERM_STATE.get("role") or "admin",), daemon=True).start()
+            _SUB_SEL = str(u or "")
 
     _dpi()                                  # 必须在量屏幕 / 建窗前：否则算出来是缩放前的尺寸
     w, h, x, y = fit_window(1480, 940)

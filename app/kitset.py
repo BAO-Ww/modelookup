@@ -1334,6 +1334,63 @@ def _glm_params(model, log=None):
     return out[:12]
 
 
+def _r2_pull(model, log=None):
+    """2026-11-11 用户令「不应该是去 R2 拿图嘛，怎么又去爬虫了」：蓝底取图**先问云端 R2
+    官网图库**（worker GET /kitidx + /kitimg2），命中就直接落 kitset/<型号>/<相对路径>
+    并返回本地绝对路径列表，调用方据此跳过官网/欣盛爬虫。
+    本地已有同名图（>1KB）不再重复下载；云端没这型号 / 查询失败 → 返回 [] 照旧爬。"""
+    try:
+        import cloud as _cl
+    except Exception:
+        return []
+    try:
+        nm = norm_model(model) or re.sub(r"\s+", "", str(model or ""))
+        md = model_dir(model)
+    except Exception:
+        return []
+    try:
+        keys, err = _cl.kit_list_cloud(nm)
+    except Exception as e:
+        keys, err = None, str(e)
+    if keys is None:
+        if log:
+            log("云端图库查询失败（%s），照常爬取" % err)
+        return []
+    if not keys:
+        if log:
+            log("云端图库没有这个型号，照常爬取")
+        return []
+    out = []
+    for rel in keys[:48]:
+        rel = str(rel).replace("\\", "/").strip().lstrip("/")
+        parts = [p for p in rel.split("/") if p]
+        if not parts or any(p in (".", "..") for p in parts):
+            continue
+        fp = os.path.join(md, *parts)
+        try:
+            if os.path.isfile(fp) and os.path.getsize(fp) > 1024:
+                out.append(fp)
+                continue
+        except Exception:
+            pass
+        try:
+            raw, _e = _cl.kit_fetch_cloud(nm + "/" + rel)
+        except Exception:
+            raw = None
+        if not raw or len(raw) < 512:
+            continue
+        try:
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            with io.open(fp, "wb") as f:
+                f.write(raw)
+            out.append(fp)
+        except Exception:
+            pass
+    if out and log:
+        log("云端 R2 图库命中 %d 张，直接取用（不爬官网/欣盛）" % len(out))
+    return out
+
+
 def _gather_info(model, log):
     """pubwork 爬虫 → 官网三站 → 欣盛，三路凑 props/brand/title/price/url。
     返回 (info, data imgs_urls)；info 至少含 model/brand/title/props。"""
@@ -1350,20 +1407,29 @@ def _gather_info(model, log):
         info = None
     imgs = []
     data = None
-    try:
-        data = fetch_official(model, log)
-    except Exception:
-        data = None
     xs = None
-    try:
-        xs = fetch_xinsheng(model, log)
-    except Exception:
-        xs = None
-    for src, _tag in ((data, "官网"), (xs, "欣盛")):
-        if src and src.get("imgs"):
-            # 2026-10-31 用户令：下载的图按来源分文件夹——候选带来源标签，
-            # _pick_prod 落盘时进 官网\ / 欣盛\ 子目录
-            imgs.extend([(u, _tag) for u in src["imgs"] if u])
+    # 2026-11-11 用户令「不应该是去 R2 拿图嘛，怎么又去爬虫了」：先取云端 R2 图库
+    _r2 = _r2_pull(model, log)
+    if _r2:
+        for _p in _r2:
+            _par = os.path.basename(os.path.dirname(_p))
+            imgs.append((_p, _par if _par in _SRC_TAG_DIRS else "其他"))
+    # 参数也够（≥5 条）就直接用，不再爬官网/欣盛；参数残缺才爬（那边能补参数表）
+    _need_crawl = (not imgs) or len((info or {}).get("props") or []) < 5
+    if _need_crawl:
+        try:
+            data = fetch_official(model, log)
+        except Exception:
+            data = None
+        try:
+            xs = fetch_xinsheng(model, log)
+        except Exception:
+            xs = None
+        for src, _tag in ((data, "官网"), (xs, "欣盛")):
+            if src and src.get("imgs"):
+                # 2026-10-31 用户令：下载的图按来源分文件夹——候选带来源标签，
+                # _pick_prod 落盘时进 官网\ / 欣盛\ 子目录
+                imgs.extend([(u, _tag) for u in src["imgs"] if u])
     if imgs:
         # 大图变体优先（_1200 > 其他 > _600）：透明底机图锁定不比面积，先到先得，
         # 600px 小图先到会顶掉 1200px 大图导致成图发糊（2026-10-22 XQS100 用户实锤）
@@ -1915,11 +1981,15 @@ def _fetch_img(u, timeout=20):
 
 
 def _accept_sizeimg(im, sizeimg, prod_path=None, log=None, url=""):
-    """收下这张尺寸图：与产品主图同图则丢（那是产品照），否则垫白存盘。"""
+    """收下这张尺寸图：与产品主图同图则丢（那是产品照），否则垫白存盘。
+    2026-11-11 用户令「这个都能当尺寸图的」：存盘后还得 AI 读得出毫米数字
+    （_nums_gate），读不出就删盘退 False——场景照会骗过 GLM 的「是/否」。"""
     try:
         if prod_path and os.path.isfile(prod_path) and _same_img(im, Image.open(prod_path)):
             return False
         _flat_white(im).save(sizeimg, quality=92)
+        if not _nums_gate(sizeimg, log, "详情页候选 %s" % (url.split("/")[-1] or "本地图")):
+            return False
         if log:
             log("官网详情页命中官方尺寸图：%s" % (url.split("/")[-1] or "本地图"))
         return True
@@ -2176,6 +2246,25 @@ def _same_img(a, b, thr=0.6):
         return False
 
 
+def _nums_gate(sizeimg, log, tag):
+    """2026-11-11 用户令「这个都能当尺寸图的」：AI 点头还不够——官方尺寸图必须
+    **读得出毫米数字**（_ai_read_size_nums）。JSQ31-16FET7FRTPGU1 实锤：产品场景照
+    （浅蓝水纹底）把 GLM-4V 骗到答「是」，贴进 img4 一张没标注的照片。
+    读不出数字 = 不是尺寸图，删掉刚落的盘、返回 False；读出 = True。"""
+    nums = _ai_read_size_nums(sizeimg, log)
+    if nums:
+        if log:
+            log("%s 复核通过（AI 读到尺寸数字 %s）" % (tag, "x".join(str(x) for x in nums)))
+        return True
+    try:
+        os.remove(sizeimg)
+    except Exception:
+        pass
+    if log:
+        log("%s AI 点了头但读不出尺寸数字（场景照/促销图冒充实锤），弃用" % tag)
+    return False
+
+
 def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=None):
     """机图：①软件图库（payload imgs / 欣盛 ximg，与卡片同源）②抓取链候选做
     「边框同色+泛洪抠底」选抠出主体最大且落地的。官网尺寸线框图顺带识别存
@@ -2315,7 +2404,16 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
     except Exception:
         pass
     # 2026-10-31 用户令：url 候选带来源标签（官网/欣盛/中关村），下载落盘进对应子文件夹
-    srcs += [("url", u, t) for it in (img_urls or []) for u, t in
+    # 2026-11-11：R2 图已在盘上，带绝对本地路径进来的按「本地文件」读，别当 URL 去 fetch
+    def _ckind(u):
+        s = str(u or "")
+        if s.lower().startswith(("http://", "https://")):
+            return "url"
+        try:
+            return "file" if os.path.isfile(s) else "url"
+        except Exception:
+            return "url"
+    srcs += [(_ckind(u), u, t) for it in (img_urls or []) for u, t in
              [(it if isinstance(it, tuple) else (it, "其他"))]]
     best = None   # (score, PIL image)
     _trans_fallback = [None]   # 透明底小图暂存路径（等更大的变体）
@@ -2373,10 +2471,13 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                                   else "没给准话（限流/无应答），宁可不用"))
                 else:
                     _flat_white(im).save(sizeimg, quality=92)
-                    have_size = True
-                    if log:
-                        log("候选%d 判定为官网尺寸图（AI 确认），img4 直接用它" % n)
-                    continue
+                    # 2026-11-11：AI 点头还不够，必须读得出毫米数字（场景照会骗过 GLM）
+                    if _nums_gate(sizeimg, log, "候选%d" % n):
+                        have_size = True
+                        if log:
+                            log("候选%d 判定为官网尺寸图（AI 确认），img4 直接用它" % n)
+                        continue
+                    _ai_rej.add(fp if kind == "url" else u)
             # 启发式没认出：先记进 AI 复核候选（本地路径，循环结束后商汤/GLM 看图定夺）
             if not have_size and len(_ai_cand) < 12:
                 _ai_cand.append(fp if kind == "url" else u)
@@ -2482,10 +2583,12 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             r = _ai_is_sizeimg(im2, log)
             if r:
                 _flat_white(im2).save(sizeimg, quality=92)
-                have_size = True
-                if log:
-                    log("AI 视觉认出官方尺寸图：%s" % os.path.basename(pth))
-                break
+                # 2026-11-11：同主循环，点头后还要读得出毫米数字才算数
+                if _nums_gate(sizeimg, log, "AI 视觉复核 %s" % os.path.basename(pth)):
+                    have_size = True
+                    if log:
+                        log("AI 视觉认出官方尺寸图：%s" % os.path.basename(pth))
+                    break
             if r is None:
                 if log:
                     log("视觉 AI 不可用，尺寸图复核跳过")

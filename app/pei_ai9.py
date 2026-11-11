@@ -1838,9 +1838,16 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
     scene = load_cut(scene_f) if scene_f else None
 
     # 2) 先把两套背景（亮/暗）出好，后面的 9 张就都是本地合成，进度条才准
-    step(16, "正在让 AI 出背景（按机型）...")
-    prep_bg("a")
-    prep_bg("char")
+    #    （2026-11-11 用户令「聚光的怎么还有 AI 按机型来配图了，底图不是已经固定了的嘛」：
+    #    聚光四张全用固定手绘 _spot_bg（10-28 定稿），根本不消费 prep_bg 的产物——
+    #    原来这里无条件 prep_bg 两张 = 聚光白烧一次 CogView 还谎报「AI 出背景」。
+    #    现在聚光直接跳过，其余风格照旧。）
+    if GEN_STYLE == "spot":
+        step(14, "准备聚光底图（固定底，不调 AI）...")
+    else:
+        step(16, "正在让 AI 出背景（按机型）...")
+        prep_bg("a")
+        prep_bg("char")
 
     # 9 张按槽位定义；slots=None 出全部 9 张（默认「发布图」），
     # 指定 slots（如 [1,2,3,4,6,9]）则只出对应几张（「生成6张」按钮用）。

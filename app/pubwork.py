@@ -838,21 +838,8 @@ def gen_style(model, style, sell_price=None, version="N", entry_title=None):
         _logf()("发布图·%s 生成失败：%s" % (name, e))
         _job_end(False, str(e))
         return
-    if style == "spot" and paths:
-        # 聚光四件套出完后台让 AI 过一遍（不占进度条；修过的图静默替换，复检失败绝不影响已生成图）
-        def _qa_bg():
-            try:
-                if job_state().get("running"):
-                    _logf()("AI 复检跳过：已有新任务在跑，避免覆盖新成片")
-                    return
-                _auto_qa_spot(model, info, src, out, style, paths)
-                _logf()("AI 复检结束（若修过图，重开这套即可看到）")
-            except Exception as e:
-                _logf()("AI 复检异常（不影响成片）：%s" % e)
-        try:
-            threading.Thread(target=_qa_bg, daemon=True).start()
-        except Exception as e:
-            _logf()("AI 复检线程起不来（不影响成片）：%s" % e)
+    # 2026-11-11 用户令「AI 检查有什么用呢还不如不要」：聚光四件套的 AI 复检整个取消。
+    # _auto_qa_spot 函数保留备用，不再有任何调用方。
 
 
 @serialized

@@ -587,6 +587,45 @@ def glm_copy(model, kind, data, log):
     return res
 
 
+# ---------------------------------------------------------------- 聚光卖点（2026-11-11 用户令）
+def _blue_points(model):
+    """蓝底文案已用的卖点一话一行（kitset set.json 的 points），读不到返回 []。
+    聚光卖点要跟蓝底「尽量不要写的一样」，先把蓝底那份拿来做撞车比对。"""
+    try:
+        import kitset as _ks
+        p = os.path.join(_ks.model_dir(model), "set.json")
+        if os.path.isfile(p):
+            j = json.load(io.open(p, encoding="utf-8"))
+            return [str(x).strip() for x in (j.get("points") or []) if str(x).strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _ptkey(s):
+    """卖点比对键：去标点/空白、公斤→kg、统一小写——「10公斤大容量」和
+    「10kg大容量，床单被罩一次洗完」这类换皮重复也要拦住。"""
+    t = re.sub(r"[，,。；;：:、\s]+", "", str(s))
+    return t.replace("公斤", "kg").replace("KG", "kg").lower()
+
+
+def _dedupe_vs_blue(pts, blue, cap=5):
+    """聚光卖点跟蓝底去重（整句 + 首段两把尺），再砍到 ≤cap 条（用户令「不能超过五条」）。
+    「尽量不要一样」：全撞车时保底用原序前 cap 条——条数合规优先，差异尽力而为。"""
+    bk = {_ptkey(b) for b in (blue or [])}
+    bk1 = {_ptkey(re.split(r"[，,]", b)[0]) for b in (blue or [])}
+    out = []
+    for p in (pts or []):
+        if _ptkey(p) in bk or _ptkey(re.split(r"[，,]", p)[0]) in bk1:
+            continue
+        if _ptkey(p) in {_ptkey(x) for x in out}:
+            continue
+        out.append(p)
+    if not out:
+        out = list(pts or [])
+    return out[:cap]
+
+
 # ---------------------------------------------------------------- 描述拼装
 def build_desc(model, kk, data, pts, ship='nat'):
     """商品描述加厚版式（2026-10-13 用户拿参考文案定稿）：【产品名】型号 / ·卖点×N（全量加厚条）
@@ -762,10 +801,14 @@ def generate(model, kind='l', force=0, log=None):
     # 卖点：AI 从真实参数提炼的加厚条优先（2026-10-13 用户定稿，官网 sellpoint 是
     # 「智能生活新选择」类空洞口号不要）；AI 全被剔才拿官网卖点兜底
     pts = ai['points'][:15] or [p for p in (data.get('sellpoints') or []) if p][:15]
+    # 2026-11-11 用户令「聚光的卖点尽量不要跟蓝底的写的一样，也是在5条以下，不能超过五条」：
+    # 先跟蓝底 set.json 的卖点去重（整句/首段归一比对，换皮重复也拦），再统一砍到 ≤5 条；
+    # 卖点 tab、描述里的 ·卖点 块、一键复制全吃这份，口径一致。
+    pts = _dedupe_vs_blue(pts, _blue_points(model), cap=5)
     res = {"ok": True, "cached": False, "model": model, "kind": kk,
            "source": data['source'], "source_url": data['url'],
            "pname": data['pname'], "price": data['price'],
-           "titles": ai['titles'], "points": ai['points'],
+           "titles": ai['titles'], "points": pts,
            "desc_nat": build_desc(model, kk, data, pts, 'nat'),
            "desc_rep": build_desc(model, kk, data, pts, 'rep'),
            "xhs": ai.get('xhs') or [],
