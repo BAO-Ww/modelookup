@@ -737,7 +737,7 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
         return save(cv, out / "1_首图.jpg")
     # 顶栏：成色 + 全国联保
     dim(cv, (0, 0, W, 52), SCRIM_COL, SCRIM_A)
-    T(dr, (40, 27), "全新未拆封", 27, TX1, "lm")
+    T(dr, (40, 27), "全新机", 27, TX1, "lm")
     T(dr, (W - 40, 27), "全国联保", 24, TX1, "rm")
     # 品牌 + 型号（左上角两行，简洁）
     T(dr, (40, 92), P['ben'], 24, TX2, "lm")
@@ -774,7 +774,7 @@ def img2(front, out):                 # 机器图（深色，同色系）
     cv = prep_bg("char").convert("RGBA")
     dr = ImageDraw.Draw(cv)
     T(dr, (W // 2, 76), f"{P['brand']} {P['cat']}", 40, TX1, "mm")
-    sub = (P['color'] + " · " if P['color'] else "") + "全新未拆封"
+    sub = (P['color'] + " · " if P['color'] else "") + "全新机"
     T(dr, (W // 2, 122), sub, 20, TX2, "mm")
     specs = P['specs']
     if specs:
@@ -796,7 +796,7 @@ def img2(front, out):                 # 机器图（深色，同色系）
             _s = 27 if dr.textlength(v, font=font(27, True)) <= cw - 20 else 20
             T(dr, (x + cw // 2, y0 + 42), v, _s, "#ffffff", "mm")
             T(dr, (x + cw // 2, y0 + 84), k, 17, "#aab3c0", "mm")
-    T(dr, (W // 2, 1026), f"{P['brand']} {P['model']} · 全新未拆封", 23, TX2, "mm")
+    T(dr, (W // 2, 1026), f"{P['brand']} {P['model']} · 全新机", 23, TX2, "mm")
     return save(cv, out / "2_机器图.jpg")
 
 
@@ -816,7 +816,7 @@ def img3(angle, out):                 # 立体角度
     T(dr, (W // 2, by0 + 42), P['dim1'], _s1, "#ffffff", "mm")
     _s2 = 21 if dr.textlength(P['dim2'], font=font(21, True)) <= bw_ - 60 else 18
     T(dr, (W // 2, by0 + 82), P['dim2'], _s2, "#bcc6d2", "mm")
-    T(dr, (W // 2, 1046), f"{P['brand']} {P['model']} · {P['tag']} · 全新未拆封", 22, TX2, "mm")
+    T(dr, (W // 2, 1046), f"{P['brand']} {P['model']} · {P['tag']} · 全新机", 22, TX2, "mm")
     return save(cv, out / "3_立体角度.jpg")
 
 
@@ -930,7 +930,7 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
         # 让 kitset 去中关村补外形尺寸参数再组 cfg（蓝底/聚光同一来源）
         if not ai_dims:
             info, _ = kitset._ensure_dims(info, kdir, None, lambda s: None)
-        cfg, _, _, _ = kitset._build_cfg(info, mdir=kdir, ai_dims=ai_dims)
+        cfg, _, _, _, _ = kitset._build_cfg(info, mdir=kdir, ai_dims=ai_dims)
         si = cfg.get("sizeimg")
         # ZOL 图集兜底（2026-10-29 用户令「ZOL 是蓝底跟聚光的最后兜底」）：
         # 聚光此前只到官网详情页，官网没图直接手绘——漏了 ZOL 这层。补上：
@@ -1155,7 +1155,7 @@ def img9(out):                         # 交易保障
     bx0, by0, bw_, bh_ = 100, 214, W - 200, 660
     dim(cv, (bx0, by0, bx0 + bw_, by0 + bh_), (8, 9, 12), 172, radius=28)
     dr.rounded_rectangle([bx0, by0, bx0 + bw_, by0 + bh_], 28, outline=(255, 225, 140, 110), width=2)
-    items = [f"{P['brand']}官方正品，全新未拆封，全国联保",
+    items = [f"{P['brand']}官方正品，全新机，全国联保",
              "品质保证，放心购买，售后无忧",
              "支持专业送货安装，当地售后师傅上门安装",
              "先验后签收，破损拒收",
@@ -1677,14 +1677,14 @@ def build_text(info, version, sell_price, ai_copy=None):
         cards=cards,
         angle_title=ai_or("angle_title", "%s · 45°立体" % kind),
         angle_sub=ai_or("angle_sub", (dim + " · " + kc["angle"]) if dim else kc["angle"]),
-        dim1=pl1, dim2=("%s · 全新未拆封" % tag), pl1=pl1, pl2=tag,
+        dim1=pl1, dim2=("%s · 全新机" % tag), pl1=pl1, pl2=tag,
         o_title=o_title, o_sub=o_sub, o_chips=chips(o_par, "o", 3),
-        o_foot="%s %s · 全新未拆封" % (brand, model),
+        o_foot="%s %s · 全新机" % (brand, model),
         r_title=r_title, r_sub=r_sub, r_chips=chips(r_par, "r", 3),
-        r_foot="%s %s · 全新未拆封" % (brand, model),
+        r_foot="%s %s · 全新机" % (brand, model),
         e_title=e_title, e_sub=e_sub, e_chips=chips(e_par, "e", 3),
-        e_foot="%s %s · 全新未拆封" % (brand, model),
-        d_title=d_title, d_feats=d_feats, d_foot="%s · 全新未拆封" % tag,
+        e_foot="%s %s · 全新机" % (brand, model),
+        d_title=d_title, d_feats=d_feats, d_foot="%s · 全新机" % tag,
     )
 
 
@@ -1824,7 +1824,7 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
     # 无真实实景照：回退「产品摆影棚」，标题不可用「阳台/厨房实拍」误导，改用中性「产品实拍」
     if not scene_f:
         P["r_title"] = "产品实拍"
-        P["r_sub"] = "全新未拆封 · 官方正品"
+        P["r_sub"] = "全新机 · 官方正品"
 
     front = load_cut(front_f)
     # 产品主色 -> 传给内嵌 AI 出背景做同色系微调（每台机器略有差异但都在深灰族）

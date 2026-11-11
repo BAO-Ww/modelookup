@@ -114,10 +114,13 @@ class ApiGetMixin:
                 import kitset
                 _j, _md = kitset._cfg_of(model)
                 if _j and _j.get("cfg"):
+                    # 2026-11-11 售后 4 版：read 也得带 aftersales（老 set.json 没有 → 单版兜底）
+                    _afs = _j.get("aftersales") or ([_j["aftersale"]] if _j.get("aftersale") else [])
                     self._send(200, json.dumps({"ok": True, "model": _j.get("model") or model,
                                                 "titles": _j.get("titles") or [],
                                                 "points": _j.get("points") or [],
                                                 "aftersale": _j.get("aftersale") or "",
+                                                "aftersales": _afs,
                                                 "url": (_j.get("cfg") or {}).get("url") or _j.get("src") or ""},
                                                ensure_ascii=False))
                 else:

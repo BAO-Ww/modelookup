@@ -2856,8 +2856,13 @@ def _hard_points(info, pd, sp):
             return
         # 按卖点名（逗号前段）去重：模板行和官网兜底行常同名不同尾，
         # 整句比对拦不住，图上就会出现两张「80升大水量」（10-26 实锤）
-        nm = re.split(r"[，,]", str(s))[0].strip()
-        if any(re.split(r"[，,]", x)[0].strip() == nm for x in out):
+        # 2026-11-11 用户令「卖点增加到5个左右」配套：公斤/kg、全半角归一再比，
+        # 「10公斤大容量」和「10kg大容量」这种双胞胎别占两行
+        def _nk(x):
+            t = re.split(r"[，,]", str(x))[0].strip()
+            t = t.replace("公斤", "kg").replace("KG", "kg").replace("ＫＧ", "kg")
+            return re.sub(r"\s+", "", t).lower()
+        if any(_nk(x) == _nk(s) for x in out):
             return
         out.append(s)
 
@@ -2995,15 +3000,38 @@ def _hard_points(info, pd, sp):
         if "防干烧" in alltext or "超温" in alltext:
             add("多重安全防护，防干烧防超温")
     # 模板没凑满：官网卖点里挑硬行补（含数字或带解释的），虚话一概不要
+    # 2026-11-11 用户令「卖点增加到5个左右」：目标保底 5 条——
+    # ① 官网硬行放宽收（≥8 字的具体短语也收，虚话黑名单照样拦）；
+    # ② 还不够就从前三档真实参数补通用硬货（噪音/除菌/变频/智能互联/预约），
+    #    全部走 add() 的同名去重，绝不出现双胞胎行。
     if len(out) < 6:
         for s_ in (sp or []):
             s_ = str(s_).strip()
             if not s_ or re.search(r"安装省心|师傅上门|日常好打理|省时省力|用料扎实|细节经得起|官方正品|验货|开箱|[23]级能效", s_):
                 continue
-            if re.search(r"\d", s_) or "，" in s_:
+            if re.search(r"\d", s_) or "，" in s_ or len(s_) >= 8:
                 add(s_)
             if len(out) >= 6:
                 break
+    if len(out) < 5:
+        _effv = str(pd.get("能效等级") or pd.get("能效效率等级") or "").strip()
+        if _effv and re.search(r"1级|一级", _effv):
+            add("一级能效，长期用省电费")
+        _nz = None
+        for k, v in pd.items():
+            if "噪" in str(k):
+                _n = re.sub(r"[^0-9.]", "", str(v))
+                if _n and float(_n) < 70:
+                    _nz = _n
+                    break
+        if _nz:
+            add("%s分贝低噪，晚上洗晚上看都不吵" % _nz)
+        if "除菌" in alltext or "杀菌" in alltext or "消毒" in alltext:
+            add("除菌洗护，小孩贴身衣物也放心")
+        if "预约" in alltext:
+            add("支持预约，睡前放进去早起晾")
+        if "智能" in alltext or "wifi" in alltext.lower() or "物联" in alltext:
+            add("智能互联，手机远程操控")
     return out
 
 
@@ -3246,10 +3274,17 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None):
         "sizeimg": _si if os.path.isfile(_si) else None,
         "url": info.get("url") or "",
     }
-    # 售后三句定稿（2026-10-23 用户拍板版本 B：要带一句互动引导）
-    aftersale = ("全新未拆封，%s全国联保。\n支持到货验货，破损可拒收。\n"
-                 "看中了就联系我，聊得来价格好商量。" % brand)
-    return cfg, titles, points, aftersale
+    # 售后多版本（2026-11-11 用户令「售后的可以搞多个版本，你先写我来挑好了再上传」）：
+    # 出 4 版可选，面板上点选；aftersale 仍存第 1 版（老面板/参数对照兼容不炸）。
+    # 成色口径 2026-11-11 用户令：一律「全新机」，不再写「全新未拆封」。
+    aftersales = [
+        "全新机，%s全国联保。\n支持到货验货，破损可拒收。\n看中了就联系我，聊得来价格好商量。" % brand,
+        "%s官方正品，全新机，全国联保。\n品质保证，放心购买，售后无忧。" % brand,
+        "全新机，%s全国联保。\n支持专业送货安装，当地有师傅上门。" % brand,
+        "全新机，%s全国联保，支持验货。\n满意再确认，售后有保障。" % brand,
+    ]
+    aftersale = aftersales[0]
+    return cfg, titles, points, aftersale, aftersales
 
 
 def _load_pub_info(model):
@@ -3498,7 +3533,7 @@ def sync_blue4_size(model, info, log=None):
         if not (info and (info.get("props") or [])):
             return
         ai_dims = _ai_read_size_nums(si, log)
-        cfg = _build_cfg(info, mdir=kd, ai_dims=ai_dims)
+        cfg = _build_cfg(info, mdir=kd, ai_dims=ai_dims)[0]   # 2026-11-11 修：_build_cfg 返回 5 元组，取 cfg（原来整包传给 _render_img4 必炸、被 except 吞成静默不重出）
         _render_img4(cfg, b4, prod)
         log("官方尺寸图后到，蓝底参数图已自动重出（img_4 换官方图版）")
     except Exception as e:
@@ -3623,7 +3658,7 @@ def generate(model, force=0, log=None):
     log("组装套图数据…")
     _ai_dims = _ai_read_size_nums(os.path.join(mdir, "sizeimg.jpg"), log) if (
         mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg"))) else None
-    cfg, titles, points, aftersale = _build_cfg(info, mdir=mdir, ai_dims=_ai_dims)
+    cfg, titles, points, aftersale, aftersales = _build_cfg(info, mdir=mdir, ai_dims=_ai_dims)
     log("渲染四张 1080×1080…")
 
     def _p(s):
@@ -3654,7 +3689,7 @@ def generate(model, force=0, log=None):
     _p("聚光尺寸图对账…")
     sync_spot_size(model, info, log)
     res = {"ok": True, "cached": False, "model": cfg["model"], "name": cfg["series"] + " " + cfg["model"],
-           "titles": titles, "points": points, "aftersale": aftersale,
+           "titles": titles, "points": points, "aftersale": aftersale, "aftersales": aftersales,
            "params": dict(cfg["params_rows"]), "src": cfg["url"],
            "imgs": ["1", "2", "3", "4"]}
     # 2026-10-31（用户令「剩下全改」）：
@@ -4050,7 +4085,7 @@ def hero_lines(model, info=None):
         info = info or load_kinfo(model) or {}
         if not info:
             return "", ""
-        cfg = _build_cfg(info, mdir=model_dir(model)) or {}
+        cfg = (_build_cfg(info, mdir=model_dir(model)) or (None,))[0] or {}   # 2026-11-11 修：取 5 元组首项 cfg（原来整包 .get() 必炸、被 except 吞成空标题行）
         l1, l2 = str(cfg.get("line1") or "").strip(), str(cfg.get("line2") or "").strip()
         mm = str(cfg.get("model") or m)
         if mm and l2.endswith(mm):

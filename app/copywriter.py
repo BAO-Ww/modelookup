@@ -470,9 +470,9 @@ PROMPT = """你是闲鱼家电卖家文案写手。产品：{pname}（型号 {mo
 1) 只能使用【真实数据】里出现的参数、功能和数字，绝对禁止编造数据里没有的参数、功能或数字。{no_params}
 2) titles：闲鱼标题三条（三选一）。分段式、段与段之间一个空格；不带价格、不带emoji、不带#话题；每条≤30字；三条开头语序必须各不同；
    品类/能源词必须照【真实数据】参数写（有「加热方式：加热管/储水式/横式」就是电热水器，绝不许写「燃气」；燃气热水器参数必有「燃气类/气源」字样）——
-   每条都必须有：型号全码 + 成色词（正品写「全新未拆封」，样机写「展示样机」）+ 服务词（全国联保/原厂正品联保）。参考版式（品牌/容量/核心卖点/品类词照【真实数据】换）：
-   {brand} 226L风冷无霜冰箱 {model} 全新未拆封 家用三门 全国联保
-   全新未拆封 {brand} 226L 三门冰箱 风冷无霜 {model} 原厂正品联保
+   每条都必须有：型号全码 + 成色词（正品写「全新机」，样机写「展示样机」）+ 服务词（全国联保/原厂正品联保）。参考版式（品牌/容量/核心卖点/品类词照【真实数据】换）：
+   {brand} 226L风冷无霜冰箱 {model} 全新机 家用三门 全国联保
+   全新机 {brand} 226L 三门冰箱 风冷无霜 {model} 原厂正品联保
    {brand}三门冰箱 226L 风冷无霜 {model} 全新原封全国联保
    {kk_titles}
 3) points：正好12-15条加厚卖点（宁可写满15条，绝不许偷懒只给几条）。每条20-45字，格式＝「核心功能（括号里带具体参数/数字）＋给用户的好处」，一条只讲一个卖点，从【真实数据】的参数表里逐项提炼（总容积/耗电/能效等级/压缩机/制冷方式/变温区/面板材质/尺寸/重量/噪音/冷冻能力/净化除菌/智能功能/开门方式/搁物架/照明……有什么写什么，参数表里每一行都尽量用上）。
@@ -550,9 +550,9 @@ def glm_copy(model, kind, data, log):
     no_params = ("（本次没有抓到参数表，只有型号：文案里绝不允许出现任何具体参数和数字，"
                  "只写成色/交易保障/通用卖点）" if not has_params else "")
     brand = (data.get('brand') or '').strip() or '品牌'
-    kk_titles = ('注意：这是正品全新机——标题里必须用「全新未拆封/全新原封」，绝不许出现「展示样机/样机」字样。'
+    kk_titles = ('注意：这是正品全新机——标题里必须用「全新机/全新原封」，绝不许出现「展示样机/样机」字样。'
                  if kind != 's' else
-                 '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新未拆封/全新原封/全新」字样。')
+                 '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新机/全新原封/全新」字样。')
     nums_set = set(NUM_RE.findall(norm_model(model)))
     # 2026-10-13 用户反馈「小红书/闲鱼拉胯」整改：质量闸（剔空洞口号/一句话配文）
     # + 质量不够自动重试一次（两次取分高那次），AI 解析失败也不再炸整单
@@ -616,11 +616,11 @@ def build_desc(model, kk, data, pts, ship='nat'):
         L.append('【参数】' + ' | '.join(flat[:10]))
     if str(data.get('price') or '').strip():
         L.append('【官网价】%s （本店售价见标价，%s）'
-                 % (data['price'], '全新未拆封' if kk == 'l' else '展示样机'))
+                 % (data['price'], '全新机' if kk == 'l' else '展示样机'))
     L.append('【交易】先验后签收，破损拒收')
     L.append('')
     if kk == 'l':
-        L.append('%s官方正品，全新未拆封，全国联保' % brand)
+        L.append('%s官方正品，全新机，全国联保' % brand)
         L.append('品质保证，放心购买，售后无忧')
     else:
         L.append('%s官方正品，展示样机，功能完好' % brand)
@@ -888,7 +888,7 @@ def polish(model, kind, target, text, log=None, mode='polish'):
     if target == 'titles':
         cache_d = _load_cache(model, kk)
         orig = "\n".join((cache_d.get('titles') if cache_d else []) or []) or str(text or '')
-        kk_rule = ('成色词必须用「全新未拆封/全新原封」，绝不许出现「样机」字样' if kk != 's'
+        kk_rule = ('成色词必须用「全新机/全新原封」，绝不许出现「样机」字样' if kk != 's'
                    else '成色词必须用「展示样机/功能完好」，绝不许出现「全新」字样')
         raw = _chat(POLISH_TITLES_PROMPT.format(kk_rule=kk_rule, facts=facts, orig=orig))
         m = re.search(r'\{.*\}', raw, re.S)
@@ -901,7 +901,7 @@ def polish(model, kind, target, text, log=None, mode='polish'):
             _save_cache(model, kk, cache_d)
         return {"ok": True, "titles": good, "dropped": len(titles) - len(good)}
     # desc：正文直出，只做数字防编造校验（不合规段落回退原文）
-    kk_rule = ('成色词必须用「全新未拆封/全新原封」，绝不许出现「样机」字样' if kk != 's'
+    kk_rule = ('成色词必须用「全新机/全新原封」，绝不许出现「样机」字样' if kk != 's'
                else '成色词必须用「展示样机/功能完好」，绝不许出现「全新」字样')
     _dprompt = REWRITE_DESC_PROMPT if mode == 'rewrite' else POLISH_DESC_PROMPT
     new = _chat(_dprompt.format(facts=facts, kk_rule=kk_rule, orig=str(text or ''))).strip()
@@ -932,8 +932,8 @@ def qa_copy(model, kind, text, log=None):
     log = log or (lambda s: None)
     kk = 's' if kind == 's' else 'l'
     facts = _facts_of(model, kk)
-    kk_rule = ('这是正品全新机——文案里必须用「全新未拆封」，绝不许出现「展示样机/样机」字样' if kk != 's'
-               else '这是展示样机——文案里必须用「展示样机」，绝不许出现「全新未拆封/全新」字样')
+    kk_rule = ('这是正品全新机——文案里必须用「全新机」，绝不许出现「展示样机/样机」字样' if kk != 's'
+               else '这是展示样机——文案里必须用「展示样机」，绝不许出现「全新机/全新」字样')
     issues = []
     # 本地硬扫：极限词 + 成色词冲突（不花钱不卡顿，必出）
     for i, ln in enumerate(str(text or '').split('\n')):
@@ -946,7 +946,7 @@ def qa_copy(model, kind, text, log=None):
         if kk != 's' and re.search(r'样机', ln):
             issues.append({"where": "第%d行" % (i + 1), "level": "高",
                            "note": "正品机文案出现「样机」字样，成色口径冲突"})
-        if kk == 's' and re.search(r'全新未拆封|全新原封', ln):
+        if kk == 's' and re.search(r'全新机|全新原封|全新未拆封', ln):
             issues.append({"where": "第%d行" % (i + 1), "level": "高",
                            "note": "样机文案出现「全新」字样，成色口径冲突"})
     # GLM 语义自检

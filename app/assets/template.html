@@ -621,10 +621,8 @@ mark.hlm{background:#fff3bf;color:inherit;padding:0 1px;border-radius:3px}
         <div class="fhead"><span class="flbl">闲鱼号</span></div>
         <div id="xyboxbanner" hidden style="display:none;font-size:12.5px;font-weight:500;color:#475467;line-height:1.55;word-break:break-all;margin:1px 0 7px"></div>
         <div id="xyseg" style="display:none;flex-direction:column;align-items:stretch;gap:6px">
-          <select id="xysel" title="只看标记到这个闲鱼号名下的型号（全部=不按号筛）"
-                  style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #d7dce6;border-radius:8px;font-size:12.5px;background:#fff;outline:0;color:#333">
-            <option value="">全部</option>
-          </select>
+          <!-- 2026-11-11 用户令「有几个闲鱼号就显示几个，还要有个全部的按键」：下拉改一号一钮 -->
+          <div id="xybtns" style="display:flex;flex-direction:column;align-items:stretch;gap:6px"></div>
           <div style="display:flex;gap:6px">
             <!-- 状态栏「管理」键（2026-10-14）：不用进发布弹窗，这里直达「管理我的闲鱼号」 -->
             <button id="xymgrbtn" title="管理我的闲鱼号：改名（同步所有发布记录）/ 修复旧号名 / 一键全部取消标记发布"
@@ -1345,7 +1343,7 @@ function syncMarks(tries){
           prunePrices();
           cqKick(2500);
         }
-        if (changed || filled || pruned || _re){ run(); pubStockWarn(); }
+        if (changed || filled || pruned || _re){ run(); pubStockWarn(); try { ghostNotify(); } catch(e){} }
       } else if (j && j._st === 0 && (tries || 0) < 6){
         setTimeout(function(){ try { syncMarks((tries || 0) + 1); } catch(e){} }, 10000);
       }
@@ -1412,20 +1410,29 @@ var hideMarked = false;
 try { hideMarked = localStorage.getItem(HIDE_KEY) === '1'; } catch(e){}
 var selXy = '';                    // 闲鱼号筛选：''=全部，否则只看标记到该号名下的
 function refreshXySel(){
-  var sel = document.getElementById('xysel');
-  if (!sel) return;
+  /* 2026-11-11 用户令「有几个闲鱼号就显示几个按键，还要有个全部」：下拉改一号一钮，
+     点谁筛谁、选中高亮；孤儿旧名照旧兜底追加（改名前标的老记录也得能筛到） */
+  var box = document.getElementById('xybtns');
+  if (!box) return;
   var opts = xyOptions();
   var cur = selXy;
-  /* 2026-10-14 用户实锤「默认改了名，商品数量不对」：改名前标的老号名（孤儿）记录还在，
-     修复前也得能筛到——追加进下拉并标明条数；修完 xyRenameSync 会刷新下拉自然消失 */
   var _orph = xyOrphans();
   Object.keys(_orph).forEach(function(n){ if (opts.indexOf(n) < 0) opts.push(n); });
-  sel.innerHTML = '<option value="">全部</option>'
+  if (cur && opts.indexOf(cur) < 0){ cur = ''; selXy = ''; }
+  var _chip = function(v, lbl){
+    var on = (v || '') === (cur || '');
+    return '<button data-xy="' + esc(v) + '" title="' + (v ? '只看标记到「' + esc(v) + '」名下的型号' : '全部=不按号筛') + '"'
+      + ' style="width:100%;box-sizing:border-box;padding:5px 10px;border:1px solid ' + (on ? '#2e6be6' : '#d7dce6')
+      + ';border-radius:8px;font-size:12.5px;font-weight:600;background:' + (on ? '#2e6be6' : '#fff')
+      + ';color:' + (on ? '#fff' : '#333') + ';cursor:pointer;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+      + esc(lbl) + '</button>';
+  };
+  var h = _chip('', '全部')
     + opts.map(function(x){
-        var _lbl = x + (_orph[x] ? ('（旧名 · ' + _orph[x] + ' 条）') : '');
-        return '<option value="' + esc(x) + '"' + (x === cur ? ' selected' : '') + '>' + esc(_lbl) + '</option>';
+        var _lbl = x + (_orph[x] ? ('·旧' + _orph[x]) : '');
+        return _chip(x, _lbl);
       }).join('');
-  if (cur && opts.indexOf(cur) < 0){ selXy = ''; sel.value = ''; }
+  if (box.innerHTML !== h) box.innerHTML = h;
 }
 
 /* ---------- 全软件字体大小（2026-10-10）：纯本机偏好，存 ml_fontscale ----------
@@ -3190,6 +3197,7 @@ function showSubRec(u){
   }
   run();   // 主区直接列出 TA 发布的商品卡片（时间/定价显示在卡片上，侧栏不再堆明细）
   pubStockWarn();   // 横幅切到盯 TA 的已发布型号（TA 的没库存了也提醒）
+  try { ghostNotify(); } catch(e){}   // 2026-11-11：TA 的发布里有掉出总表的也弹窗报（管理号能代管取消）
 }
 (function(){
   var sel = document.getElementById('subrecsel'); if (!sel) return;
@@ -3197,7 +3205,7 @@ function showSubRec(u){
     var v = sel.value || '';
     try{ window.pywebview && pywebview.api.sub_sel && pywebview.api.sub_sel(v); }catch(e){}
 
-    if (!v){ SUBVIEW = null; pubStockWarn(); run(); return; }        // 选「不筛选」= 退出查看
+    if (!v){ SUBVIEW = null; pubStockWarn(); try { ghostNotify(); } catch(e){} run(); return; }        // 选「不筛选」= 退出查看
     showSubRec(v);
   });
 })();
@@ -4389,8 +4397,7 @@ function run(){
       _xybox.hidden = !SUBVIEW;
       if (!_on && selXy){
         selXy = '';
-        var _xsel = document.getElementById('xysel');
-        if (_xsel) _xsel.value = '';
+        refreshXySel();
       }
     }
     var _seg = document.getElementById('xyseg');
@@ -4618,9 +4625,10 @@ ptEl.addEventListener('click', function(e){
   }
   run();
 });
-/* 闲鱼号筛选下拉（change 事件，跟 chip 点击分开挂）：2026-10-30 挪侧栏格子后挂 document 委托 */
-document.addEventListener('change', function(e){
-  if (e.target && e.target.id === 'xysel'){ selXy = e.target.value || ''; run(); }
+/* 闲鱼号筛选按钮（2026-11-11 下拉改一号一钮）：document 委托，点谁筛谁 */
+document.addEventListener('click', function(e){
+  var b = e.target && e.target.closest && e.target.closest('#xybtns [data-xy]');
+  if (b){ selXy = b.getAttribute('data-xy') || ''; refreshXySel(); run(); }
 });
 /* 状态栏「管理」键（2026-10-14）：闲鱼号下拉旁直达「管理我的闲鱼号」——
    改名同步 / 旧号名修复 / 一键全部取消标记发布。onchg 在号列表每次变动后触发，
@@ -4785,6 +4793,7 @@ function enterSelfPub(chip){
 function exitSelfPub(){
   SUBVIEW = null;
   pubStockWarn();
+  try { ghostNotify(); } catch(e){}
   var _pb = ptEl.querySelector('.chip[data-flag="pub"]'); if (_pb) _pb.classList.remove('on');
   var sel = document.getElementById('subrecsel');
   if (sel) sel.value = '';
@@ -5024,7 +5033,7 @@ function openUnmarkAll(){
         pubQueue(_tasks);
         try { localStorage.setItem('ml_lastxy', '默认'); } catch(e){}
         close();
-        run(); pubStockWarn(); updateLossBanner();
+        run(); pubStockWarn(); updateLossBanner(); try { ghostNotify(); } catch(e){}
         netToast('已取消标记发布：' + nCard + ' 个型号 ' + nDel + ' 条记录' + (scope ? ('（「' + scope + '」）') : '') + '——云端逐条排队删除中');
       })
       .catch(function(e){
@@ -5646,6 +5655,7 @@ function openUnmarkPick(c){
     }
     run();
     pubStockWarn();
+    try { ghostNotify(); } catch(e){}
     updateLossBanner();
   });
 }
@@ -5918,9 +5928,11 @@ function openBaoView(k){
     '<div style="display:flex;align-items:baseline;gap:10px;padding:8px 16px;background:#1c1e22;color:#e8eaee;flex:0 0 auto">'
     +   '<b style="font-size:14px">宝套图</b>'
     +   '<span style="font-size:12px;color:#8a929e">' + esc(k) + '</span>'
-    +   '<span style="font-size:11.5px;color:#8a929e">蓝底四张 + 暗角聚光四张 · 生成完不自动开文件夹</span>'
     +   '<span id="bao_msg_k" style="font-size:11.5px;color:#9fe0a8"></span>'
     +   '<span id="bao_msg_s" style="font-size:11.5px;color:#fcd34d"></span>'
+    +   /* 2026-11-11 用户令：顶栏只留标题/型号/进度/关闭，说明文字删；
+           来源+AI状态从文案页顶栏挪上来（#bao_topslot，copyView 挂载时搬入） */
+      '<span id="bao_topslot" style="display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap"></span>'
     +   '<span style="flex:1"></span>'
     +   '<button id="bao_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
     + '</div>'
@@ -5937,7 +5949,7 @@ function openBaoView(k){
     +       '<span style="font-size:11px;color:#9a9ea6">标题三选一 · 卖点 · 售后</span>'
     +     '</div>'
     +     '<div id="bao_cpy_k" style="flex:1;min-height:0;overflow:auto"></div>'
-    +     '<div id="bao_cpy_s" style="flex:1;min-height:0;overflow:hidden;display:none"></div>'
+    +     '<div id="bao_cpy_s" data-topslot="#bao_topslot" style="flex:1;min-height:0;overflow:hidden;display:none"></div>'
     +   '</div>'
     + '</div></div>';
   document.body.appendChild(wrap);
@@ -6235,10 +6247,23 @@ function openBaoView(k){
         + '<button data-baotc="' + esc(t) + '" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:5px 11px;font-size:11.5px;flex:0 0 auto;cursor:pointer">复制</button></div>';
     });
     if (!(D.titles || []).length) h += '<div style="color:#b42318;font-size:12px;margin-bottom:8px">标题还没生成出来</div>';
+    /* ① 卖 点：一话一行（旧版区块，2026-11-11 改售后 chips 时误删 → 加回） */
     h += '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">① 卖 点（一话一行）</div>'
-      + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc((D.points || []).join('\n')) + '</div>'
-      + '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">② 售 后</div>'
-      + '<div style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33">' + esc(D.aftersale || '—') + '</div>';
+      + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc((D.points || []).join('\n') || '—') + '</div>';
+    /* 2026-11-11 用户令「售后搞多个版本，你先写我来挑好了再上传」：
+       set.json 的 aftersales 出几版就摆几版，点选高亮，一键复制全套用选中的那版。 */
+    var AFS = (D.aftersales && D.aftersales.length) ? D.aftersales : [D.aftersale || ''];
+    var AF_TAGS = ['互动版', '品质版', '安装版', '简洁版', '版本5'];
+    var afSel = 0;
+    h += '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">② 售 后（点一下挑一版）</div>'
+      + '<div id="bao_afchips" style="margin-bottom:6px">' + AFS.map(function(a, i){
+          return '<a href="javascript:void 0" data-afsel="' + i + '" style="display:inline-block;margin:0 6px 4px 0;padding:2px 10px;border-radius:99px;font-size:11.5px;font-weight:600;cursor:pointer;'
+            + (i === afSel ? 'background:#4f46e5;color:#fff;' : 'background:#eef1f6;color:#475467;') + '">' + (AF_TAGS[i] || ('版本' + (i + 1))) + '</a>';
+        }).join('') + '</div>'
+      + AFS.map(function(a, i){
+          return '<div data-afbody="' + i + '" style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33;'
+            + (i === afSel ? '' : 'display:none;') + 'border:1px solid ' + (i === afSel ? '#c7d2fe' : '#e3e8f0') + ';border-radius:8px;padding:7px 10px;margin-bottom:6px">' + esc(a || '—') + '</div>';
+        }).join('');
     box.innerHTML = h;
     box.querySelectorAll('[data-baotc]').forEach(function(el){
       el.onclick = function(){
@@ -6247,9 +6272,24 @@ function openBaoView(k){
         });
       };
     });
+    box.querySelectorAll('[data-afsel]').forEach(function(el){
+      el.onclick = function(){
+        afSel = +(el.getAttribute('data-afsel') || 0);
+        box.querySelectorAll('[data-afsel]').forEach(function(x){
+          var on = +(x.getAttribute('data-afsel') || 0) === afSel;
+          x.style.background = on ? '#4f46e5' : '#eef1f6';
+          x.style.color = on ? '#fff' : '#475467';
+        });
+        box.querySelectorAll('[data-afbody]').forEach(function(b2){
+          var on = +(b2.getAttribute('data-afbody') || 0) === afSel;
+          b2.style.display = on ? 'block' : 'none';
+          b2.style.borderColor = on ? '#c7d2fe' : '#e3e8f0';
+        });
+      };
+    });
     var ca = box.querySelector('#bao_copyall');
     if (ca) ca.onclick = function(){
-      copySafe((D.points || []).join('\n') + '\n\n' + (D.aftersale || ''), function(){
+      copySafe((D.points || []).join('\n') + '\n\n' + (AFS[afSel] || ''), function(){
         ca.textContent = '已复制全套'; setTimeout(function(){ ca.textContent = '一键复制全套'; }, 1500);
       });
     };
@@ -6712,9 +6752,10 @@ function openCopyView(k, kind, force, tb, host){
     wrap.style.cssText = 'position:fixed;inset:0;background:#f2f5fa;z-index:70;display:flex;flex-direction:column;font-size:13.5px';
     wrap.innerHTML =
       '<div style="display:flex;align-items:center;gap:12px;padding:10px 18px;background:#fff;border-bottom:1px solid #e4e8ef;flex:0 0 auto">'
-      +   '<span style="font-size:13px;color:#0f172a;font-weight:600">型号</span>'
-      +   '<input id="pv_model" type="text" value="' + esc(k) + '" '
-      +     'style="width:220px;border:1px solid #d5dbe6;border-radius:8px;padding:7px 10px;font-size:13px;background:#fff;color:#0f172a">'
+      +   (host ? '' :
+          '<span style="font-size:13px;color:#0f172a;font-weight:600">型号</span>'
+        + '<input id="pv_model" type="text" value="' + esc(k) + '" '
+        +     'style="width:220px;border:1px solid #d5dbe6;border-radius:8px;padding:7px 10px;font-size:13px;background:#fff;color:#0f172a">')
       +   (host ? '' :
           '<span style="font-size:13px;color:#0f172a;font-weight:600">售价 ¥</span>'
         + '<input id="pv_price" type="text" inputmode="decimal" placeholder="" '
@@ -6766,10 +6807,11 @@ function openCopyView(k, kind, force, tb, host){
       +     '<div id="cv_pickmsg" style="font-size:12px;color:#15803d;margin-top:6px;display:none"></div>'
       +   '</div>'
       +   '<div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;padding:8px 14px 10px">'
-      +     '<div style="display:flex;gap:4px;border-bottom:1px solid #e4e8ef;margin-bottom:14px">'
-      +       '<span data-cvtab="copy" style="padding:8px 16px;border:1px solid #c7d2fe;border-bottom:2px solid #4f46e5;border-radius:8px 8px 0 0;font-weight:600;color:#4f46e5;background:#eef2ff">文案</span>'
-      +       '<span data-cvtab="points" style="padding:8px 16px;border-bottom:2px solid transparent;color:#64748b">卖点</span>'
-      +       '<span data-cvtab="qa" style="padding:8px 16px;border-bottom:2px solid transparent;color:#64748b">自检</span></div>'
+      +     (host ? '' :
+          '<div style="display:flex;gap:4px;border-bottom:1px solid #e4e8ef;margin-bottom:14px">'
+        +       '<span data-cvtab="copy" style="padding:8px 16px;border:1px solid #c7d2fe;border-bottom:2px solid #4f46e5;border-radius:8px 8px 0 0;font-weight:600;color:#4f46e5;background:#eef2ff">文案</span>'
+        +       '<span data-cvtab="points" style="padding:8px 16px;border-bottom:2px solid transparent;color:#64748b">卖点</span>'
+        +       '<span data-cvtab="qa" style="padding:8px 16px;border-bottom:2px solid transparent;color:#64748b">自检</span></div>')
       +     '<div id="cv_main" style="flex:1;min-height:0;display:flex;flex-direction:column"></div></div>'
       + '</div>';
   }
@@ -6991,16 +7033,34 @@ function openCopyView(k, kind, force, tb, host){
     h += '</div>';
     main.innerHTML = h;
   }
+  /* 结尾售后多版本（2026-11-11 用户令「聚光的售后的可以搞多个版本，你先写我来挑」）：
+     4 版可选，点选即把描述尾部（从「官方正品」那行到结尾）整块换掉。
+     全国版/报备版选择卡下线——挑哪版售后就等于定了发货口径。样机口径自动说展示样机。 */
+  function cvTailBlock(br, sample){
+    var s = !!sample;
+    var head = s ? (br + '官方正品，展示样机，功能完好') : (br + '官方正品，全新机，全国联保');
+    var second = s ? '外观可能有轻微展示痕迹，介意慎拍' : '品质保证，放心购买，售后无忧';
+    return [
+      { tag: '全国版', txt: head + '\n' + second + '\n支持专业送货安装，当地售后师傅上门安装\n让您买得放心，用得安心！\n可发货地区：全国' },
+      { tag: '报备版', txt: head + '\n' + second + '\n支持专业送货安装，当地售后师傅上门安装\n让您买得放心，用得安心！\n可发货地区：深圳、东莞、惠州、广州' },
+      { tag: '互动版', txt: head + '。\n支持到货验货，破损可拒收。\n看中了就联系我，聊得来价格好商量。' },
+      { tag: '简洁版', txt: head + '，支持验货，售后无忧。' }
+    ];
+  }
   function renderMain(){
     if (!D){ main.innerHTML = ''; return; }
     if (tb){
       renderMainTb();   /* 婷宝版走老版闲鱼配文三卡版式；填值/绑按钮与下面共用 */
     } else {
       var h = '';
-    h += '<div style="display:flex;gap:8px;margin-bottom:14px">'
-      + '<div data-ship="nat" style="flex:1;text-align:center;padding:6px;border:1px solid ' + (shipMode==='nat'?'#4f46e5':'#e3e8f0') + ';border-radius:9px;background:' + (shipMode==='nat'?'#eef2ff':'#fff') + ';color:' + (shipMode==='nat'?'#4f46e5':'#5a6478') + ';font-weight:' + (shipMode==='nat'?'600':'400') + '">全国版<br><span style="font-size:11.5px;opacity:.75">可发货地区：全国</span></div>'
-      + '<div data-ship="rep" style="flex:1;text-align:center;padding:9px;border:1px solid ' + (shipMode==='rep'?'#4f46e5':'#e3e8f0') + ';border-radius:9px;background:' + (shipMode==='rep'?'#eef2ff':'#fff') + ';color:' + (shipMode==='rep'?'#4f46e5':'#5a6478') + ';font-weight:' + (shipMode==='rep'?'600':'400') + '">报备版<br><span style="font-size:11.5px;opacity:.75">深圳 · 东莞 · 惠州 · 广州</span></div>'
-      + '</div>';
+    /* 2026-11-11 用户令：全国版/报备版选择卡删掉（结尾售后选版 chips 顶替它的活） */
+    var _base = descFull();
+    var _isRep = _base.indexOf('深圳') >= 0;
+    var _isSample = _base.indexOf('展示样机') >= 0;
+    var _brGuess = String(D.brand || '').trim();
+    if (!_brGuess && _base.indexOf('官方正品') > 0) _brGuess = _base.split('官方正品')[0].trim();
+    var _tails = cvTailBlock(_brGuess || '', _isSample);
+    var cvTailSel = _isRep ? 1 : 0;
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>标题（三选一）</b>'
       + '<span style="display:flex;gap:8px;align-items:center"><span style="font-size:12px;color:#8a94a6">分段式 · 不带价格</span>'
       + '<button id="cv_regen" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:5px 12px;font-size:12.5px">重新生成</button>'
@@ -7013,8 +7073,39 @@ function openCopyView(k, kind, force, tb, host){
       + '<button id="cv_rewriteD" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:6px 14px;font-size:12.5px;cursor:pointer" title="AI 推倒重写一版全新结构的描述">重写文案</button>'
       + '<button id="cv_polishD" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:6px 14px;font-size:12.5px">AI 润色</button>'
       + '<button id="cv_descCopy" style="border:none;background:#4f46e5;color:#fff;border-radius:8px;padding:6px 14px;font-size:12.5px">一键复制</button></span></div>';
+    h += '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:0 0 5px">结尾售后（点一下挑一版，整块替换描述结尾）</div>'
+      + '<div id="cv_tailchips" style="margin-bottom:7px">' + _tails.map(function(t, ix){
+          return '<a href="javascript:void 0" data-cvtail="' + ix + '" style="display:inline-block;margin:0 6px 4px 0;padding:2px 10px;border-radius:99px;font-size:11.5px;font-weight:600;cursor:pointer;'
+            + (ix === cvTailSel ? 'background:#4f46e5;color:#fff;' : 'background:#eef1f6;color:#475467;') + '">' + esc(t.tag) + '</a>';
+        }).join('') + '</div>';
     h += '<textarea id="cv_desc" style="width:100%;box-sizing:border-box;flex:1;min-height:0;border:1px solid #e3e8f0;border-radius:9px;padding:9px 12px;font-size:12.5px;line-height:1.6;font-family:inherit;resize:none"></textarea>';
     main.innerHTML = h;
+    /* 结尾售后选版绑定：从「官方正品」那行到结尾整块换（找不到锚点就不动，绝不炸） */
+    (function(){
+      var _ta = wrap.querySelector('#cv_desc');
+      function _swap(txt, tail){
+        var lines = String(txt || '').split('\n');
+        var ai = -1;
+        for (var i = 0; i < lines.length; i++){ if (lines[i].indexOf('官方正品') >= 0) ai = i; }
+        if (ai < 0) return null;
+        return lines.slice(0, ai).join('\n') + '\n' + tail;
+      }
+      wrap.querySelectorAll('[data-cvtail]').forEach(function(el){
+        el.onclick = function(){
+          var ix = +(el.getAttribute('data-cvtail') || 0);
+          var t = (_tails || [])[ix];
+          if (!t || !_ta) return;
+          var nt = _swap(_ta.value, t.txt);
+          if (nt == null) return;
+          _ta.value = nt;
+          wrap.querySelectorAll('[data-cvtail]').forEach(function(x){
+            var on = +(x.getAttribute('data-cvtail') || 0) === ix;
+            x.style.background = on ? '#4f46e5' : '#eef1f6';
+            x.style.color = on ? '#fff' : '#475467';
+          });
+        };
+      });
+    })();
     }
     /* —— 以下填值 + 绑定为两版共用（婷宝/写文案） —— */
     main.style.display = 'flex'; main.style.overflow = 'hidden';
@@ -7498,7 +7589,13 @@ function openCopyView(k, kind, force, tb, host){
       });
     })
     .catch(function(e){
-      main.innerHTML = '<div style="color:#b42318;padding:26px 0"><b>生成失败：</b>' + esc(String(e.message || e))
+      var _m = String(e.message || e);
+      /* 2026-11-11 真机实锤：服务端 /api/copy 全链路验证是好的，「Failed to fetch」
+         全是连接层断（源码双实例进程退出/软件重启）——报错说人话，别让人蒙 */
+      if (_m.indexOf('Failed to fetch') >= 0){
+        _m = '服务连接中断（软件可能重启过或开了第二个实例）——点「重试」再试一次';
+      }
+      main.innerHTML = '<div style="color:#b42318;padding:26px 0"><b>生成失败：</b>' + esc(_m)
         + '<br><br><button onclick="openCopyView(' + "'_M_','_K_'" + ',true,_T_)" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:8px 18px">重试</button></div>'
         .replace(/_M_/g, esc(k)).replace(/_K_/, kind).replace(/_T_/, tb ? 'true' : 'false');
     });
@@ -7613,6 +7710,7 @@ listEl.addEventListener('click', function(e){
       delete SUBVIEW.set[k];
       updateLossBanner();
       pubStockWarn();
+      try { ghostNotify(); } catch(e){}
       run();
       return;
     }
@@ -8422,6 +8520,42 @@ function pubStockWarn(){
   var x = box.querySelector('#pubwarnx');
   if (x) x.onclick = function(){ box.hidden = true; };
 }
+/* 2026-11-11 用户令「像这种的你要通知我，不是要我一个一个找」：
+   已发布型号掉出价格总表（列表列不出、筛选也搜不到）→ 数据就绪就弹窗通知，
+   名单一条不落；点名字弹幽灵卡（详情 + 就地取消发布）。
+   同一份名单一次会话只弹一次；名单变了（又掉出来一个）再弹。
+   看谁的发布就报谁的（SUBVIEW 优先，否则报自己的 MARKED）。 */
+var GHOST_ACK = '';
+function ghostNotify(){
+  if (!ALL || !ALL.length) return;                    // 价格总表还没到，别瞎报
+  var marks = (SUBVIEW && SUBVIEW.info && Object.keys(SUBVIEW.info).length) ? SUBVIEW.info : MARKED;
+  var who = (SUBVIEW && SUBVIEW.u) ? (SUBVIEW.disp || SUBVIEW.u) : '';
+  var ghosts = [];
+  for (var c in marks){ if (marks[c] && !itemOf(c)) ghosts.push(c); }
+  if (!ghosts.length) return;
+  ghosts.sort();
+  var sig = ghosts.join('|');
+  if (sig === GHOST_ACK) return;                      // 这份名单已经报过了，别烦
+  GHOST_ACK = sig;
+  var chips = ghosts.map(function(c){
+    return '<a href="javascript:void 0" data-ghostc="' + esc(c) + '" class="pubwarn-chip"'
+         + ' style="display:inline-block;margin:2px 6px 2px 0;padding:3px 10px;border-radius:9px;'
+         + 'background:#fdeceb;border:1px solid #f0b9b3;color:#d92d20;font-weight:600;cursor:pointer">'
+         + esc(c) + '</a>';
+  }).join('');
+  exModal('⚠ 已发布的型号不在价格总表了',
+    '<div style="color:#b42318;font-weight:600">' + (who ? '「' + esc(who) + '」' : '你')
+    + '有 <b>' + ghosts.length + '</b> 个已发布型号已不在价格总表（成本/库存数据缺失，'
+    + '任何筛选和搜索列表都列不出，不主动提醒就发现不了）：</div>'
+    + '<div style="margin:10px 0 4px">' + chips + '</div>'
+    + '<div style="font-size:12px;color:#667085">点型号名弹出卡片看详情 / 取消发布。'
+    + '宝贝还在卖、只是型号换了编码的，也记得在闲鱼那边改价或下架。</div>');
+  var m = document.getElementById('exmask');
+  if (m) m.addEventListener('click', function(e){
+    var a = e.target.closest ? e.target.closest('[data-ghostc]') : null;
+    if (a){ m.remove(); showGhostCard(a.getAttribute('data-ghostc')); }
+  });
+}
 /* 2026-10-12：红条点击跳转（事件委托挂容器一次）：
    用户定稿方案A——点红条任意位置（含型号小牌、共N个），不填搜索框不跑查询，
    一次性把全部缺货商品卡列出来；之后正常搜索或点筛选即恢复常规列表 */
@@ -8680,6 +8814,7 @@ function start(d){
   /* 2026-10-31 启动提速：增强层（标签/历史/提醒/候选）晚 0.9 秒再拉，首屏先把卡片吐出来 */
   setTimeout(exBoot, 900);
   pubStockWarn();                      // 库存到了就核对一遍已发布的（哪种没货提醒下架）
+  try { ghostNotify(); } catch(e){}    // 2026-11-11：有已发布型号掉出总表 → 开窗就弹窗通知，别让人翻列表找
   updateLossBanner();                  // 新表来了就核对一遍：有发布的要亏了就喊改价
 }
 
@@ -8698,6 +8833,7 @@ window.__ML = {
   pass: pass,
   costOptions: costOptions,
   lossList: lossList,
+  ghostNotify: ghostNotify,
   run: run,
   initUI: initUI,
   takePrices: takePrices

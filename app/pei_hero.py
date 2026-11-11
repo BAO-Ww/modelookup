@@ -479,7 +479,7 @@ def make_hero_cover(src_img, info, out_path, ship="N", specs_override=None,
         cx = (W - card_w) // 2
         cy = band_top + (2 * ch + gap_y - card_h) // 2
     dr.rounded_rectangle([cx, cy, cx + card_w, cy + card_h], 22, fill="#2b211a")
-    ship_txt = "全新未拆封 · " + SHIP_TEXT.get(ship, SHIP_TEXT["N"])
+    ship_txt = "全新机 · " + SHIP_TEXT.get(ship, SHIP_TEXT["N"])
     if price:
         f_yen = core.font(int(20 * k), True)
         f_num = core.font(int(36 * k), True)
@@ -756,7 +756,7 @@ def merge_specs(base, extra):
 # 设计依据（闲鱼买家 0.3-0.5 秒决策）：
 #   0.1s「这是什么」-> 产品大图居中，一眼认出来
 #   0.2s「多少钱」  -> 底部黑价格块 + 右上爆炸贴（省了多少比原价多少更勾人）
-#   0.3s「靠谱吗」  -> 顶部黑条「全新未拆封 / 全国联保」，像正经家电店
+#   0.3s「靠谱吗」  -> 顶部黑条「全新机 / 全国联保」，像正经家电店
 # 硬规则：产品必须用原图抠图，不让 AI 重画；参数与价格全部真实，不编造。
 # ============================================================================
 PROMO_BG = "#f2f2f2"
@@ -1116,7 +1116,7 @@ def make_hero_promo(src_img, info, out_path, ship="N", sell_price=None, log=None
     # ---------- 1. 顶栏黑条（信任前置）----------
     bar_h = 110
     dr.rectangle([0, 0, W, bar_h], fill=DARK_BAR)
-    dr.text((64, bar_h // 2 + 2), "全新未拆封", font=core.font(62, True),
+    dr.text((64, bar_h // 2 + 2), "全新机", font=core.font(62, True),
             fill=DARK_WHITE, anchor="lm")
     dr.text((W - 64, bar_h // 2 + 2), "全国联保", font=core.font(51, True),
             fill=DARK_WHITE, anchor="rm")
@@ -1191,7 +1191,7 @@ def make_hero_promo(src_img, info, out_path, ship="N", sell_price=None, log=None
                 fill=PINK_LINE, width=3)
 
     # ---------- 6. 最底部配送说明 ----------
-    ship_txt = "全新未拆封·" + SHIP_TEXT.get(ship, SHIP_TEXT["N"])
+    ship_txt = "全新机·" + SHIP_TEXT.get(ship, SHIP_TEXT["N"])
     dr.text((W // 2, 1990), ship_txt, font=core.font(36, False),
             fill=DARK_DIM, anchor="mm")
 

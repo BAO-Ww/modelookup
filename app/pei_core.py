@@ -25,8 +25,8 @@ CAT_CN = {"cooling": "冰箱", "freezer": "冷柜", "laundry": "洗衣机", "xjd
           "tv": "电视", "kitchen_appliances": "厨电", "kitchen-appliances": "厨电",
           "ice-bar": "冰吧", "ice_bar": "冰吧", "wine": "酒柜", "computers": "电脑"}
 
-BLOCK_N = "海尔官方正品，全新未拆封，全国联保\n支持专业送货安装，售后无忧\n可发货地区：全国"
-BLOCK_B = "海尔官方正品，全新未拆封，全国联保\n支持专业送货安装，售后有保障\n可发货地区：深圳、东莞、惠州、广州"
+BLOCK_N = "海尔官方正品，全新机，全国联保\n支持专业送货安装，售后无忧\n可发货地区：全国"
+BLOCK_B = "海尔官方正品，全新机，全国联保\n支持专业送货安装，售后有保障\n可发货地区：深圳、东莞、惠州、广州"
 
 _FONTS = ["C:/Windows/Fonts/msyhbd.ttc", "C:/Windows/Fonts/msyh.ttc",
           "C:/Windows/Fonts/simhei.ttf",
@@ -1065,8 +1065,8 @@ def titles(info):
     """标题格式（用户 2026-09-15 定稿）：品牌 + 容量 + 品类 + 核心功能 + 型号 + 成色 + 售后
     给 3 个版本（结构相同，措辞/顺序不同），版本 1 优先用。闲鱼标题上限 60 字符。
     例（海尔 243 升 三门冰箱）：
-      1 海尔 243 升风冷无霜冰箱 BCD-243WGHC2E7XM 全新未拆封 家用三门 全国联保
-      2 全新未拆封 海尔 243L 三门冰箱 风冷无霜 BCD-243WGHC2E7XM 原厂正品联保
+      1 海尔 243 升风冷无霜冰箱 BCD-243WGHC2E7XM 全新机 家用三门 全国联保
+      2 全新机 海尔 243L 三门冰箱 风冷无霜 BCD-243WGHC2E7XM 原厂正品联保
       3 海尔三门冰箱 243 升 风冷无霜 BCD-243WGHC2E7XM 全新原封全国联保
     """
     b = (info.get("brand") or "海尔").strip()
@@ -1084,10 +1084,10 @@ def titles(info):
 
     # 版本1：品牌 容量 核心功能+品类 型号 成色 家用类型 售后
     mid1 = cap_sp + (feat + cat if feat else cat)        # '243 升风冷无霜冰箱'
-    v1 = join(b, mid1, model, "全新未拆封",
+    v1 = join(b, mid1, model, "全新机",
               ("家用" + tw) if tw else "", "全国联保")
     # 版本2：成色 品牌 容量(无空格) 类型+品类 核心功能 型号 售后(原厂)
-    v2 = join("全新未拆封", b, cap_ns, (tw + cat) if tw else cat, feat, model, "原厂正品联保")
+    v2 = join("全新机", b, cap_ns, (tw + cat) if tw else cat, feat, model, "原厂正品联保")
     # 版本3：品牌+类型+品类 容量 核心功能 型号 成色简+售后
     v3 = join((b + tw + cat) if tw else (b + cat), cap_sp, feat, model, "全新原封全国联保")
     # 闲鱼标题按「字符数」计上限（每个汉字算 1 字），用字符数截断，避免中文被双算砍掉
@@ -1130,7 +1130,7 @@ def desc_text(info, version, points=None):
     ·卖点2
     …最多 6 条（2026-10-26 用户令：只收机器参数卖点，不满就少几条；全空才落静态兜底）
     【参数】k v | k v | ...
-    【官网价】xxx（本店售价见标价，全新未拆封）
+    【官网价】xxx（本店售价见标价，全新机）
     【交易】先验后签收，破损拒收
     结尾 5 行话术（可发货地区随版本切换）
     version: 'N' 全国 / 'B' 报备（深圳、东莞、惠州、广州）
@@ -1202,17 +1202,17 @@ def desc_text(info, version, points=None):
                 continue
             sp.append(x)
     if not sp:
-        sp = ["全新未拆封，官方正品", "全国联保，售后有保障",
+        sp = ["全新机，官方正品", "全国联保，售后有保障",
               "现货在仓，下单即发"]
     for pt in sp:
         lines.append("·" + pt)
     lines.append("")
     lines.append("【参数】%s" % (" | ".join(core) if core else "见详情"))
-    lines.append("【官网价】%s（本店售价见标价，全新未拆封）"
+    lines.append("【官网价】%s（本店售价见标价，全新机）"
                  % (str(int(price)) if price else "见标价"))
     lines.append("【交易】先验后签收，破损拒收")
     lines.append("")
-    lines.append("%s官方正品，全新未拆封，全国联保" % brand)
+    lines.append("%s官方正品，全新机，全国联保" % brand)
     lines.append("品质保证，放心购买，售后无忧")
     lines.append("支持专业送货安装，当地售后师傅上门安装")
     lines.append("让您买得放心，用得安心！")
@@ -1265,7 +1265,7 @@ def _v2_sellsets(info):
 
 def titles_v2(info, kind='l'):
     """v2 标题（用户 2026-10-21 定稿）：三档闲鱼话术，品牌+卖点+型号。
-    l：全新未拆封 / 展示样机清仓 / 全新低价出；s：展示样机 / 样机清仓特惠 / 样机特价。"""
+    l：全新机 / 展示样机清仓 / 全新低价出；s：展示样机 / 样机清仓特惠 / 样机特价。"""
     b = (info.get("brand") or "海尔").strip()
     model = (info.get("model") or "").strip()
     s1, s2, s3 = _v2_sellsets(info)
@@ -1287,7 +1287,7 @@ def titles_v2(info, kind='l'):
         v2t = join(b, "样机清仓特惠", s2 or s1, model)
         v3 = join(b, s3 or s1, "样机特价", model)
     else:
-        v1 = join(b, "全新未拆封", s1, model)
+        v1 = join(b, "全新机", s1, model)
         v2t = join(b, "展示样机清仓", s2 or s1, model)
         v3 = join(b, s3 or s1, "全新低价出", model)
     return [clip(x) for x in (v1, v2t, v3)]
@@ -1310,7 +1310,7 @@ def desc_v2(info, kind='l', points=None):
     if kind == 's':
         lines.append("展示样机，功能完好，%s全国联保，支持到货验货，破损可拒收。" % brand)
     else:
-        lines.append("全新未拆封，%s全国联保，支持到货验货，破损可拒收。" % brand)
+        lines.append("全新机，%s全国联保，支持到货验货，破损可拒收。" % brand)
     return "\n".join(lines)
 
 
@@ -1392,7 +1392,7 @@ def _zhipu_sellpoints(api_key, info, n=3, long=False):
         rule = ("只输出 %d 行，每行一个词，不要序号，不要标点，不要解释。" % n)
 
     prompt = (
-        "你是闲鱼家电卖家文案高手，卖海尔/卡萨帝/统帅全新未拆封的正品家电。\n"
+        "你是闲鱼家电卖家文案高手，卖海尔/卡萨帝/统帅全新机的正品家电。\n"
         "品牌: " + b + "\n"
         "型号: " + model + "\n"
         "品类: " + cat + "\n"
@@ -2230,7 +2230,7 @@ def zhipu_ai9_copy(api_key, info, version="N"):
                 % door_txt) if door_txt else ""
 
     prompt = (
-        "你是闲鱼家电卖家的高级文案，为海尔/卡萨帝/统帅全新未拆封正品家电写视觉海报文案。\n"
+        "你是闲鱼家电卖家的高级文案，为海尔/卡萨帝/统帅全新机正品家电写视觉海报文案。\n"
         "品牌: " + b + "\n型号: " + model + "\n品类: " + cat + "\n"
         "真实参数: " + prop_txt + "\n" + (door_txt + "\n" if door_txt else "") + "\n"
         # 官网产品介绍原文：让软卖点贴官方口径（没有则空串，行为与之前一致）
@@ -2381,10 +2381,10 @@ def make_cover(src_img, info, out_path):
             line = line if len(line) <= 16 else line[:15] + "…"
             text(xx, yy, line, 21, "#d8dde6", bold=False)
 
-    # 右侧：全新未拆封徽章 + 官网价
+    # 右侧：全新机徽章 + 官网价
     cx = W - 300
     dr.rounded_rectangle([cx, H - bw + 36, cx + 250, H - bw + 98], 12, fill="#ffffff")
-    text(cx + 125, H - bw + 67, "全新未拆封", 30, "#185fa5", anchor="mm")
+    text(cx + 125, H - bw + 67, "全新机", 30, "#185fa5", anchor="mm")
     if info.get("price") or 0:
         text(cx, H - bw + 122, "官网价 ¥%s" % format(info.get("price") or 0, ","), 34, "#ffffff")
 
@@ -2416,7 +2416,7 @@ def zhipu_make_sellpoints(api_key, info):
             # 官网产品介绍原文：卖点措辞贴官方口径（没有则空串）
             + _intro_block(info, 300)
             + "要求：1. 口语化、冲击力强\n"
-            "2. 突出全新未拆封、官方正品、节能/大容量/静音等\n"
+            "2. 突出全新机、官方正品、节能/大容量/静音等\n"
             "3. 3 条方向不同（容量/节能/品质）\n"
             "4. 直接输出 3 行，不要序号、不要解释"
         )
@@ -2513,7 +2513,7 @@ def ai_make_cover(info, sel_dir, api_key=None, out_name="0_AI_主图.jpg"):
     overlay = Image.new("RGBA", (W, bw), (18, 20, 24, 185))
     img.alpha_composite(overlay, (0, H - bw))
 
-    # 右侧"全新未拆封"徽章
+    # 右侧"全新机"徽章
     badge_w, badge_h = 200, 200
     cx = W - badge_w - 40
     cy = 30
