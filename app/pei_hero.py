@@ -634,7 +634,7 @@ def correct_specs(pairs):
 
 
 def vision_specs(img_paths, api_key, log=None, max_try=4):
-    """用智谱 GLM-4V 从官方长图里找参数表并提取。
+    """用视觉模型从官方长图里找参数表并提取（Qwen3.5-4B 首选→GLM-4V 兜底）。
     逐张试（参数图通常在官方图靠后），命中即停。"""
     if not api_key:
         return []
@@ -650,23 +650,12 @@ def vision_specs(img_paths, api_key, log=None, max_try=4):
             buf = __import__("io").BytesIO()
             im.convert("RGB").save(buf, format="JPEG", quality=88)
             b64 = base64.b64encode(buf.getvalue()).decode()
-            body = {
-                "model": "glm-4v-flash",
-                "messages": [{"role": "user", "content": [
-                    {"type": "image_url", "image_url": {"url": b64}},
-                    {"type": "text", "text":
+            # 2026-11-11：直连 glm-4v-flash 改走统一视觉分发（Qwen3.5-4B 首选→GLM-4V 兜底）
+            du = "data:image/jpeg;base64," + b64
+            txt = core._vision_call(api_key, du,
                      "这是一张家电详情图。如果图中包含「产品参数」表格，"
                      "请严格按「参数名: 值」每行一条输出全部参数；"
-                     "如果不是参数表，只回复 NO。"}]}],
-            }
-            req = urllib.request.Request(
-                "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-                data=json.dumps(body).encode("utf-8"),
-                headers={"Content-Type": "application/json",
-                         "Authorization": "Bearer " + api_key.strip()})
-            with urlopen_ssl(req, timeout=60) as r:
-                d = json.loads(r.read())
-            txt = (d.get("choices") or [{}])[0].get("message", {}).get("content", "")
+                     "如果不是参数表，只回复 NO。", log=log)
             if not txt or txt.strip().upper().startswith("NO"):
                 continue
             pairs = []

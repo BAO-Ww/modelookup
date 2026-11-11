@@ -351,8 +351,11 @@ def fetch_official(model, log):
         _kv = _par_local().get(norm_model(model))
         if _kv and len(_kv) >= 3:
             log("参数库命中（%d 条参数），跳过官网抓取" % len(_kv))
+            # 2026-11-10 深夜修：groups 必须 [[组名,[[k,v]...]]] 两层——之前直接给扁平
+            # [[k,v]...]，_facts_text/build_desc 里 for a,b in kv 拿字符串拆就炸
+            # （XQGL120-L732EH 实锤 not enough values to unpack (expected 2, got 1)）
             return {'source': '云端参数库', 'brand': '', 'pname': model, 'price': '',
-                    'url': '', 'groups': [[k, v] for k, v in _kv.items()],
+                    'url': '', 'groups': [["参数", [[k, v] for k, v in _kv.items()]]],
                     'sellpoints': [], 'imgs': []}
     except Exception:
         pass
@@ -492,7 +495,14 @@ def _facts_text(data, model):
     if data.get('price'):
         lines.append("价格: " + str(data['price']))
     for g, kv in (data.get('groups') or []):
-        lines.append("[%s] %s" % (g, "；".join("%s:%s" % (a, b) for a, b in kv)))
+        # 2026-11-10 防御：groups 里混进非两层结构（扁平键值对/字符串）就跳过这组，
+        # 绝不让文案整单炸（参数库捷径形状实锤过 not enough values to unpack）
+        if not isinstance(kv, (list, tuple)):
+            continue
+        _pairs = [x for x in kv if isinstance(x, (list, tuple)) and len(x) == 2]
+        if not _pairs:
+            continue
+        lines.append("[%s] %s" % (g, "；".join("%s:%s" % (a, b) for a, b in _pairs)))
     if data.get('sellpoints'):
         lines.append("官网卖点: " + "、".join(data['sellpoints']))
     return "\n".join(lines)
@@ -592,7 +602,13 @@ def build_desc(model, kk, data, pts, ship='nat'):
     L.append('')
     flat = []
     for _g, kv in (data.get('groups') or []):
-        for a, b in kv:
+        # 同 _facts_text 的防御：喂歪的组直接跳过（2026-11-10 参数库捷径实锤）
+        if not isinstance(kv, (list, tuple)):
+            continue
+        for x in kv:
+            if not (isinstance(x, (list, tuple)) and len(x) == 2):
+                continue
+            a, b = x
             s = '%s %s' % (a, b)
             if s not in flat:
                 flat.append(s)

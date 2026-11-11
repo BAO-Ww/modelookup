@@ -165,6 +165,7 @@ def rebuild_menu_for(role):
 # 菜单点名字 → _menu_pick_sub → 页面 exPickSub 走既有下拉 change 流程切视角。
 _SUB_USERS = []      # 子账号名列表（不含自己）
 _SUB_SEL = ""        # 当前在看谁的发布（"" = 不筛选）
+_SUB_LOADING = False # 菜单占位项已触发过加载（只影响占位文案，不挡重试）
 
 
 def _menu_pick_sub(u):
@@ -180,14 +181,17 @@ def _menu_pick_sub(u):
 
 
 def _menu_load_subs():
-    """2026-11-10 菜单恢复配套：子账号列表还没拉过时，点占位项就地触发 loadSubRec
-    （后台拉 /puball + /admin/list，回来经 sync_subusers 重画菜单，再点一次就有名字）。"""
+    """2026-11-10 深夜修「点了没用」：占位项无条件触发 loadSubRec——
+    之前有 dataset.loaded 一次性闸，第一次点了之后无论成败再点都不动（用户实锤）；
+    现在每次点都重新拉，失败可反复重试。同时置 loading 态重画菜单，点了看得见反应。"""
+    global _SUB_LOADING
+    _SUB_LOADING = True
     try:
-        webview.windows[0].evaluate_js(
-            "var _s=document.getElementById('subrecsel');"
-            "if(_s&&!_s.dataset.loaded){_s.dataset.loaded='1';loadSubRec();}")
+        webview.windows[0].evaluate_js("loadSubRec && loadSubRec();")
     except Exception:
         pass
+    threading.Thread(target=rebuild_menu_for,
+                     args=(state.PERM_STATE.get("role") or "admin",), daemon=True).start()
 
 
 def _sub_menu_items():
@@ -195,7 +199,8 @@ def _sub_menu_items():
     from webview.menu import MenuAction      # 模块级不能碰 webview.menu（PyInstaller 规矩，与 build_menu 同源）
     items = []
     if not _SUB_USERS:
-        items.append(MenuAction("（点开加载子账号…）", _menu_load_subs))
+        items.append(MenuAction(("（正在加载子账号… 再点一次重试）" if _SUB_LOADING
+                                 else "（点开加载子账号…）"), _menu_load_subs))
         return items
     items.append(MenuAction(("✓ " if not _SUB_SEL else "") + "不筛选（看全部）",
                             lambda: _menu_pick_sub("")))
@@ -621,10 +626,12 @@ def run_app(httpd, port, startup_xlsx=None):
         def sync_subusers(self, payload="[]"):
             """2026-10-31 晚三批：页面 loadSubRec 拉到子账号列表后同步进来，
             原生菜单「子用户」跟着重画（列表变了才重画，省得闪）。"""
+            global _SUB_LOADING
             try:
                 us = json.loads(payload or "[]")
                 if isinstance(us, list):
                     us = [str(x) for x in us if str(x)]
+                    _SUB_LOADING = False          # 列表回来了（哪怕空），loading 态复位
                     if us != _SUB_USERS:
                         _SUB_USERS[:] = us
                         threading.Thread(target=rebuild_menu_for, args=(

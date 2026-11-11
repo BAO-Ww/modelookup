@@ -3409,7 +3409,7 @@ def _qa_blue(model, info, mdir, cfg, points, prod, log):
             key = _pw._ai_key()
         except Exception:
             key = None
-        key = key or pei_core._sn_key()
+        key = key or _vision_key()
         if not key:
             log("AI 复检跳过：未配置视觉 key")
             return

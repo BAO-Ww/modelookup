@@ -746,7 +746,7 @@ def _auto_qa_spot(model, info, src, out, style, paths, prog=None):
     后台线程、prog 传 None = 不碰 JOB 进度（图先亮出来，修好的再静默替换）。"""
     import pei_core
     _prog = prog or (lambda p, m: None)
-    key = _ai_key() or pei_core._sn_key()
+    key = _ai_key() or pei_core._sf_key()
     if not key:
         _logf()("AI 复检跳过：未配置视觉 key")
         return

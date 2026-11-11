@@ -1600,21 +1600,22 @@ def _zhipu_vision(api_key, data_url, prompt):
     return d["choices"][0]["message"]["content"]
 
 
-# 2026-11-02 用户令「把商汤弄成首选」：sn_key.txt 是本机私有文件、不随包发布，
-# Mac 装完没有它 → 商汤整个不参与，只剩 GLM。改成跟 GLM 一样三级：env → 本机 → 内置兜底，
-# 这样每台机器一开始就是商汤先看图、失败才落 GLM。想换 key 仍可本机放 sn_key.txt 覆盖。
-_BUILTIN_SN_KEY = "__REDACTED__"
+# 2026-11-11 用户令「Qwen3.5-4B 免费能用就用它首选」：视觉首选切硅基流动
+# Qwen/Qwen3.5-4B（官方定价页实锤 输入¥0/输出¥0，原生多模态，实测判定/读数全对），
+# 商汤 SenseNova 从视觉链撤下（常 429 限流、共享池排队）。sf_key 仍走三级：
+# env → 本机 → 内置兜底，想换 key 可本机放 sf_key.txt 覆盖。
+_BUILTIN_SF_KEY = "__REDACTED__"
+SF_VISION_MODEL = "Qwen/Qwen3.5-4B"
 
 
-def _sn_key():
-    """商汤 SenseNova key：env ML_SN_KEY → wp("sn_key.txt") → 内置兜底。
-    2026-10-24 用户接入（sk- 开头，token.sensenova.cn 免费额度）。"""
-    k = os.environ.get("ML_SN_KEY") or ""
+def _sf_key():
+    """硅基流动 key：env ML_SF_KEY → wp("sf_key.txt") → 内置兜底。"""
+    k = os.environ.get("ML_SF_KEY") or ""
     if k:
         return k.strip()
     try:
         from paths import wp
-        p = wp("sn_key.txt")
+        p = wp("sf_key.txt")
         if os.path.isfile(p):
             with io.open(p, encoding="utf-8-sig") as f:
                 t = (f.read() or "").strip()
@@ -1622,26 +1623,27 @@ def _sn_key():
                     return t
     except Exception:
         pass
-    return _BUILTIN_SN_KEY
+    return _BUILTIN_SF_KEY
 
 
-def _sn_vision(api_key, data_url, prompt):
-    """商汤 SenseNova 多模态看图（OpenAI 兼容，token.sensenova.cn）。
-    2026-10-24 实测 sensenova-6.8-flash-lite 认机型/判开门正常。
-    注意：U1.5 Lite 是文生图模型（/v1/images/generations），不会看图，别拿来干这个。"""
+def _qwen_vision(api_key, data_url, prompt):
+    """硅基流动 Qwen3.5-4B 多模态看图（OpenAI 兼容，api.siliconflow.cn，免费模型）。
+    注意：4B 是思考型模型，reasoning 也占 token，max_tokens 给足防截断；
+    content 可能带 ```json 围栏/前导空行——消费方已有正则提取，不用在这剥。"""
     req = urllib.request.Request(
-        "https://token.sensenova.cn/v1/chat/completions",
+        "https://api.siliconflow.cn/v1/chat/completions",
         data=json.dumps({
-            "model": "sensenova-6.8-flash-lite",
+            "model": SF_VISION_MODEL,
             "messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": data_url}}]}],
+                {"type": "image_url", "image_url": {"url": data_url}},
+                {"type": "text", "text": prompt}]}],
             "temperature": 0.3,
-            "max_tokens": 4000,   # 6.8 是推理模型，reasoning 也占 token，给足防截断
+            "max_tokens": 2500,
         }, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer " + str(api_key).strip()})
-    with urlopen_ssl(req, timeout=90) as r:
+                 "Authorization": "Bearer " + str(api_key).strip(),
+                 "User-Agent": "Mozilla/5.0"})
+    with urlopen_ssl(req, timeout=120) as r:
         d = json.loads(r.read())
     return d["choices"][0]["message"]["content"]
 
@@ -1816,14 +1818,15 @@ def _vision_attempt(fn, api_key, data_url, prompt, log=None):
 
 
 def _vision_call(api_key, data_url, prompt, log=None):
-    """视觉调用分发：商汤 sn_key.txt 有 key 优先走 SenseNova（免费额度），
-    失败自动落到智谱 GLM（原 api_key）。都没有返回 None。"""
+    """视觉调用分发（2026-11-11 用户令）：首选硅基 Qwen3.5-4B（免费、原生多模态），
+    失败自动落智谱 GLM-4V（原 api_key）。商汤 SenseNova 已按用户令撤下（常 429）。
+    都没有/都失败返回 None（有错则抛最后一个）。"""
     pairs = []
-    _snk = _sn_key()
-    if _snk:
-        pairs.append(("SenseNova", _sn_vision, _snk))
+    _sfk = _sf_key()
+    if _sfk:
+        pairs.append(("Qwen3.5-4B", _qwen_vision, _sfk))
     if api_key and str(api_key).strip():
-        pairs.append(("GLM", _zhipu_vision, api_key))
+        pairs.append(("GLM-4V", _zhipu_vision, api_key))
     if not pairs:
         return None
     _last_err = None
@@ -1836,7 +1839,7 @@ def _vision_call(api_key, data_url, prompt, log=None):
             _last_err = e
             try:
                 if log:
-                    # 2026-11-04 用户令：兜底流水别吓人——商汤限流切 GLM 是正常机制，
+                    # 2026-11-04 用户令：兜底流水别吓人——Qwen 限流切 GLM 是正常机制，
                     # 横幅上写人话；原始报错保留在 _last_err，真全失败时才抛
                     log("AI 判图切到备用通道，正常继续")
             except Exception:
