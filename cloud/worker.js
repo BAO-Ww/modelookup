@@ -934,6 +934,32 @@ async function route(request, env, path, ctx) {
                perm: user.role === "admin" ? {} : migratePerm(user.perm) });
   }
 
+  // ---------- AI 密钥下发（2026-11-12） ----------
+  // 背景：硅基流动/智谱 key 原先硬编码在 app/pei_core.py、app/copywriter.py，随公开仓库
+  // 明文暴露，被 GitHub 爬虫抓走跑 DeepSeek 烧钱（11-11 账单实锤：deepseek-v4.1-flash）。
+  // 改法：key 只存云端（KV 键 aikeys），客户端登录后按需拉一次并缓存本机，仓库零明文。
+  // GET  /aikey        Header: X-Token → {ok, sf, glm, sn, ts}
+  // POST /admin/aikey  {sf, glm, sn}，仅管理号；字段传空=保留原值
+  if (path === "/aikey" && request.method === "GET") {
+    const ak = await getJSON(env, "aikeys", {});
+    if (!ak.sf && !ak.glm && !ak.sn) return jerr("云端还没配 AI 密钥", 404);
+    return J({ ok: true, sf: ak.sf || "", glm: ak.glm || "", sn: ak.sn || "", ts: ak.ts || 0 });
+  }
+  if (path === "/admin/aikey" && request.method === "POST") {
+    const users = await getUsers(env);
+    const me = users[who];
+    if (!me || me.role !== "admin") return jerr("只有管理号能改", 403);
+    const b = await request.json().catch(() => ({}));
+    const cur = await getJSON(env, "aikeys", {});
+    const sf = String(b.sf || "").trim() || cur.sf || "";
+    const glm = String(b.glm || "").trim() || cur.glm || "";
+    const sn = String(b.sn || "").trim() || cur.sn || "";
+    try { await env.KV.put("aikeys", JSON.stringify({ sf, glm, sn, ts: Date.now() })); }
+    catch (e) { return jerr("写 KV 失败：" + e.message, 500); }
+    return J({ ok: true, sf: sf.slice(0, 6) + "…" + sf.slice(-4),
+               glm: glm.slice(0, 6) + "…", sn: sn.slice(0, 6) + "…" });
+  }
+
   // ---------- 令牌自动续期（2026-11-09） ----------
   // 背景：令牌 30 天到期 → 用户/子账号每 30 天被踢一次（CI 更惨，直接断数据）。
   // 客户端在「剩 7 天内」或启动时调这里，用当前有效令牌换一枚新的（同账号同密码版本）。

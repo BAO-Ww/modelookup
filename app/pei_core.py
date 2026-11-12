@@ -1583,6 +1583,45 @@ def bg_mismatch_slots(paths, tol=96):
     return bad, ref
 
 
+# 2026-11-12 用户令：商汤 SenseNova 重新接回来，当**第三兜底**（Qwen 挂了、GLM 也不行时）。
+# 实测 sensenova-6.8-flash-lite 带 thinking=disabled：1.7s 出正文（答「否」，2 token）；
+# **不带该参数会一路 reasoning 到 max_tokens 烧完、content 永远是空串**，所以必须显式关思考。
+SN_BASE = "https://token.sensenova.cn/v1"
+SN_VISION_MODEL = "sensenova-6.8-flash-lite"
+
+
+def _sn_key():
+    """商汤 key（见 aikeys：env ML_SN_KEY → 本机 sn_key.txt → 缓存/云端 /aikey 下发）。"""
+    try:
+        import aikeys
+        return (aikeys.sn_key() or "").strip()
+    except Exception:
+        return ""
+
+
+def _sn_vision(api_key, data_url, prompt):
+    """商汤 SenseNova 6.8-flash-lite 看图（OpenAI 兼容 /chat/completions）。
+    thinking 显式关掉，否则 reasoning 吃光 max_tokens、content 空串返回。"""
+    req = urllib.request.Request(
+        SN_BASE + "/chat/completions",
+        data=json.dumps({
+            "model": SN_VISION_MODEL,
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": data_url}},
+                {"type": "text", "text": prompt}]}],
+            "temperature": 0.2,
+            "max_tokens": 1200,
+            "thinking": {"type": "disabled"},
+        }, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json",
+                 "Authorization": "Bearer " + str(api_key).strip(),
+                 "User-Agent": "Mozilla/5.0"})
+    with urlopen_ssl(req, timeout=90) as r:
+        d = json.loads(r.read())
+    m = d["choices"][0]["message"]
+    return (m.get("content") or "").strip() or None
+
+
 def _zhipu_vision(api_key, data_url, prompt):
     req = urllib.request.Request(
         "https://open.bigmodel.cn/api/paas/v4/chat/completions",
@@ -1602,28 +1641,19 @@ def _zhipu_vision(api_key, data_url, prompt):
 
 # 2026-11-11 用户令「Qwen3.5-4B 免费能用就用它首选」：视觉首选切硅基流动
 # Qwen/Qwen3.5-4B（官方定价页实锤 输入¥0/输出¥0，原生多模态，实测判定/读数全对），
-# 商汤 SenseNova 从视觉链撤下（常 429 限流、共享池排队）。sf_key 仍走三级：
-# env → 本机 → 内置兜底，想换 key 可本机放 sf_key.txt 覆盖。
-_BUILTIN_SF_KEY = "__REDACTED__"
+# 商汤 SenseNova 从视觉链撤下（常 429 限流、共享池排队）。
+# 2026-11-12 安全整改：内置明文 sf key 已删除（公开仓库被抓走跑 DeepSeek 烧钱），
+# 统一走 aikeys：env ML_SF_KEY → 本机 sf_key.txt → 本机缓存/云端 /aikey 下发。
 SF_VISION_MODEL = "Qwen/Qwen3.5-4B"
 
 
 def _sf_key():
-    """硅基流动 key：env ML_SF_KEY → wp("sf_key.txt") → 内置兜底。"""
-    k = os.environ.get("ML_SF_KEY") or ""
-    if k:
-        return k.strip()
+    """硅基流动 key（见 aikeys：env → 本机 txt → 缓存/云端下发）。拿不到返回空串=关掉视觉 AI。"""
     try:
-        from paths import wp
-        p = wp("sf_key.txt")
-        if os.path.isfile(p):
-            with io.open(p, encoding="utf-8-sig") as f:
-                t = (f.read() or "").strip()
-                if t:
-                    return t
+        import aikeys
+        return (aikeys.sf_key() or "").strip()
     except Exception:
-        pass
-    return _BUILTIN_SF_KEY
+        return ""
 
 
 def _qwen_vision(api_key, data_url, prompt):
@@ -1818,8 +1848,8 @@ def _vision_attempt(fn, api_key, data_url, prompt, log=None):
 
 
 def _vision_call(api_key, data_url, prompt, log=None):
-    """视觉调用分发（2026-11-11 用户令）：首选硅基 Qwen3.5-4B（免费、原生多模态），
-    失败自动落智谱 GLM-4V（原 api_key）。商汤 SenseNova 已按用户令撤下（常 429）。
+    """视觉调用分发（2026-11-12 用户令）：Qwen3.5-4B（硅基，免费首选）
+    → GLM-4V（智谱）→ SenseNova 6.8-flash-lite（商汤，末位兜底）。
     都没有/都失败返回 None（有错则抛最后一个）。"""
     pairs = []
     _sfk = _sf_key()
@@ -1827,6 +1857,9 @@ def _vision_call(api_key, data_url, prompt, log=None):
         pairs.append(("Qwen3.5-4B", _qwen_vision, _sfk))
     if api_key and str(api_key).strip():
         pairs.append(("GLM-4V", _zhipu_vision, api_key))
+    _snk = _sn_key()
+    if _snk:
+        pairs.append(("SenseNova", _sn_vision, _snk))
     if not pairs:
         return None
     _last_err = None
