@@ -773,11 +773,42 @@ async function route(request, env, path, ctx) {
     const rel = decodeURIComponent(path.slice("/kitimg2/".length));
     if (!rel || rel.includes("..")) return jerr("bad path", 400);
     try {
-      const obj = await env.IMG.get(rel);
+      // Range 支持（2026-11-12）：客户端拉 AI 抠图模型 u2net.partN 用 Range 逐片下，
+      // R2 get 原生支持 {range:{offset,length}}；不带 Range 照旧全量。
+      let opts, roff = 0, rend = null;
+      const rng = request.headers.get("Range") || "";
+      const m = /^bytes=(\d+)-(\d*)$/.exec(rng);
+      if (m) {
+        roff = Number(m[1]);
+        rend = m[2] ? Number(m[2]) : null;
+        opts = { range: { offset: roff, length: rend !== null ? rend - roff + 1 : undefined } };
+      }
+      // Range 越界先探明大小直接回 416，别让 R2 get 抛异常变 500
+      //（2026-11-12：客户端按整包偏移请求分片时全线 500，排查半天才定位到这）
+      if (opts) {
+        const head = await env.IMG.head(rel);
+        if (!head) return jerr("no such image", 404);
+        if (roff >= head.size) {
+          return new Response(null, {
+            status: 416,
+            headers: { "Content-Range": "bytes */" + head.size, ...CORS },
+          });
+        }
+        if (rend !== null && rend >= head.size) {
+          rend = head.size - 1;
+          opts.range.length = rend - roff + 1;
+        }
+      }
+      const obj = await env.IMG.get(rel, opts);
       if (!obj) return jerr("no such image", 404);
       const h = { "Cache-Control": "public, max-age=86400", ...CORS };
       const ct = obj.httpMetadata && obj.httpMetadata.contentType;
       if (ct) h["Content-Type"] = ct;
+      if (opts && obj.range) {
+        const end2 = rend !== null ? rend : obj.size - 1;
+        h["Content-Range"] = "bytes " + roff + "-" + end2 + "/" + obj.size;
+        return new Response(obj.body, { status: 206, headers: h });
+      }
       return new Response(obj.body, { headers: h });
     } catch (e) { return jerr("图库读取失败：" + e.message, 500); }
   }

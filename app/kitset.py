@@ -2246,6 +2246,78 @@ def _same_img(a, b, thr=0.6):
         return False
 
 
+def _ai_montage_size_screen(paths_, log=None):
+    """拼图逐格粗筛候选尺寸图（2026-11-12 用户令「拼图不能修复好？」）。
+    实测：GLM-4V 拼图点名会乱选（12 张点名 10 张，真答案 2 张）所以当年弃用；
+    换视觉链主力（Qwen3.5-4B 优先）+ 强制逐格作答后，真图 12 格 11 对——
+    1 次调用替代 N 次单张。答「否」的直接否掉；答「是」的由调用方单张终审
+    （拼图偶有漏判/过判，单张+毫米数字硬门是终审）。
+    返回：[通过粗筛的路径]（可能空列表=全否）；None=拼图不可用（退回单张问）。"""
+    try:
+        import base64
+        import pei_core
+        tiles = []
+        for p in paths_[:12]:
+            t = _flat_white(Image.open(p)).convert("RGB")
+            t.thumbnail((560, 560), Image.LANCZOS)
+            tiles.append(t)
+        if len(tiles) < 3:
+            return None     # 格子太少不值得拼，单张问更准
+        COLS = 4
+        ROWS = max(1, (len(tiles) + COLS - 1) // COLS)
+        cw = max(t.width for t in tiles) + 8
+        ch = max(t.height for t in tiles) + 30
+        board = Image.new("RGB", (cw * COLS, ch * ROWS), "white")
+        dr = ImageDraw.Draw(board)
+        try:
+            fnt = ImageFont.truetype(r"C:\Windows\Fonts\arialbd.ttf", 26)
+        except Exception:
+            fnt = ImageFont.load_default()
+        for i, t in enumerate(tiles):
+            r, c = divmod(i, COLS)
+            x, y = c * cw, r * ch
+            board.paste(t, (x + (cw - t.width) // 2, y + 28 + (ch - 28 - t.height) // 2))
+            dr.rectangle([x, y, x + 46, y + 27], fill=(200, 0, 0))
+            dr.text((x + 12, y + 1), str(i + 1), fill="white", font=fnt)
+        buf = io.BytesIO()
+        board.save(buf, "JPEG", quality=85)
+        du = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        txt = pei_core._vision_call(_vision_key(), du,
+            "这张大图里有 %d 个红色数字编号的格子，每格是一张家电相关图片。"
+            "请逐格判断每格是不是「产品尺寸示意图」。三条必须同时满足："
+            "①画的是整机外形（正视图/侧视图/俯视图之一）；"
+            "②带尺寸标注线或箭头；"
+            "③标注上印有毫米数字。"
+            "产品照片、局部零件图、内部结构图、场景图、促销图、参数表、多图拼贴、纯数据图，"
+            "一律回答：否。必须逐格独立判断，不要受相邻格子影响。"
+            "只输出 %d 行，每行格式严格为「编号:是」或「编号:否」，不要输出任何其他内容。"
+            % (len(tiles), len(tiles)), log=log)
+        if not txt:
+            return None
+        ans = {}
+        for ln in txt.splitlines():
+            ln = ln.strip().replace("：", ":")
+            if ":" in ln:
+                n, v = ln.split(":", 1)
+                n = "".join(ch for ch in n if ch.isdigit())
+                if n.isdigit() and 1 <= int(n) <= len(tiles):
+                    # 「否」优先判：中文「不是」含「是」，顺序反了会把否定判成肯定
+                    ans[int(n)] = "否" if "否" in v else "是"
+        if len(ans) < len(tiles) // 2:
+            if log:
+                log("拼图粗筛回答不完整（%d/%d 格），退回单张问" % (len(ans), len(tiles)))
+            return None
+        out = []
+        for i, p in enumerate(paths_[:len(tiles)]):
+            if ans.get(i + 1) == "是":
+                out.append(p)
+        if log:
+            log("拼图粗筛：%d 格 1 次调用，%d 张进单张终审" % (len(tiles), len(out)))
+        return out
+    except Exception:
+        return None
+
+
 def _nums_gate(sizeimg, log, tag):
     """2026-11-11 用户令「这个都能当尺寸图的」：AI 点头还不够——官方尺寸图必须
     **读得出毫米数字**（_ai_read_size_nums）。JSQ31-16FET7FRTPGU1 实锤：产品场景照
@@ -2418,6 +2490,7 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
     best = None   # (score, PIL image)
     _trans_fallback = [None]   # 透明底小图暂存路径（等更大的变体）
     _ai_cand = []   # 尺寸图 AI 复核候选（本地路径，启发式漏判时商汤/GLM 兜底认）
+    _cand_md5 = set()  # 候选去重（2026-11-12：官网同图两份会占满 12 格/双倍额度）
     _ai_rej = set()  # 2026-10-31：已由 AI 明确否掉的图，别在兜底循环里再烧一次额度
     seen = set()
     n = 0
@@ -2479,8 +2552,18 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                         continue
                     _ai_rej.add(fp if kind == "url" else u)
             # 启发式没认出：先记进 AI 复核候选（本地路径，循环结束后商汤/GLM 看图定夺）
+            # 2026-11-12：字节级去重（JSQ31-16FET7FRTPGU1 实锤：官网同图存两份，
+            # 22 候选 12 格被复制图占掉一半）。只按 md5 判重——感知去重（墨迹 IoU/
+            # dHash）实测在深色营销图上区分度不够（不同图 IoU 0.89~1.0），误杀真图
+            # 的代价（漏尺寸图）远大于多问一次，宁可留重复不误杀。
             if not have_size and len(_ai_cand) < 12:
-                _ai_cand.append(fp if kind == "url" else u)
+                try:
+                    _fh = hashlib.md5(io.open(fp if kind == "url" else u, "rb").read()).hexdigest()
+                except Exception:
+                    _fh = None
+                if _fh and _fh not in _cand_md5:
+                    _cand_md5.add(_fh)
+                    _ai_cand.append(fp if kind == "url" else u)
             # 官方透明底图（alpha 真透明）= 最佳机图。≥800px 直接锁；小图先记着，
             # 后面可能有同款 _1200 大变体（XQS100 600px 先到顶掉大图导致成图糊，实锤）
             rgba = im.convert("RGBA")
@@ -2568,13 +2651,20 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 return c / 6400.0
             except Exception:
                 return 1.0
-        # 2026-11-10 用户令「尺寸图判定别一张张问完十多张」：预算 10 张 → 5 张。
-        # 实测（GLM-4V-Flash 兜底通道）：拼版/分批问它根本分不清——12 张一次问
-        # 它点名 10 张（真答案只 2 张），3 张一批时连「全是产品照」那批也全选。
-        # 批量问这条路实测走不通，只能保留单张问；省成本靠「少问几张」：
-        # 候选已按彩色占比升序排列（尺寸线稿彩色极低，天然排最前），前 5 张即覆盖。
-        _ordered = [p for p in sorted(_ai_cand[:20], key=_color_ratio)[:5]
+        # 2026-11-12 用户令「拼图不能修复好？」：拼图批量问救活了——GLM-4V 当年
+        # 拼图点名乱选（12 张点名 10 张）才弃用；换视觉链主力 Qwen + 强制逐格作答
+        # 后真图实测 12 格 11 对。新架构：拼图粗筛 1 次调用 → 「是」的格子单张终审
+        # → _nums_gate 毫米数字硬门。拼图不可用（<3 格/回答不完整/调用失败）退回
+        # 原单张问。预算仍取前 12 张（彩色占比升序，尺寸线稿天然排最前）。
+        _ordered = [p for p in sorted(_ai_cand[:20], key=_color_ratio)[:12]
                     if p not in _ai_rej]
+        _shortlist = _ai_montage_size_screen(_ordered, log)
+        if _shortlist is not None and not _shortlist:
+            if log:
+                log("拼图粗筛全否，跳过单张问")
+            _ordered = []           # 粗筛全否：省掉全部单张调用
+        elif _shortlist:
+            _ordered = _shortlist   # 粗筛通过的张才进单张终审
         for pth in _ordered:
             try:
                 im2 = Image.open(pth)
