@@ -575,6 +575,41 @@ def _xinsheng_fallback(model, d, log, prog=None):
             "cat": _cat, "dir": d, "imgs": imgs, "source": "欣盛商城"}
 
 
+def _backfill_empty_props(model, info, log):
+    """空壳 info（props=0）时官网参数表补抓一次（2026-11-12 ES60H-Q3白 实锤）：
+    图库复用链给的 info 无 url 无 props，原有补抓条件「props 空 且 有 url」永远
+    不成立，聚光参数页只剩兜底一条。fetch_official 的 groups→props 组装同
+    kitset._gather_info；抓到就 _save_info 落盘（下次免抓）；抓不到仍用原数据出图。"""
+    if not isinstance(info, dict) or (info.get("props") or []):
+        return info
+    try:
+        import kitset as _ks0
+        _data = _ks0.fetch_official(model, log=log)
+        _props = []
+        for _src in ((_data or {}).get("groups") or []):
+            for _k, _v in ((_src[1] or []) if len(_src) > 1 else []):
+                if str(_k).strip() and str(_v).strip() and (str(_k), str(_v)) not in _props:
+                    _props.append((str(_k), str(_v)))
+        if _props:
+            info["props"] = _props
+            if (_data or {}).get("url") and not info.get("url"):
+                info["url"] = _data["url"]
+            if (_data or {}).get("title") and not str(info.get("title") or "").strip():
+                info["title"] = _data["title"]
+            if (_data or {}).get("brand") and not str(info.get("brand") or "").strip():
+                info["brand"] = _data["brand"]
+            try:
+                _save_info(info)
+                log("空参数补抓：官网 %d 条参数已落 info.json" % len(_props))
+            except Exception:
+                pass
+        else:
+            log("官网参数表也没有这个型号的参数，继续用现有数据出图")
+    except Exception as e:
+        log("空参数补抓失败（%s），仍用原数据出图" % e)
+    return info
+
+
 def work(model, prog=None):
     """抓素材：本地有就直接用；没有先看蓝底抓好的能不能复用（等最多 90s）；
     复用不上走 peiwen 抓取链（新爬虫→旧检索→兴达），存 素材/<型号>/"""
@@ -591,9 +626,13 @@ def work(model, prog=None):
                 _save_info(info)
             except Exception as e:
                 log("补抓参数失败（%s），仍用原数据" % e)
+        if not (info.get("props") or []):
+            info = _backfill_empty_props(model, info, log)
         return info
     info = _wait_or_reuse_kitset(model, d, log, prog)
     if info:
+        if not (info.get("props") or []):
+            info = _backfill_empty_props(model, info, log)
         return info
     # 2026-11-10 用户令「顺序错了，是先去 R2 云端找没有再去爬」——本地没图先问云端图库
     info = _r2_grab_to_pub(model, d, log, prog)
@@ -799,7 +838,21 @@ def gen_style(model, style, sell_price=None, version="N", entry_title=None):
     info = src = out = None          # 复检线程要用，先占位（异常分支里也不能 NameError）
     paths = []
     try:
-        info = load_info(model) or work(model, prog=_job_prog)
+        info = load_info(model)
+        if not info or not (info.get("props") or []):
+            # 2026-11-12 ES60H-Q3白 实锤：本地 info.json 是空壳（props=0 条、标题就是
+            # 型号），原先 load_info 有值就跳过抓参数——图库复用得再全参数也一直空着，
+            # 聚光参数页只剩兜底一条。空壳也要抓一次；抓不到才用空壳继续（不拦出图）。
+            try:
+                _w = work(model, prog=_job_prog)
+                if _w and (_w.get("props") or []):
+                    info = _w
+                elif not info:
+                    info = _w or {"model": model, "props": []}
+            except Exception as e:
+                _logf()("参数抓取失败（用现有 info 继续）：%r" % (e,))
+                if not info:
+                    info = {"model": model, "props": []}
         import pei_ai9
         if style == "spot":
             # 聚光独立体系（2026-10-29 用户令「聚光路径跟着蓝底来，不跟写文案一起」）：
@@ -808,8 +861,29 @@ def gen_style(model, style, sell_price=None, version="N", entry_title=None):
             # 抓一次——搬完聚光只依赖 kitset，写文案目录删了也不影响聚光。
             import kitset as _ks
             _ks.ensure_data(model, log=lambda s: _logf()(s))
-            _kinfo = _ks.load_kinfo(model) or info
-            info = dict(_kinfo)
+            _kinfo = _ks.load_kinfo(model)
+            if not (_kinfo or {}).get("props"):
+                _kinfo = None    # 空壳 kinfo（props=0）不许覆盖刚抓到的真参数
+            info = dict(_kinfo or info)
+            if not _kinfo and (info.get("props") or []):
+                # 抓到真参数且 kitset 还是空壳 → 落权威副本（下次免抓）
+                try:
+                    _kd = _ks.model_dir(model)
+                    os.makedirs(_kd, exist_ok=True)
+                    _ip = os.path.join(_kd, "info.json")
+                    _old = {}
+                    if os.path.isfile(_ip):
+                        try:
+                            with open(_ip, encoding="utf-8") as _f:
+                                _old = json.load(_f)
+                        except Exception:
+                            _old = {}
+                    _old.update({k: v for k, v in info.items() if k != "dir"})
+                    with open(_ip, "w", encoding="utf-8") as _f:
+                        json.dump(_old, _f, ensure_ascii=False, indent=1)
+                    _logf()("参数落 kitset 权威副本（%d 条）" % len(info.get("props") or []))
+                except Exception:
+                    pass
             if entry_title:
                 # 2026-11-06 防呆：条目标题里混进表格公式报错值（#N/A 实锤印上聚光首图）
                 # → 剔掉报错段再给；剔完为空就不覆盖（退回官网抓取链的标题兜底）

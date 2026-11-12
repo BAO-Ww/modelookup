@@ -643,6 +643,22 @@ def _spot_param_items():
                 return out
     except Exception:
         pass
+    # 2026-11-12 ES60H-Q3白 实锤：set.json 只由蓝底套图落盘——只跑聚光/套图没跑成的
+    # 型号没有它，旧兜底 P['specs'] 是机器展示图卖点（就 1 条），参数页只剩「款式 横式」。
+    # 补两级：kitset 权威参数副本（info.json props）→ 本次任务抓到的 info.props。
+    try:
+        import kitset as _ks
+        ki = _ks.load_kinfo((P.get('model') or '').strip())
+        out = [(str(k), str(v).strip()) for k, v in ((ki or {}).get("props") or [])
+               if str(k).strip() and str(v).strip() and str(k) != "尺寸"]
+        if out:
+            return out
+    except Exception:
+        pass
+    out = [(str(k), str(v).strip()) for k, v in (P.get('props') or [])
+           if str(k).strip() and str(v).strip() and str(k) != "尺寸"]
+    if out:
+        return out
     out = [(str(k), str(v)) for v, k in (P.get('specs') or [])]
     if not out:
         out = [(str(k), str(v)) for v, k, _ in (P.get('cards') or [])]
@@ -1673,6 +1689,9 @@ def build_text(info, version, sell_price, ai_copy=None):
     return dict(
         brand=brand, ben=ben, model=model, cat=cat, color=color, kind=kind, tag=tag,
         official=official, shop=shop, shipping=shipping,
+        # 2026-11-12 ES60H-Q3白 实锤：聚光参数页兜底要本次抓到的全量参数——
+        # set.json 只由蓝底套图落盘，只跑聚光的型号没有它，P['specs'] 只是机器展示卖点
+        props=list(props),
         specs=m_chips if m_chips else chips([], "m", 4),
         cards=cards,
         angle_title=ai_or("angle_title", "%s · 45°立体" % kind),
