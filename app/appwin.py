@@ -7,6 +7,7 @@
 import json
 import os
 import sys
+import ctypes
 import threading
 import time
 
@@ -605,6 +606,14 @@ def run_app(httpd, port, startup_xlsx=None):
             _SUB_SEL = str(u or "")
 
     _dpi()                                  # 必须在量屏幕 / 建窗前：否则算出来是缩放前的尺寸
+    # 显式 AppUserModelID（2026-11-12 用户红框实锤）：进程不带 AUMID 时 Win11 任务栏
+    # 按 exe 路径缓存按钮图标——安装版 exe 嵌了图标看不出来，源码版直接吃 python.exe
+    # 的缓存 → 任务栏一直挂蓝黄 python 图标，WM_SETICON / 隐藏唤出都刷不掉。
+    # 建窗前声明自己的 AUMID，任务栏改从窗口图标链取（WM_GETICON → Form.Icon）。
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("BAOWW.ModelLookup")
+    except Exception:
+        pass
     w, h, x, y = fit_window(1480, 940)
     lw, lh, lx, ly = fit_window(1180, 860)
 
@@ -738,6 +747,29 @@ def run_app(httpd, port, startup_xlsx=None):
             import System.Drawing as DG
             ico_path = rp("icon.ico")
             ic = DG.Icon(ico_path) if os.path.isfile(ico_path) else DG.SystemIcons.Application
+            # 标题栏/任务栏图标（2026-11-12 用户「怎么图标还变了」实锤）：pywebview 不给
+            # Form.Icon 赋值时窗口显示 pywebview 默认图标——安装版 exe 看不出来（壳进程
+            # 图标兜底），源码版直接变成 python 图标。跟托盘用同一份 icon.ico。
+            try:
+                if os.path.isfile(ico_path):
+                    bv.Icon = ic
+            except Exception:
+                pass
+            # 任务栏按钮 / Alt+Tab 缩略图角标不吃 Form.Icon，要按尺寸 LoadImage 后
+            # 直接发 WM_SETICON（small=16 任务栏，big=32 Alt+Tab），否则源码版
+            # 任务栏一直挂 python.exe 的蓝黄 logo（2026-11-12 用户红框实锤）。
+            try:
+                _u32 = ctypes.windll.user32
+                _k32 = ctypes.windll.kernel32
+                _hsm = _k32.LoadImageW(None, ico_path, 1, 16, 16, 0x10)      # IMAGE_ICON, LR_LOADFROMFILE
+                _hbg = _k32.LoadImageW(None, ico_path, 1, 32, 32, 0x10)
+                _hwnd = int(bv.Handle)
+                if _hsm:
+                    _u32.SendMessageW(_hwnd, 0x0080, 0, _hsm)                # WM_SETICON, ICON_SMALL
+                if _hbg:
+                    _u32.SendMessageW(_hwnd, 0x0080, 1, _hbg)                # ICON_BIG
+            except Exception:
+                pass
 
             ni = WF.NotifyIcon()
             ni.Icon = ic
