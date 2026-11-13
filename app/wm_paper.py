@@ -1,17 +1,22 @@
 # -*- coding: utf-8 -*-
-"""wm_paper.py — 纸感白底 + 双层隐藏水印（2026-11-13 用户定稿）。
+"""wm_paper.py — 纸感白底 + 烘底水印（2026-11-13 二次定稿：水印只进底色）。
 
-两层水印（都藏在底色里，不出文字区干扰可读性——低浓度叠在文字上亦无感）：
-① 融字水印：文案斜向平铺，约 5% 不透明度（ALPHA=13/255），放大 2.8 倍可读；
+思路（用户令）：**水印直接烘在底色上，机器/文字后铺**——产品、胶囊、参数字
+全部盖在水印上面，天然不压机器不压字，零抠图零检测。
+
+两层水印（都藏在底色里）：
+① 融字水印：文案斜向平铺，浓度可调（ALPHA/255），放大可读；
 ② 微点阵：密钥派生伪随机点序，人眼无感（每点只比底色深约 4 灰阶），
    怀疑盗图时用 dot_positions() 重建点序比对即可验证。
 
 种子固定 → 每台机器纹理/水印一致、可复现；纯程序绘制，零耗时零额度。
 
 对外入口：
-- paper_bg(w, h)                 纸感白 B3 底（#FEFEFC，聚光用）
-- stamp_save(im, out, quality)   按输出路径自动盖章：路径含「蓝底」目录用「东星斑」、
-                                 含「聚光」目录用「科科」；其他目录原样保存不盖章。
+- paper_bg(w, h)              纸感白 B3 底（无水印，纯纹理）
+- paper_bg_wm(w, h, kind)     纸感白底 + 烘水印（聚光用，kind="spot"）
+- white_bg_wm(w, h, kind)     纯白底 + 烘水印（蓝底用，kind="blue"）
+- stamp_save(im, out, q)      兼容旧调用：水印已在底色阶段烘焙，这里只做原样保存
+- stamp(im, kind, alpha)      手动叠水印（样张/验证用）
 
 字体跨平台：Win 用微软雅黑，Mac 依次试苹方/黑体，都不在退 load_default。
 """
@@ -23,7 +28,7 @@ import random
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 WM_ON = True                       # 总开关（出问题可一键关）
-ALPHA = 13                         # 融字水印不透明度（13/255 ≈ 5%）
+ALPHA = 26                         # 融字水印不透明度（26/255 = 10%，用户 2026-11-13 二次定档）
 WM_COL = (178, 170, 154)           # 暖灰水印色
 B3 = (254, 254, 252)               # 纸感白底色（用户定稿档）
 SECRET = "TINGBAO-PAPER-2026"      # 微点阵密钥（勿入仓库外任何明文）
@@ -82,7 +87,8 @@ def paper_bg(w, h):
     return Image.composite(Image.new("RGB", (w, h), (255, 255, 254)), base, rad)
 
 
-def _wm_layer(w, h, txt):
+def _wm_layer(w, h, txt, alpha=None):
+    a = ALPHA if alpha is None else int(alpha)
     layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     f = _font(28)
@@ -92,7 +98,7 @@ def _wm_layer(w, h, txt):
         for rx in range(-2, w // sx + 3):
             x = rx * sx + (sx // 2 if ry % 2 else 0)
             y = ry * sy
-            d.text((x, y), txt, font=f, fill=WM_COL + (ALPHA,))
+            d.text((x, y), txt, font=f, fill=WM_COL + (a,))
     return layer.rotate(28, expand=False, resample=Image.BICUBIC)
 
 
@@ -104,28 +110,34 @@ def _dots_layer(w, h):
     return layer
 
 
-def stamp(im, kind):
-    """叠双层水印。kind: "spot"=聚光文案 / "blue"=蓝底文案。返回 RGB。"""
+def stamp(im, kind, alpha=None):
+    """手动叠双层水印。kind: "spot"=聚光文案 / "blue"=蓝底文案。返回 RGB。"""
     rgb = im.convert("RGB")
     if not WM_ON or kind not in TXT:
         return rgb
     w, h = rgb.size
     cv = rgb.convert("RGBA")
     cv = Image.alpha_composite(cv, _dots_layer(w, h))
-    cv = Image.alpha_composite(cv, _wm_layer(w, h, TXT[kind]))
+    cv = Image.alpha_composite(cv, _wm_layer(w, h, TXT[kind], alpha))
     return cv.convert("RGB")
 
 
+def paper_bg_wm(w, h, kind="spot", alpha=None):
+    """纸感白底 + 烘底水印（聚光系出图统一入口）：水印只存在底色里，
+    机器/文字/胶囊后铺自然盖住，绝不压机器。"""
+    bg = paper_bg(w, h)
+    return stamp(bg, kind, alpha)
+
+
+def white_bg_wm(w, h, kind="blue", alpha=None):
+    """纯白底 + 烘底水印（蓝底系出图统一入口）。"""
+    if not WM_ON or kind not in TXT:
+        return Image.new("RGB", (w, h), (255, 255, 255))
+    return stamp(Image.new("RGB", (w, h), (255, 255, 255)), kind, alpha)
+
+
 def stamp_save(im, out, quality=95):
-    """按输出路径自动盖章并保存：只盖 蓝底/聚光 目录的产物，其余原样保存。"""
-    s = str(out).replace("/", "\\")
-    kind = None
-    if "\\蓝底\\" in s:
-        kind = "blue"
-    elif "\\聚光\\" in s:
-        kind = "spot"
-    if kind is None:
-        im.convert("RGB").save(out, quality=quality)
-    else:
-        stamp(im, kind).save(out, quality=quality)
+    """兼容旧调用：水印已在底色阶段烘焙（paper_bg_wm/white_bg_wm），
+    这里只原样保存，绝不再叠第二遍。"""
+    im.convert("RGB").save(out, quality=quality)
     return out

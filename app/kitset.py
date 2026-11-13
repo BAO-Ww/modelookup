@@ -286,6 +286,12 @@ def _paste_product(C, img, cx, bottom_y, target_h, max_w=1080):
     # 高度卡 target_h、宽度卡 max_w（电视等 16:9 横图按高放会糊满整卡，2026-10-22 实锤）
     sc = min(target_h / float(h), max_w / float(w))
     im2 = img.resize((max(1, int(w * sc)), max(1, int(h * sc))), Image.LANCZOS)
+    try:
+        # 放大贴图补一道锐化（2026-11-13，同 pei_ai9.place_band）；缩小贴图不补
+        if im2.width > w * 1.03:
+            im2 = im2.filter(ImageFilter.UnsharpMask(radius=2, percent=95, threshold=2))
+    except Exception:
+        pass
     C.paste(im2, (int(cx - im2.size[0] / 2), int(bottom_y - im2.size[1])), im2)
 
 
@@ -317,10 +323,11 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
     else:
         _pill_fill = (46, 107, 230, 242)
         _accent = BLUE
-    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
-    # 白字套图（tone 模式）左上角用品牌 logo（2026-11-03 用户令）；本家蓝底仍走文字，不动
-    _lw = _paste_logo(d, C, cfg, (60, 88), white=False, h=36) if _tone_on else 0
+    # 左上角品牌 logo（2026-11-13 用户令「左上角海尔品牌就加海尔的logo」）：
+    # 海尔/卡萨帝/统帅一律贴 logo 图（本家蓝底也贴），其他品牌退回原文字
+    _lw = _paste_logo(d, C, cfg, (60, 88), white=False, h=38)
     if _lw <= 0:
         _spaced(d, (60, 88), cfg.get("brand_en", "HAIER"), _font(F_LIGHT, 30), INK, tracking=14)
     _spaced(d, (60, 132), cfg["series"], _font(F_LIGHT, 24), GRAY, tracking=8)
@@ -418,7 +425,7 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
 
 
 def _render_img2(cfg, prod, out, safe=False):
-    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     _header(d, "核 心 参 数")
     th2 = cfg.get("img2_h", 640)
@@ -495,10 +502,12 @@ def _render_img3(cfg, points, out, safe=False):
     左栏品牌头+金色短竖线+竖排「官方卖点」+金色字距 HIGHLIGHTS+底部型号；
     右栏 6 条等分：上行粗黑主词+下行灰小字说明（参数条值做主词），
     金衬线序号 01-06 + 细分隔线。白底。"""
-    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
-    d.text((66, 92), " ".join(cfg.get("brand_en") or "HAIER"), font=_font(F_BOLD, 26), fill=(150, 158, 168), anchor="lm")
-    d.text((66, 132), (cfg.get("brand") or "") + (cfg.get("cat") or ""), font=_font(F_BOLD, 26), fill=(90, 98, 108), anchor="lm")
+    # 左上角品牌 logo（2026-11-13 用户令），没有 logo 图的品牌退回原两行文字
+    if _paste_logo(d, C, cfg, (66, 112), white=False, h=36) <= 0:
+        d.text((66, 92), " ".join(cfg.get("brand_en") or "HAIER"), font=_font(F_BOLD, 26), fill=(150, 158, 168), anchor="lm")
+        d.text((66, 132), (cfg.get("brand") or "") + (cfg.get("cat") or ""), font=_font(F_BOLD, 26), fill=(90, 98, 108), anchor="lm")
     d.rounded_rectangle([66, 158, 116, 163], 2, fill=BLUE)
     vt = "官方卖点"
     vy0 = 264
@@ -671,7 +680,7 @@ def _sketch_rgba(path, color=(28, 30, 34)):
 
 
 def _render_img4(cfg, out, prod=None, safe=False):
-    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     _t4 = 46 if safe else 50
     _b4 = 27 if safe else 30
@@ -815,7 +824,7 @@ def _wv_fix_rows(rows):
 def _wv_img2(cfg, prod, out, tone):
     """白字·蓝底 ②参数：顶部深蓝横幅 + 2×3 参数大数字卡片网格（跟本家行式完全两样）。"""
     A = _wv_ac(tone)
-    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     d.rectangle([0, 0, 1080, 148], fill=A["banner"])
     _lw2 = _paste_logo(d, C, cfg, (60, 74), white=True, h=36, max_w=180)
@@ -853,7 +862,7 @@ def _wv_img2(cfg, prod, out, tone):
 def _wv_img3(cfg, points, out, tone):
     """白字·蓝底 ③卖点：标题「为什么选它」+ 圆徽章行 + 隔行浅蓝斑马条。"""
     A = _wv_ac(tone)
-    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     _lw3 = _paste_logo(d, C, cfg, (62, 52), white=False, h=30, max_w=150)
     d.text((64, 116), "为什么选它", font=_font(F_BOLD, 46), fill=INK, anchor="lm")
@@ -886,7 +895,7 @@ def _wv_img3(cfg, points, out, tone):
 def _wv_img4(cfg, prod, out, tone):
     """白字·蓝底 ④尺寸：顶部深蓝横幅 + 官方线稿 + 底部宽/高/深三颗胶囊。"""
     A = _wv_ac(tone)
-    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     d.rectangle([0, 0, 1080, 118], fill=A["banner"])
     _paste_logo(d, C, cfg, (60, 59), white=True, h=34, max_w=170)
@@ -946,7 +955,7 @@ def _wv_img4(cfg, prod, out, tone):
 def _wp_img2(cfg, prod, out, tone):
     """白字·紫底 ②参数：左机图 + 右侧点线参数（值紫粗右对齐），编辑目录风。"""
     A = _wv_ac(tone)
-    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     _paste_logo(d, C, cfg, (62, 60), white=False, h=30, max_w=150)
     d.text((64, 116), "核 心 参 数", font=_font(F_BOLD, 42), fill=INK, anchor="lm")
@@ -986,7 +995,7 @@ def _wp_img2(cfg, prod, out, tone):
 def _wp_img3(cfg, points, out, tone):
     """白字·紫底 ③卖点：标题居中 + 2×3 浅紫 chip 卡（顶紫条+衬线序号）。"""
     A = _wv_ac(tone)
-    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     _paste_logo(d, C, cfg, (62, 108), white=False, h=32, max_w=160)
     d.text((540, 108), "核 心 卖 点", font=_font(F_BOLD, 44), fill=INK, anchor="mm")
@@ -1017,7 +1026,7 @@ def _wp_img3(cfg, points, out, tone):
 def _wp_img4(cfg, prod, out, tone):
     """白字·紫底 ④尺寸：标题居中 + 线稿 + 底部宽/高/深三张浅紫数字大卡。"""
     A = _wv_ac(tone)
-    C = Image.new("RGB", (1080, 1080), (255, 255, 255))
+    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     _paste_logo(d, C, cfg, (62, 100), white=False, h=32, max_w=160)
     d.text((540, 100), "产 品 尺 寸", font=_font(F_BOLD, 44), fill=INK, anchor="mm")

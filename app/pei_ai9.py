@@ -544,8 +544,23 @@ def place_band(cv, prod, top, bot, maxw=1000):
         w = BAND_MAXW; h = w / ar
         if h > band:
             h = band; w = h * ar
+    # 原生尺寸优先（2026-11-13 用户「聚光的机器虚了」实测：1098px 原生图被拉到 1160
+    # 就是虚的来源）——放大 ≤15% 的微放大直接放弃，按原生宽贴；素材太小（>15% 放大）
+    # 才放大并补锐化。小 5% 看不出，锐度差距一眼可见。
+    if w > prod.width and w / max(1, prod.width) <= 1.15:
+        w = prod.width
+        h = w / ar
+        if h > band:
+            h = band; w = h * ar
     w, h = int(w * scale), int(h * scale)
     pf = prod.resize((w, h), Image.LANCZOS)
+    try:
+        # 2026-11-13 用户反馈「聚光的机器虚了」：官网原图偏软，放大贴图更明显——
+        # 放大超过 3% 就补一道锐化；缩小贴图不补（补了会出白边/噪点）
+        if w > prod.width * 1.03:
+            pf = pf.filter(ImageFilter.UnsharpMask(radius=2, percent=95, threshold=2))
+    except Exception:
+        pass
     px = (W - w) // 2; py = int(top + (band - h) / 2)
     return pf, px, py
 
@@ -583,7 +598,9 @@ def _spot_bg(cx=None, cy=470, light_col=(88, 99, 118), strength=1.0):
     随之适配：_brand_minimal 走 dark、img3/img4 的 GEN_POP 文字换深色。
     wm_paper 缺失时退回旧版深底（宁可旧样式也不能白图）。"""
     if wm_paper is not None:
-        return wm_paper.paper_bg(W, H).convert("RGBA")
+        # 2026-11-13 二次定稿（用户令「白底之前就把水印放上去，再铺机器字」）：
+        # 水印直接烘进底色，机器/文字后铺天然盖住，绝不压机器
+        return wm_paper.paper_bg_wm(W, H, "spot").convert("RGBA")
     cx = W // 2 if cx is None else cx
     low = 270
     base = Image.new("RGB", (low, low), (10, 11, 14))
@@ -613,10 +630,42 @@ def _ground_glow(cv, cy, rx=470, ry=64, col=(120, 134, 158), a=90):
     glow = glow.filter(ImageFilter.GaussianBlur(46))
     cv.alpha_composite(glow)
 
-def _brand_minimal(dr, x=64, y=74, dark=False):
-    """聚光左上角极简品牌（2026-10-28 样张定稿）：HAIER 金色字距拉开 + 海尔白色大字，
-    无徽章片。机器展示/机器参数用。
+def _brand_logo_im(white=False, h=46, max_w=240):
+    """左上角品牌 logo 图（2026-11-13 用户令「左上角海尔品牌就加海尔的logo」）：
+    海尔/卡萨帝/统帅各一张透明底 PNG（app/assets/logos/）。返回 RGBA 或 None
+    （非三品牌/文件缺失时 None，调用方退回原文字排版）。"""
+    import sys
+    b = str(P.get('brand') or '').strip()
+    key = {"海尔": "haier", "卡萨帝": "casarte", "统帅": "leader", "Leader": "leader",
+           "LEADER": "leader"}.get(b) or ("leader" if "leader" in b.lower() else None)
+    if not key:
+        return None
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    p = os.path.join(base, "assets", "logos", "%s_%s.png" % (key, "white" if white else "dark"))
+    if not os.path.isfile(p):
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logos",
+                         "%s_%s.png" % (key, "white" if white else "dark"))
+        if not os.path.isfile(p):
+            return None
+    try:
+        im = Image.open(p).convert("RGBA")
+        w = im.width * h / float(im.height)
+        if w > max_w:
+            w = max_w
+            h = int(max_w * im.height / im.width)
+        return im.resize((max(1, int(w)), max(1, int(h))), Image.LANCZOS)
+    except Exception:
+        return None
+
+
+def _brand_minimal(cv, dr, x=64, y=74, dark=False):
+    """聚光左上角品牌（2026-10-28 样张定稿）：海尔/卡萨帝/统帅贴 logo 图
+    （2026-11-13 用户令），其他品牌退回 HAIER 字距字 + 品牌大字，无徽章片。
     dark=True：纸感白浅底版（2026-11-13）——品牌字深灰蓝、中文近墨色，别用白字。"""
+    im = _brand_logo_im(white=not dark, h=46)
+    if im is not None:
+        cv.alpha_composite(im, (x, y - 8))
+        return
     if dark:
         t_en = " ".join(list(str(P.get('ben', '')).upper()))
         T(dr, (x, y), t_en, 24, "#8a93a5", "lm")
@@ -726,7 +775,7 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
         soft_shadow(cv, px, py, pf.width, pf.height, alpha=135, blur=32, drop=16, w=0.98)
         cv.alpha_composite(pf, (px, py))
         dr = ImageDraw.Draw(cv)
-        _brand_minimal(dr, dark=_SPOT_LIGHT)
+        _brand_minimal(cv, dr, dark=_SPOT_LIGHT)
         # 2026-11-06 用户令「蓝底都是对的，聚光的字怎么就不对了 / 难道聚光就不能跟他一样」：
         # 聚光大字改成跟蓝底同源——取 kitset 那两句（line1 / line2 去型号段），
         # 不再用软件条目标题（那是表格字段，可能带 #N/A、描述尾，跟蓝底口径分叉）。
@@ -812,7 +861,7 @@ def img2(front, out):                 # 机器图（深色，同色系）
         halo(cv, px, py, pf.width, pf.height, strength=32, blur=60, m=190, col=(210, 222, 240))
         soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=34, drop=26, w=0.98)
         cv.alpha_composite(pf, (px, py))
-        _brand_minimal(dr, dark=_SPOT_LIGHT)
+        _brand_minimal(cv, dr, dark=_SPOT_LIGHT)
         return save(cv, out / "2_机器图.jpg")
     cv = prep_bg("char").convert("RGBA")
     dr = ImageDraw.Draw(cv)
