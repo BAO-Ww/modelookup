@@ -25,6 +25,7 @@ from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch
 from normalize import norm_model
 from renderlock import serialized
 import paths
+import wm_paper
 import pei_core
 from net import urlopen_ssl
 
@@ -413,7 +414,7 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
     C = Image.alpha_composite(C.convert("RGBA"), ov).convert("RGB")
     d = ImageDraw.Draw(C)
     d.text((540, 962), cfg["features_line"], font=_font(F_REG, 27 if safe else 31), fill=INK, anchor="ma")
-    C.save(out, quality=95)
+    wm_paper.stamp_save(C, out, 95)
 
 
 def _render_img2(cfg, prod, out, safe=False):
@@ -449,7 +450,7 @@ def _render_img2(cfg, prod, out, safe=False):
     else:
         _pill(d, 1020, 894, "以实物为准", _fp, h=42)
     d.rectangle([60, 960, 1020, 961], fill=LINE)
-    C.save(out, quality=95)
+    wm_paper.stamp_save(C, out, 95)
 
 
 def _serif(sz, bold=True):
@@ -509,7 +510,7 @@ def _render_img3(cfg, points, out, safe=False):
     d.line([262, 96, 262, 1006], fill=(232, 236, 242), width=1)
     pts = _v8_points(points, _wv_fix_rows(cfg.get("params_rows")))
     if not pts:
-        C.save(out, quality=95)
+        wm_paper.stamp_save(C, out, 95)
         return
     rx = 316
     y0, y1 = 132, 992
@@ -533,7 +534,7 @@ def _render_img3(cfg, points, out, safe=False):
             d.text((rx + 58, yy + 22), sub, font=_font(F_BOLD, 18 if safe else 20), fill=GRAY, anchor="lm")
         if i < m - 1:
             d.line([rx, y0 + rh * (i + 1), 1080 - 72, y0 + rh * (i + 1)], fill=(238, 240, 244), width=1)
-    C.save(out, quality=95)
+    wm_paper.stamp_save(C, out, 95)
 
 
 def _label_size_drawing(im2, wmm, hmm, dmm):
@@ -711,7 +712,7 @@ def _render_img4(cfg, out, prod=None, safe=False):
         if dims and all(dims):
             d.text((540, 972), "宽 %d mm · 高 %d mm · 深 %d mm" % tuple(dims),
                    font=_font(F_REG, _d4), fill=GRAY, anchor="mm")
-        C.save(out, quality=95)
+        wm_paper.stamp_save(C, out, 95)
         return
     if cfg.get("dims"):
         W, H, D = cfg["dims"]
@@ -760,7 +761,7 @@ def _render_img4(cfg, out, prod=None, safe=False):
                font=_font(F_BOLD, _b4), fill=INK, anchor="mm")
         d.text((540, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格",
                font=_font(F_REG, _d4), fill=GRAY, anchor="mm")
-    C.save(out, quality=95)
+    wm_paper.stamp_save(C, out, 95)
 
 
 # ---------------- 白字 tone 专用②③④（2026-11-03 用户令：白字功能里的蓝底跟紫底
@@ -846,7 +847,7 @@ def _wv_img2(cfg, prod, out, tone):
     else:
         _wv_pill_r(d, 1020, yb, "以实物为准", _fp, A)
     d.rectangle([60, yb + 78, 1020, yb + 79], fill=A["tint"])
-    C.save(out, quality=95)
+    wm_paper.stamp_save(C, out, 95)
 
 
 def _wv_img3(cfg, points, out, tone):
@@ -879,7 +880,7 @@ def _wv_img3(cfg, points, out, tone):
         if sub:
             d.text((176, yy + 26), sub, font=_font(F_REG, 20), fill=(130, 138, 150), anchor="lm")
     d.text((64, 1020), cfg.get("model") or "", font=_font(F_REG, 20), fill=(190, 196, 204), anchor="lm")
-    C.save(out, quality=95)
+    wm_paper.stamp_save(C, out, 95)
 
 
 def _wv_img4(cfg, prod, out, tone):
@@ -939,7 +940,7 @@ def _wv_img4(cfg, prod, out, tone):
                font=_font(F_BOLD, 28), fill=INK, anchor="mm")
         d.text((540, 894), "外形尺寸以实物为准 · 可咨询客服获取详细规格",
                font=_font(F_REG, 23), fill=(130, 138, 150), anchor="mm")
-    C.save(out, quality=95)
+    wm_paper.stamp_save(C, out, 95)
 
 
 def _wp_img2(cfg, prod, out, tone):
@@ -979,7 +980,7 @@ def _wp_img2(cfg, prod, out, tone):
         _wv_pill_r(d, 1020 - w2 - 12, 936, sp[0], _fp, A)
     else:
         _wv_pill_r(d, 1020, 936, "以实物为准", _fp, A)
-    C.save(out, quality=95)
+    wm_paper.stamp_save(C, out, 95)
 
 
 def _wp_img3(cfg, points, out, tone):
@@ -1010,7 +1011,7 @@ def _wp_img3(cfg, points, out, tone):
         if sub:
             d.text((x + 30, y + 172), sub, font=_font(F_REG, 19), fill=(130, 138, 150), anchor="lm")
     d.text((540, 1004), cfg.get("model") or "", font=_font(F_REG, 20), fill=(190, 196, 204), anchor="mm")
-    C.save(out, quality=95)
+    wm_paper.stamp_save(C, out, 95)
 
 
 def _wp_img4(cfg, prod, out, tone):
@@ -1069,7 +1070,7 @@ def _wp_img4(cfg, prod, out, tone):
                font=_font(F_BOLD, 28), fill=INK, anchor="mm")
         d.text((540, 844), "外形尺寸以实物为准 · 可咨询客服获取详细规格",
                font=_font(F_REG, 23), fill=(130, 138, 150), anchor="mm")
-    C.save(out, quality=95)
+    wm_paper.stamp_save(C, out, 95)
 
 
 # ---------------- 数据组装（参数/机图走现有抓取链） ----------------

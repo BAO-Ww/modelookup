@@ -21,6 +21,11 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageStat, ImageChops
 
 try:
+    import wm_paper                # 纸感白底 + 双层隐藏水印（2026-11-13 定稿）
+except Exception:
+    wm_paper = None
+
+try:
     import pei_core as core
 except Exception:
     core = None
@@ -59,6 +64,10 @@ TX2 = "#cfd8e4"    # 副标题/型号
 TX3 = "#aeb4bd"    # 三级小字
 TX_GOLD = "#ffe14d"  # 金色强调（始终保留，亮底上也立得住）
 SCRIM_COL = (8, 10, 14)   # 顶部/底部压暗条颜色（white 时改为浅色）
+INK_TXT = "#2f3540"       # 聚光纸感白浅底主文字色（2026-11-13 换浅底配套）
+SUB_TXT = "#5b6472"       # 聚光纸感白浅底副文字色
+_SPOT_LIGHT = wm_paper is not None   # True=聚光底已换纸感白→聚光文字全套深色；
+                                     # False=wm_paper 缺失，_spot_bg 回退旧深底，文字保持白。
 SCRIM_A = 205             # 压暗条不透明度（white 时降低）
 
 
@@ -553,6 +562,9 @@ def chip_row(cv, dr, items, y0, ch=112, cw=336, g=18, col=(255, 225, 90),
 
 
 def save(cv, p):
+    # 聚光目录产物自动叠双层隐藏水印（融字「科科」+ 微点阵）；wm_paper 缺失时原样保存
+    if wm_paper is not None:
+        return wm_paper.stamp_save(cv, p, 96)
     cv.convert("RGB").save(p, quality=96)
     return p
 
@@ -561,8 +573,14 @@ def save(cv, p):
 GOLD = (212, 175, 108)   # 聚光金（样张定稿色）
 
 def _spot_bg(cx=None, cy=470, light_col=(88, 99, 118), strength=1.0):
-    """聚光专用干净背景（2026-10-28 用户令「背景也用这个背景」=样张同款）：
-    深灰蓝底 + 中心一束聚光 + 四角压暗，程序绘制，不走 AI 背景。"""
+    """聚光专用干净背景：纸感白 B3（2026-11-13 用户令「聚光底色换米白/纸感白」，
+    定稿色 #FEFEFC + 双层隐藏水印见 wm_paper）。
+
+    旧版是深灰蓝底+中心聚光+四角压暗（程序绘制）；换纸感白后深底白字体系
+    随之适配：_brand_minimal 走 dark、img3/img4 的 GEN_POP 文字换深色。
+    wm_paper 缺失时退回旧版深底（宁可旧样式也不能白图）。"""
+    if wm_paper is not None:
+        return wm_paper.paper_bg(W, H).convert("RGBA")
     cx = W // 2 if cx is None else cx
     low = 270
     base = Image.new("RGB", (low, low), (10, 11, 14))
@@ -592,9 +610,15 @@ def _ground_glow(cv, cy, rx=470, ry=64, col=(120, 134, 158), a=90):
     glow = glow.filter(ImageFilter.GaussianBlur(46))
     cv.alpha_composite(glow)
 
-def _brand_minimal(dr, x=64, y=74):
+def _brand_minimal(dr, x=64, y=74, dark=False):
     """聚光左上角极简品牌（2026-10-28 样张定稿）：HAIER 金色字距拉开 + 海尔白色大字，
-    无徽章片。机器展示/机器参数用。"""
+    无徽章片。机器展示/机器参数用。
+    dark=True：纸感白浅底版（2026-11-13）——品牌字深灰蓝、中文近墨色，别用白字。"""
+    if dark:
+        t_en = " ".join(list(str(P.get('ben', '')).upper()))
+        T(dr, (x, y), t_en, 24, "#8a93a5", "lm")
+        T(dr, (x, y + 46), str(P.get('brand', '')), 40, INK_TXT, "lm")
+        return
     t_en = " ".join(list(str(P.get('ben', '')).upper()))
     T(dr, (x, y), t_en, 24, GOLD, "lm")
     T(dr, (x, y + 46), str(P.get('brand', '')), 40, TX1, "lm")
@@ -699,7 +723,7 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
         soft_shadow(cv, px, py, pf.width, pf.height, alpha=135, blur=32, drop=16, w=0.98)
         cv.alpha_composite(pf, (px, py))
         dr = ImageDraw.Draw(cv)
-        _brand_minimal(dr)
+        _brand_minimal(dr, dark=_SPOT_LIGHT)
         # 2026-11-06 用户令「蓝底都是对的，聚光的字怎么就不对了 / 难道聚光就不能跟他一样」：
         # 聚光大字改成跟蓝底同源——取 kitset 那两句（line1 / line2 去型号段），
         # 不再用软件条目标题（那是表格字段，可能带 #N/A、描述尾，跟蓝底口径分叉）。
@@ -785,7 +809,7 @@ def img2(front, out):                 # 机器图（深色，同色系）
         halo(cv, px, py, pf.width, pf.height, strength=32, blur=60, m=190, col=(210, 222, 240))
         soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=34, drop=26, w=0.98)
         cv.alpha_composite(pf, (px, py))
-        _brand_minimal(dr)
+        _brand_minimal(dr, dark=_SPOT_LIGHT)
         return save(cv, out / "2_机器图.jpg")
     cv = prep_bg("char").convert("RGBA")
     dr = ImageDraw.Draw(cv)
@@ -817,6 +841,32 @@ def img2(front, out):                 # 机器图（深色，同色系）
 
 
 def img3(angle, out):                 # 立体角度
+    if GEN_POP:
+        # 聚光·立体角度（纸感白浅底版，2026-11-13 换底配套）：版式同构、文字深色。
+        # halo 去掉——浅底上加亮无意义；尺寸条换浅米条+深金描边。
+        # wm_paper 缺失时（_SPOT_LIGHT=False）_spot_bg 回退深底，颜色随之回退白字。
+        cv = _spot_bg().convert("RGBA")
+        dr = ImageDraw.Draw(cv)
+        _t1 = INK_TXT if _SPOT_LIGHT else TX1
+        _t2 = SUB_TXT if _SPOT_LIGHT else TX2
+        T(dr, (W // 2, 74), P['angle_title'], 38, _t1, "mm")
+        T(dr, (W // 2, 118), P['angle_sub'], 20, _t2, "mm")
+        pf, px, py = place_band(cv, angle, 158, 852, maxw=1010)
+        soft_shadow(cv, px, py, pf.width, pf.height, alpha=90, blur=34, drop=24, w=0.98)
+        cv.alpha_composite(pf, (px, py))
+        bx0, by0, bw_, bh_ = 56, 886, W - 112, 116
+        if _SPOT_LIGHT:
+            dim(cv, (bx0, by0, bx0 + bw_, by0 + bh_), (255, 254, 250), 170, radius=18)
+            dr.rounded_rectangle([bx0, by0, bx0 + bw_, by0 + bh_], 18, outline=(176, 141, 73, 150), width=2)
+        else:
+            dim(cv, (bx0, by0, bx0 + bw_, by0 + bh_), (10, 12, 16), 224, radius=18)
+            dr.rounded_rectangle([bx0, by0, bx0 + bw_, by0 + bh_], 18, outline=(255, 225, 90, 140), width=2)
+        _s1 = 25 if dr.textlength(P['dim1'], font=font(25, True)) <= bw_ - 60 else 21
+        T(dr, (W // 2, by0 + 42), P['dim1'], _s1, _t1, "mm")
+        _s2 = 21 if dr.textlength(P['dim2'], font=font(21, True)) <= bw_ - 60 else 18
+        T(dr, (W // 2, by0 + 82), P['dim2'], _s2, _t2, "mm")
+        T(dr, (W // 2, 1046), f"{P['brand']} {P['model']} · {P['tag']} · 全新机", 22, _t2, "mm")
+        return save(cv, out / "3_立体角度.jpg")
     cv = prep_bg("char").convert("RGBA")
     dr = ImageDraw.Draw(cv)
     T(dr, (W // 2, 74), P['angle_title'], 38, TX1, "mm")
@@ -851,11 +901,12 @@ def img4(front, out):                 # 核心参数
         halo(cv, px, py, pf.width, pf.height, strength=30, blur=58, m=185, col=(205, 220, 245))
         soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=30, drop=16, w=0.9)
         cv.alpha_composite(pf, (px, py))
-        T(dr, (72, 110), "机器参数", 50, TX1, "lm")
-        dr.line([(74, 176), (218, 176)], fill=GOLD, width=4)
+        T(dr, (72, 110), "机器参数", 50, INK_TXT if _SPOT_LIGHT else TX1, "lm")
+        dr.line([(74, 176), (218, 176)],
+                fill=(176, 141, 73) if _SPOT_LIGHT else GOLD, width=4)
         y = 236
         for k, v in _spot_param_items()[:6]:
-            T(dr, (76, y), k, 23, "#969eaa", "lm")
+            T(dr, (76, y), k, 23, "#6b7280" if _SPOT_LIGHT else "#969eaa", "lm")
             # 长值循环缩字号到装得下（2026-10-29 LTD-575WDS9U1 气候类型 25 字实锤：
             # 只缩一档 34→26 仍溢出压线压图）；16px 仍装不下就截断加省略号
             _s = 34
@@ -866,8 +917,9 @@ def img4(front, out):                 # 核心参数
                 while _sv and dr.textlength(_sv + "…", font=font(16, True)) > 460:
                     _sv = _sv[:-1]
                 _sv += "…"
-            T(dr, (76, y + 36), _sv, _s, "#ffffff", "lm")
-            dr.line([(76, y + 96), (520, y + 96)], fill=(255, 255, 255, 36), width=1)
+            T(dr, (76, y + 36), _sv, _s, INK_TXT if _SPOT_LIGHT else "#ffffff", "lm")
+            dr.line([(76, y + 96), (520, y + 96)],
+                    fill=(60, 64, 72, 40) if _SPOT_LIGHT else (255, 255, 255, 36), width=1)
             y += 126
         T(dr, (76, 1012), P['model'], 24, "#78808c", "lm")
         return save(cv, out / "4_核心参数.jpg")
@@ -916,11 +968,16 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
     官方尺寸线稿垫白色圆角卡居中；**不带蓝底那排「同时支持」卖点胶囊**。
     没官方图 → 暗底手绘线框标真实尺寸；连尺寸都没有 → 一句话兜底（绝不瞎编）。"""
     dst = out / "5_尺寸图.jpg"
+    # 纸感白浅底配色（2026-11-13 换底配套）：wm_paper 缺失时全部回退旧深底白字
+    _t1 = INK_TXT if _SPOT_LIGHT else TX1
+    _t2 = SUB_TXT if _SPOT_LIGHT else "#aab2be"
+    _t2b = SUB_TXT if _SPOT_LIGHT else TX2
+    _gold = (176, 141, 73) if _SPOT_LIGHT else (255, 205, 60)
     cv = _spot_bg(cy=430)
     _ground_glow(cv, 900)
     dr = ImageDraw.Draw(cv)
-    T(dr, (W // 2, 96), "产 品 尺 寸", 46, TX1, "mm")
-    dr.rounded_rectangle([W // 2 - 64, 142, W // 2 + 64, 148], 3, fill=(255, 205, 60, 230))
+    T(dr, (W // 2, 96), "产 品 尺 寸", 46, _t1, "mm")
+    dr.rounded_rectangle([W // 2 - 64, 142, W // 2 + 64, 148], 3, fill=_gold + (230,))
     si = None; pills = []; dims = None
     try:
         import kitset
@@ -988,36 +1045,36 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
             g = g.resize((tw, th), Image.LANCZOS)
             alpha = g.point(lambda v: min(255, max(0, (225 - v) * 255 // 150)))
             alpha = alpha.point(lambda v: min(255, int(v * 1.45)))
-            white = Image.new("RGBA", g.size, (238, 242, 248, 0))
+            white = Image.new("RGBA", g.size, (47, 53, 64, 0) if _SPOT_LIGHT else (238, 242, 248, 0))  # 浅底深线稿
             white.putalpha(alpha)
             cv.alpha_composite(white, ((W - tw) // 2, 170 + max(0, (600 - th) // 2)))
         except Exception:
             pass
         if dims:
             Wd, Hd, Dd = dims
-            T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, TX1, "mm")
-            T(dr, (W // 2, 972), "宽 %s mm · 高 %s mm · 深 %s mm" % (Wd, Hd, Dd), 25, "#aab2be", "mm")
+            T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, _t1, "mm")
+            T(dr, (W // 2, 972), "宽 %s mm · 高 %s mm · 深 %s mm" % (Wd, Hd, Dd), 25, _t2, "mm")
         else:
-            T(dr, (W // 2, 940), "%s %s" % (P['brand'], P['model']), 30, TX1, "mm")
+            T(dr, (W // 2, 940), "%s %s" % (P['brand'], P['model']), 30, _t1, "mm")
         return save(cv, dst)
     if dims:
         # 暗底手绘线框：正视图+宽高金色标注，深度一句话（几何同蓝底、线条改浅色）
         Wd, Hd, Dd = dims
 
         def _dl(x1, y1, x2, y2, label, vert=False):
-            dr.line([x1, y1, x2, y2], fill=(255, 205, 60, 220), width=2)
+            dr.line([x1, y1, x2, y2], fill=_gold + (220,), width=2)
             if vert:
-                dr.line([x1 - 8, y1, x1 + 8, y1], fill=(255, 205, 60, 220), width=2)
-                dr.line([x2 - 8, y2, x2 + 8, y2], fill=(255, 205, 60, 220), width=2)
+                dr.line([x1 - 8, y1, x1 + 8, y1], fill=_gold + (220,), width=2)
+                dr.line([x2 - 8, y2, x2 + 8, y2], fill=_gold + (220,), width=2)
                 T(dr, (x1 + 18, (y1 + y2) // 2), label, 26, TX1, "lm")
             else:
-                dr.line([x1, y1 - 8, x1, y1 + 8], fill=(255, 205, 60, 220), width=2)
-                dr.line([x2, y2 - 8, x2, y2 + 8], fill=(255, 205, 60, 220), width=2)
+                dr.line([x1, y1 - 8, x1, y1 + 8], fill=_gold + (220,), width=2)
+                dr.line([x2, y2 - 8, x2, y2 + 8], fill=_gold + (220,), width=2)
                 T(dr, ((x1 + x2) // 2, y1 - 20), label, 26, TX1, "mb")
 
         # 2026-11-04 用户实锤（HP-35）：有机图却画通用矩形，观感太糙——
         # 优先拿机图描浅色线稿当正视图，宽高标注跟着线稿实际边界走
-        sk = _sketch_rgba(front) if front else None
+        sk = (_sketch_rgba(front, color=(28, 30, 34)) if _SPOT_LIGHT else _sketch_rgba(front)) if front else None
         if sk is not None:
             sc = min(720 / max(1, sk.width), 540 / max(1, sk.height))
             tw = max(1, int(sk.width * sc))
@@ -1032,11 +1089,11 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
             fh = 470; fw = max(70, int(Wd / float(Hd) * fh))
             fx, fy = (W - fw) // 2 - 50, 286
             dr.rounded_rectangle([fx, fy, fx + fw, fy + fh], 12,
-                                 outline=(225, 232, 242, 230), width=3)
+                                 outline=(150, 156, 168, 230) if _SPOT_LIGHT else (225, 232, 242, 230), width=3)
             _dl(fx, fy - 46, fx + fw, fy - 46, "%s mm" % Wd)
             _dl(fx + fw + 46, fy, fx + fw + 46, fy + fh, "%s mm" % Hd, vert=True)
         T(dr, (W // 2, fy + fh + 72) if sk is None else (W // 2, 862),
-          "深 %s mm · 外形尺寸以实物为准" % Dd, 27, TX2, "mm")
+          "深 %s mm · 外形尺寸以实物为准" % Dd, 27, _t2b, "mm")
         # 2026-10-29 用户令「官网那么多参数又不会写」：手绘卡别光秃秃仨数字，
         # 底部对齐官方线稿分支版式（918 品牌型号 / 972 真参数行，只挑真参数绝不编）
         _kv = []
@@ -1050,30 +1107,30 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
                     _kv.append("%s %s" % (k, v))
         except Exception:
             _kv = []
-        T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, TX1, "mm")
+        T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, _t1, "mm")
         if _kv:
             _pt = " · ".join(_kv)
             _ps = 23 if dr.textlength(_pt, font=font(23, True)) <= W - 120 else 19
-            T(dr, (W // 2, 972), _pt, _ps, "#aab2be", "mm")
+            T(dr, (W // 2, 972), _pt, _ps, _t2, "mm")
         return save(cv, dst)
     # 没官方线稿、连尺寸数字都没有（绝不瞎编数字）：拿机图描一张浅色线稿占主位，
     # 底部品牌型号+一句话兜底（2026-10-28 用户令「没有尺寸的你就画一个」）
-    sk = _sketch_rgba(front) if front else None
+    sk = (_sketch_rgba(front, color=(28, 30, 34)) if _SPOT_LIGHT else _sketch_rgba(front)) if front else None
     if sk is not None:
         sc = min(840 / max(1, sk.width), 620 / max(1, sk.height))
         tw = max(1, int(sk.width * sc))
         th = max(1, int(sk.height * sc))
         sk = sk.resize((tw, th), Image.LANCZOS)
         cv.alpha_composite(sk, ((W - tw) // 2, 170 + max(0, (600 - th) // 2)))
-    T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, TX1, "mm")
+    T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, _t1, "mm")
     # 灶具式两段真数据上卡（2026-10-29 JZT-QHA7BE9 实锤：官网有 台面/挖孔 却只落一句空话）
     _stove_pills = [p for p in (pills or []) if re.search(r"\d", str(p))]
     if _stove_pills:
         _pt = " · ".join(_stove_pills)
         _ps = 26 if dr.textlength(_pt, font=font(26, True)) <= W - 120 else 21
-        T(dr, (W // 2, 972), _pt, _ps, "#aab2be", "mm")
+        T(dr, (W // 2, 972), _pt, _ps, _t2, "mm")
     else:
-        T(dr, (W // 2, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格", 24, TX2, "mm")
+        T(dr, (W // 2, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格", 24, _t2b, "mm")
     return save(cv, dst)
 
 
