@@ -575,38 +575,178 @@ def _xinsheng_fallback(model, d, log, prog=None):
             "cat": _cat, "dir": d, "imgs": imgs, "source": "欣盛商城"}
 
 
+def _parse_prop_lines(txt, props, seen):
+    """视觉回答 → [(参数名, 值)]。「参数名:值」与商汤爱输出的 markdown 表格
+    「| 参数名 | 值 |」都收；营销长句、超长值、重复项丢弃。原地追加。"""
+    for ln in (txt or "").splitlines():
+        ln = ln.strip()
+        if ln.startswith("|") and ln.count("|") >= 2:
+            cells = [c.strip() for c in ln.strip("|").split("|")]
+            if len(cells) >= 2 and cells[0] and not set(cells[0]) <= set("-: "):
+                k, v = cells[0], cells[1]
+            else:
+                continue    # 表头分隔行 |---|---|
+        else:
+            ln = ln.strip("-•·").replace("：", ":", 1)
+            if ":" not in ln:
+                continue
+            k, v = ln.split(":", 1)
+        k = re.sub(r"^\d+[\.、\)]\s*", "", k).strip()
+        v = v.strip().strip("。；;|")
+        # 型号 OCR 易抄错（实测 1BE5R↔18ER5），软件本来就知道型号，读了反而添乱
+        if k in ("产品型号", "型号", "规格型号") or "型号" in k:
+            continue
+        if not k or not v or len(k) > 14 or len(v) > 40:
+            continue
+        if (k, v) not in seen:
+            seen.add((k, v))
+            props.append((k, v))
+
+
+def _ai_props_from_images(model, log):
+    """官网抓不到参数时，把 kitset 详情图拼一版喂视觉 AI **直接**读参数
+    （2026-11-13 用户令「抓取不到数据就拼成一版让AI去读取」+「不能直接在拼好的
+    里面直接提取嘛」；JSLQ32-18ER5PRODRTGU1 实锤：官网无参数表，识货详情图
+    02.jpg 自带完整规格表，拼图直接读出 8 条）。
+    两级：拼图一次调用直接提取 → 读空才逐张原图兜底（前 3 张）。
+    返回 [(k, v)]（可能空）；视觉不可用/解析不出返回 []，不拦出图。"""
+    try:
+        import kitset as _ks
+        import pei_core
+        from PIL import Image, ImageDraw, ImageFont
+        nm = _ks.norm_model(model)
+        cands = []
+        for sub in ("官网", "欣盛"):
+            dd = os.path.join(_ks.kit_root(), nm, sub)
+            if os.path.isdir(dd):
+                for f in sorted(os.listdir(dd)):
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")) and not f.startswith("_"):
+                        cands.append(os.path.join(dd, f))
+            if cands:
+                break
+        if not cands:
+            return []
+        cands = cands[:8]
+        if log:
+            log("AI 读图参数：%d 张详情图参与" % len(cands))
+        props, seen = [], set()
+
+        # ---- 第 1 级：拼一版，1 次调用直接提取
+        if len(cands) >= 3:
+            try:
+                tiles = []
+                for p in cands:
+                    t = _ks._flat_white(Image.open(p)).convert("RGB")
+                    t.thumbnail((640, 640), Image.LANCZOS)
+                    tiles.append(t)
+                COLS = 4
+                ROWS = max(1, (len(tiles) + COLS - 1) // COLS)
+                cw = max(t.width for t in tiles) + 8
+                ch = max(t.height for t in tiles) + 30
+                board = Image.new("RGB", (cw * COLS, ch * ROWS), "white")
+                dr = ImageDraw.Draw(board)
+                try:
+                    fnt = ImageFont.truetype(r"C:\Windows\Fonts\arialbd.ttf", 26)
+                except Exception:
+                    fnt = ImageFont.load_default()
+                for i, t in enumerate(tiles):
+                    r, c = divmod(i, COLS)
+                    x, y = c * cw, r * ch
+                    board.paste(t, (x + (cw - t.width) // 2, y + 28 + (ch - 28 - t.height) // 2))
+                    dr.rectangle([x, y, x + 46, y + 27], fill=(200, 0, 0))
+                    dr.text((x + 12, y + 1), str(i + 1), fill="white", font=fnt)
+                buf = io.BytesIO()
+                board.save(buf, "JPEG", quality=88)
+                du = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+                txt = pei_core._vision_call(_ks._vision_key(), du,
+                    "这张大图里有 %d 个红色数字编号的格子，每格是一张家电产品详情图。"
+                    "凡印有「产品参数/规格」的格子（参数表格、规格表、成段的参数名+数值文字），"
+                    "把其中的参数逐条列出，每行格式严格为「参数名:值」（如「额定热负荷:32.0kW」）。"
+                    "多个格子的参数合并连续输出；只输出图中明确印出的参数，不要编造；"
+                    "纯产品照片、卖点海报、场景图里的宣传语和大数字（省多少钱、节能百分比）不要输出。"
+                    "整张图里没有任何参数就只输出两个字：无"
+                    % len(tiles), log=log)
+                if txt and txt.strip()[:1] != "无":
+                    _parse_prop_lines(txt, props, seen)
+                if log:
+                    log("AI 读图参数：拼图直接读出 %d 条" % len(props))
+            except Exception as e:
+                if log:
+                    log("AI 读图参数：拼图提取失败（%s），退回逐张读" % e)
+
+        # ---- 第 2 级：拼图没读出 → 逐张原图高清兜底（前 3 张）
+        if not props:
+            for i in range(min(3, len(cands))):
+                try:
+                    im = Image.open(cands[i]).convert("RGB")
+                    im.thumbnail((1100, 1100), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    im.save(buf, "JPEG", quality=90)
+                    du = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+                    txt = pei_core._vision_call(_ks._vision_key(), du,
+                        "这是家电产品详情图。把图中印出的「产品参数/规格」逐条列出，"
+                        "每行格式严格为「参数名:值」，例如「额定热负荷:32.0kW」。"
+                        "只输出图中明确印出的参数表格/规格文字，不要编造；"
+                        "宣传卖点、省多少钱、节能百分比这类营销数字不要输出。"
+                        "图中没有参数信息就只输出两个字：无", log=log)
+                    if not txt or txt.strip()[:1] == "无":
+                        continue
+                    _parse_prop_lines(txt, props, seen)
+                except Exception as e:
+                    if log:
+                        log("AI 读图参数：第 %d 张读取失败（%s）" % (i + 1, e))
+            if log and props:
+                log("AI 读图参数：逐张兜底读出 %d 条" % len(props))
+        return props[:14]
+    except Exception as e:
+        if log:
+            log("AI 读图参数不可用（%s）" % e)
+        return []
+
+
 def _backfill_empty_props(model, info, log):
     """空壳 info（props=0）时官网参数表补抓一次（2026-11-12 ES60H-Q3白 实锤）：
     图库复用链给的 info 无 url 无 props，原有补抓条件「props 空 且 有 url」永远
     不成立，聚光参数页只剩兜底一条。fetch_official 的 groups→props 组装同
-    kitset._gather_info；抓到就 _save_info 落盘（下次免抓）；抓不到仍用原数据出图。"""
+    kitset._gather_info；抓到就 _save_info 落盘（下次免抓）。
+    官网也没有参数 → 拼详情图喂视觉 AI 读参数（2026-11-13 用户令，JSLQ32 实锤）；
+    两级都空仍用原数据出图，不拦。"""
     if not isinstance(info, dict) or (info.get("props") or []):
         return info
+    _props = []
     try:
         import kitset as _ks0
         _data = _ks0.fetch_official(model, log=log)
-        _props = []
         for _src in ((_data or {}).get("groups") or []):
             for _k, _v in ((_src[1] or []) if len(_src) > 1 else []):
                 if str(_k).strip() and str(_v).strip() and (str(_k), str(_v)) not in _props:
                     _props.append((str(_k), str(_v)))
         if _props:
-            info["props"] = _props
             if (_data or {}).get("url") and not info.get("url"):
                 info["url"] = _data["url"]
             if (_data or {}).get("title") and not str(info.get("title") or "").strip():
                 info["title"] = _data["title"]
             if (_data or {}).get("brand") and not str(info.get("brand") or "").strip():
                 info["brand"] = _data["brand"]
-            try:
-                _save_info(info)
-                log("空参数补抓：官网 %d 条参数已落 info.json" % len(_props))
-            except Exception:
-                pass
+            log("空参数补抓：官网 %d 条参数" % len(_props))
         else:
-            log("官网参数表也没有这个型号的参数，继续用现有数据出图")
+            log("官网参数表没有这个型号的参数，改读详情图")
     except Exception as e:
-        log("空参数补抓失败（%s），仍用原数据出图" % e)
+        log("官网参数补抓失败（%s），改读详情图" % e)
+    if not _props:
+        try:
+            _props = _ai_props_from_images(model, log)
+        except Exception as e:
+            log("AI 读图参数失败（%s）" % e)
+    if _props:
+        info["props"] = _props
+        try:
+            _save_info(info)
+            log("空参数兜底：%d 条参数已落 info.json" % len(_props))
+        except Exception:
+            pass
+    else:
+        log("详情图也没读出参数，继续用现有数据出图")
     return info
 
 
