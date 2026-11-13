@@ -496,8 +496,11 @@ def soft_shadow(cv, px, py, pw, ph, alpha=90, blur=26, drop=20, w=0.9, col=(10, 
         return
     if GEN_STYLE == "pure":           # 纯白底：机器用浅灰投影才立体（深投影会成黑圈）
         col = (150, 155, 162); alpha = min(78, alpha)
-    elif GEN_POP:                     # 机器更显眼：投影更重、更柔、更大
-        alpha = min(215, alpha + 25); blur = min(60, blur + 8); drop = min(40, drop + 8)
+    elif GEN_POP:
+        if _SPOT_LIGHT:               # 纸感白浅底：同纯白底改浅灰柔投影——深投影(10,10,12)在浅底上糊成灰脏块（2026-11-13 用户截图反馈）
+            col = (168, 172, 180); alpha = min(80, alpha); blur = min(46, blur); drop = min(30, drop)
+        else:                         # 机器更显眼：投影更重、更柔、更大
+            alpha = min(215, alpha + 25); blur = min(60, blur + 8); drop = min(40, drop + 8)
     sh = Image.new("RGBA", (max(pw, 8), 110), (0, 0, 0, 0))
     ImageDraw.Draw(sh).ellipse([pw * (0.5 - w / 2), 0, pw * (0.5 + w / 2), 64], fill=col + (alpha,))
     sh = sh.filter(ImageFilter.GaussianBlur(blur))
@@ -887,11 +890,13 @@ def img3(angle, out):                 # 立体角度
 
 
 def img4(front, out):                 # 核心参数
+    _noshadow = (lambda *a, **k: None) if _SPOT_LIGHT else soft_shadow   # 纸感白浅底：本张投影整个去掉（2026-11-13 用户令）
     if GEN_POP:
         # 聚光·机器参数（2026-10-28 样张定稿 C1v2）：干净聚光底（光心偏右），左上
         # 标题+金线，左侧官网真参数列表（最多 6 条），右侧机器，底部型号。
         cv = _spot_bg(cx=760, cy=520)
-        _ground_glow(cv, 950, rx=330)
+        if not _SPOT_LIGHT:
+            _ground_glow(cv, 950, rx=330)
         dr = ImageDraw.Draw(cv)
         # 机器放右侧区（x 560~1030）内自适应居中——横宽机型（热水器）也绝不越界出画
         # （2026-10-28 用户实锤：px 写死 640 + 热水器 560 宽 → 右半截出画）。
@@ -899,7 +904,7 @@ def img4(front, out):                 # 核心参数
         px = 560 + max(0, (470 - pf.width) // 2)
         px = min(px, W - 50 - pf.width)
         halo(cv, px, py, pf.width, pf.height, strength=30, blur=58, m=185, col=(205, 220, 245))
-        soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=30, drop=16, w=0.9)
+        _noshadow(cv, px, py, pf.width, pf.height, alpha=120, blur=30, drop=16, w=0.9)
         cv.alpha_composite(pf, (px, py))
         T(dr, (72, 110), "机器参数", 50, INK_TXT if _SPOT_LIGHT else TX1, "lm")
         dr.line([(74, 176), (218, 176)],
@@ -933,7 +938,7 @@ def img4(front, out):                 # 核心参数
     pf, px, py = place_band(cv, front, 200, 946, maxw=420)
     px = 30 + (420 - pf.width) // 2
     halo(cv, px, py, pf.width, pf.height, strength=30, blur=58, m=185, col=(205, 220, 245))
-    soft_shadow(cv, px, py, pf.width, pf.height, alpha=120, blur=30, drop=16, w=0.9)
+    _noshadow(cv, px, py, pf.width, pf.height, alpha=120, blur=30, drop=16, w=0.9)
     cv.alpha_composite(pf, (px, py))
     cw, ch, gx, gy = 272, 190, 18, 24
     x0 = 490; y0 = 244
@@ -967,6 +972,7 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
     """聚光第 4 张：产品尺寸——底图跟首图/机器参数同款暗色聚光（prep_bg("a")），
     官方尺寸线稿垫白色圆角卡居中；**不带蓝底那排「同时支持」卖点胶囊**。
     没官方图 → 暗底手绘线框标真实尺寸；连尺寸都没有 → 一句话兜底（绝不瞎编）。"""
+    _noshadow = (lambda *a, **k: None) if _SPOT_LIGHT else soft_shadow   # 纸感白浅底：本张投影整个去掉（2026-11-13 用户令）
     dst = out / "5_尺寸图.jpg"
     # 纸感白浅底配色（2026-11-13 换底配套）：wm_paper 缺失时全部回退旧深底白字
     _t1 = INK_TXT if _SPOT_LIGHT else TX1
@@ -974,7 +980,8 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
     _t2b = SUB_TXT if _SPOT_LIGHT else TX2
     _gold = (176, 141, 73) if _SPOT_LIGHT else (255, 205, 60)
     cv = _spot_bg(cy=430)
-    _ground_glow(cv, 900)
+    if not _SPOT_LIGHT:
+        _ground_glow(cv, 900)
     dr = ImageDraw.Draw(cv)
     T(dr, (W // 2, 96), "产 品 尺 寸", 46, _t1, "mm")
     dr.rounded_rectangle([W // 2 - 64, 142, W // 2 + 64, 148], 3, fill=_gold + (230,))
