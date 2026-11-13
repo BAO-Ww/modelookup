@@ -116,6 +116,37 @@ async function getJSON(env, key, fallback) {
     return fallback;
   }
 }
+// ---------------- KV 隔离缓存（2026-11-13 读额度整改） ----------------
+// 免费版 KV 读 10 万/天：多客户端 60s 轮询 /diag /stockmeta /xlsxmeta，每请求现读
+// users+maintenance+业务键，实测一天烧 6 万次读触发 CF 警报。这些键本来就低频变更
+// （users 改号才动 / stocklive 每小时跑批 / cronlog 一班一条），加 isolate 内 TTL
+// 缓存砍 ~90% 读。写路径全部同步失效；跨 isolate / 边缘节点最多 TTL 内旧值
+// （users 90s：新建账号后立刻换机登录，极端情况要等一分半）。
+const _KVC = new Map();   // 解析值缓存：key -> {exp,v}；裸字符串用 "#raw:"+key
+const KV_TTL = { users: 90000, stocklive: 300000, xlsxm: 120000, cronlog: 120000,
+                 maintenance: 300000, aikeys: 300000, mpayload: 300000, mhtml: 300000 };
+function kvInval(key) { _KVC.delete(key); _KVC.delete("#raw:" + key); }
+async function getJSONc(env, key, fallback) {
+  const ttl = KV_TTL[key] || 0;
+  if (ttl) {
+    const hit = _KVC.get(key);
+    if (hit && hit.exp > Date.now()) return hit.v;
+  }
+  const v = await getJSON(env, key, fallback);
+  if (ttl) _KVC.set(key, { exp: Date.now() + ttl, v: v });
+  return v;
+}
+async function kvGetc(env, key) {
+  const ck = "#raw:" + key;
+  const ttl = KV_TTL[key] || 0;
+  if (ttl) {
+    const hit = _KVC.get(ck);
+    if (hit && hit.exp > Date.now()) return hit.v;
+  }
+  const v = await env.KV.get(key);
+  if (ttl) _KVC.set(ck, { exp: Date.now() + ttl, v: v });
+  return v;
+}
 // ---------------- D1：pub_/pubp_ 存取层（2026-10-15 迁移） ----------------
 // KV 免费版写 1000/天被批量操作打爆（10-14 迁移 32 并发丢 16 条实锤），且 KV 无原子读改写。
 // pub_/pubp_（发布记录/价格镜像，高频写）迁 D1：免费 10 万行写/天（KV 的 100 倍），
@@ -483,10 +514,11 @@ async function checkToken(env, token, users) {
 // ---------------- KV helpers ----------------
 const K_USERS = "users";     // { [u]: {ph, salt, role, note, disabled, perm, pv} }
 async function getUsers(env) {
-  return getJSON(env, K_USERS, {});
+  return getJSONc(env, K_USERS, {});
 }
 async function putUsers(env, users) {
   await env.KV.put(K_USERS, JSON.stringify(users));
+  kvInval(K_USERS);
 }
 // ---------------- 密码加固（2026-10-13，免费档方案） ----------------
 // 裸 SHA-256(salt+pw) 撞库成本太低 → PBKDF2-SHA256。格式烤进 ph 字段：
@@ -566,10 +598,11 @@ async function cronDispatch(env, wf, cloud) {
 async function cronLog(env, line) {
   try {
     let lg = [];
-    try { lg = JSON.parse((await env.KV.get("cronlog")) || "[]"); } catch (e) {}
+    try { lg = JSON.parse((await kvGetc(env, "cronlog")) || "[]"); } catch (e) {}
     lg.push(line);
     while (lg.length > 40) lg.shift();
     await env.KV.put("cronlog", JSON.stringify(lg));
+    kvInval("cronlog");
   } catch (e) {}
 }
 
@@ -619,7 +652,7 @@ export default {
     // 解除：删掉 KV 里的 maintenance 键即可（运维口 /admin/restore 同权限级别，不暴露到前端）。
     if (path !== "/appcheck" && path !== "/appdl") {
       try {
-        if ((await env.KV.get("maintenance")) === "1")
+        if ((await kvGetc(env, "maintenance")) === "1")
           return jerr("系统维护中（正在升级存储），请几分钟后重试", 503);
       } catch (e) {}
     }
@@ -748,7 +781,7 @@ async function route(request, env, path, ctx) {
 
   // ---------- 手机版 H5（2026-10-12）：/m 出页面（免登录，登录框在页面里） ----------
   if (path === "/m" && request.method === "GET") {
-    const html = await env.KV.get("mhtml");
+    const html = await kvGetc(env, "mhtml");
     if (!html) return jerr("手机版还没上云", 404);
     return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", ...CORS } });
   }
@@ -758,7 +791,7 @@ async function route(request, env, path, ctx) {
   if (path === "/mpayload" && request.method === "GET") {
     const ck = env.CLOUD_KEY;
     if (ck && (request.headers.get("X-Cloud-Key") || "") === ck) {
-      const v0 = await env.KV.get("mpayload");
+      const v0 = await kvGetc(env, "mpayload");
       if (!v0) return jerr("手机端数据还没上云", 404);
       return new Response(v0, { headers: { "Content-Type": "application/json; charset=utf-8", ...CORS } });
     }
@@ -919,6 +952,7 @@ async function route(request, env, path, ctx) {
         return jerr("快照里「" + u0 + "」缺 ph/salt，拒绝整包恢复（不覆盖现有账本）");
     }
     await env.KV.put(K_USERS, JSON.stringify(usersObj));
+    kvInval(K_USERS);
     await env.KV.put("inited", "1");
     let nBiz = 0;
     if (extra) {
@@ -972,7 +1006,7 @@ async function route(request, env, path, ctx) {
   // GET  /aikey        Header: X-Token → {ok, sf, glm, sn, ts}
   // POST /admin/aikey  {sf, glm, sn}，仅管理号；字段传空=保留原值
   if (path === "/aikey" && request.method === "GET") {
-    const ak = await getJSON(env, "aikeys", {});
+    const ak = await getJSONc(env, "aikeys", {});
     if (!ak.sf && !ak.glm && !ak.sn) return jerr("云端还没配 AI 密钥", 404);
     return J({ ok: true, sf: ak.sf || "", glm: ak.glm || "", sn: ak.sn || "", ts: ak.ts || 0 });
   }
@@ -981,11 +1015,11 @@ async function route(request, env, path, ctx) {
     const me = users[who];
     if (!me || me.role !== "admin") return jerr("只有管理号能改", 403);
     const b = await request.json().catch(() => ({}));
-    const cur = await getJSON(env, "aikeys", {});
+    const cur = await getJSONc(env, "aikeys", {});
     const sf = String(b.sf || "").trim() || cur.sf || "";
     const glm = String(b.glm || "").trim() || cur.glm || "";
     const sn = String(b.sn || "").trim() || cur.sn || "";
-    try { await env.KV.put("aikeys", JSON.stringify({ sf, glm, sn, ts: Date.now() })); }
+    try { await env.KV.put("aikeys", JSON.stringify({ sf, glm, sn, ts: Date.now() })); kvInval("aikeys"); }
     catch (e) { return jerr("写 KV 失败：" + e.message, 500); }
     return J({ ok: true, sf: sf.slice(0, 6) + "…" + sf.slice(-4),
                glm: glm.slice(0, 6) + "…", sn: sn.slice(0, 6) + "…" });
@@ -1564,7 +1598,7 @@ async function route(request, env, path, ctx) {
   // GET：登录用户读手机端 payload（{meta,rows,imgs}，CI 每轮金山任务重建上传）。
   // POST：管理号/C-I 上传；内容没变不写 KV（省写额度）；单值上限 24MB。
   if (path === "/mpayload" && request.method === "GET") {
-    const v = await env.KV.get("mpayload");
+    const v = await kvGetc(env, "mpayload");
     if (!v) return jerr("手机端数据还没上云", 404);
     return new Response(v, { headers: { "Content-Type": "application/json; charset=utf-8", ...CORS } });
   }
@@ -1576,8 +1610,9 @@ async function route(request, env, path, ctx) {
     let obj; try { obj = JSON.parse(raw); } catch (e) { return jerr("不是合法 JSON"); }
     if (!obj || !Array.isArray(obj.rows)) return jerr("缺 rows，拒收");
     const mb = Math.round(raw.length / 1048576 * 10) / 10;
-    if ((await env.KV.get("mpayload")) === raw) return J({ ok: true, changed: false, mb });
+    if ((await kvGetc(env, "mpayload")) === raw) return J({ ok: true, changed: false, mb });
     await env.KV.put("mpayload", raw);
+    kvInval("mpayload");
     return J({ ok: true, changed: true, rows: obj.rows.length, mb });
   }
 
@@ -1589,6 +1624,7 @@ async function route(request, env, path, ctx) {
     if (!b || typeof b.html !== "string" || !b.html) return jerr("html 字段不对");
     if (b.html.length > 1000000) return jerr("html 太大（" + Math.round(b.html.length / 1024) + "KB）");
     await env.KV.put("mhtml", b.html);
+    kvInval("mhtml");
     return J({ ok: true, kb: Math.round(b.html.length / 1024) });
   }
 
@@ -1725,11 +1761,12 @@ async function route(request, env, path, ctx) {
     const payload = JSON.stringify(obj);
     if (payload.length > 3000000) return jerr("库存数据过大（" + (payload.length / 1048576).toFixed(1) + "MB），拒收", 413);
     await env.KV.put("stocklive", payload);
+    kvInval("stocklive");
     return J({ ok: true, mb: Math.round(payload.length / 1048576 * 10) / 10,
                n: Object.keys(b.stock).length });
   }
   if (path === "/stockcloud" && request.method === "GET") {
-    const obj = await getJSON(env, "stocklive", null);
+    const obj = await getJSONc(env, "stocklive", null);
     if (!obj) return jerr("云端还没有共享库存（管理号更新一次后这里就有了）", 404);
     return J({ ok: true, ts: obj.ts, rows: obj.rows, stock: obj.stock, sbc: obj.sbc || null,
                mo2meta: obj.mo2meta || null, by: obj.by });
@@ -1756,7 +1793,7 @@ async function route(request, env, path, ctx) {
     } catch (e) { return false; }
   }
   if (path === "/stockmeta" && request.method === "GET") {
-    const obj = await getJSON(env, "stocklive", null);
+    const obj = await getJSONc(env, "stocklive", null);
     if (!obj) return J({ ok: true, ts: "", rows: 0 });
     if (ctx && ctx.waitUntil && await autoKick("yy", Date.now() - (+obj.up || 0)))
       ctx.waitUntil(ghDispatch("yonyou-cloud-stock.yml"));
@@ -1860,7 +1897,7 @@ async function route(request, env, path, ctx) {
     // 2026-11-01：先读小元信息键（几十字节），读不到才回退读整包并顺手补一份，
     // 免得每台机器每 60 秒都把十几 MB 的 xlsxlive 拉一遍。
     // 2026-11-05：小键里带 fts（每个文件的内容指纹），客户端据此只拉变了的文件。
-    let obj = await getJSON(env, "xlsxm", null);
+    let obj = await getJSONc(env, "xlsxm", null);
     if (!obj) {
       const big = await getJSON(env, "xlsxlive", null);
       if (!big) return J({ ok: true, ts: "" });
@@ -2143,7 +2180,7 @@ async function route(request, env, path, ctx) {
     const kd = await ghLastRun(CI_WF.kd);
     if (!yy || !kd) return jerr("GitHub 查询失败（检查 GH_TOKEN）", 502);
     let _cronlg = [];
-    try { _cronlg = JSON.parse((await env.KV.get("cronlog")) || "[]"); } catch (e) {}
+    try { _cronlg = JSON.parse((await kvGetc(env, "cronlog")) || "[]"); } catch (e) {}
     return J({ ok: true, yy, kd, cron: _cronlg });   // cron：CF 派班日志（最近40条，方案B）
   }
 
@@ -2154,9 +2191,9 @@ async function route(request, env, path, ctx) {
     const users = await getUsers(env);
     const me = users[who] || {};
     if (me.role !== "admin") return jerr("云端体检只有管理号能看", 403);
-    const meta = (await getJSON(env, "xlsxm", null)) || {};
+    const meta = (await getJSONc(env, "xlsxm", null)) || {};
     let cronLg = [];
-    try { cronLg = JSON.parse((await env.KV.get("cronlog")) || "[]"); } catch (e) {}
+    try { cronLg = JSON.parse((await kvGetc(env, "cronlog")) || "[]"); } catch (e) {}
     let yy = null, kd = null, runner = null;
     try { [yy, kd, runner] = await Promise.all([
       ghRuns(CI_WF.yy, 6), ghRuns(CI_WF.kd, 6), cronRunnerOnline(env)]); } catch (e) {}
