@@ -1095,6 +1095,11 @@ var MYIMGS = load(IMG_KEY, {});
    「本人补的」和「管理号（sys 整库图除外）」，旧数据 __legacy__ 也只有管理号能删 */
 var MYIMGOWN = load('xy2-imgown_' + (window.__ML_U || '__anon__'), {});
 function saveMyImgOwn(){ save('xy2-imgown_' + (window.__ML_U || '__anon__'), MYIMGOWN); }
+/* 补图本地时间戳（2026-11-14）：封面打架根治用——补图/设为主图时记本地时间，
+   syncImgs 两端不一致时按「新者胜」收敛，不再无脑本地推上去（老设备残留旧图
+   会一次次把新图顶回去，ES80H-D2S 封面反复跳回实锤）。 */
+var MYIMGTS = load('xy2-imgts_' + (window.__ML_U || '__anon__'), {});
+function saveMyImgTs(){ save('xy2-imgts_' + (window.__ML_U || '__anon__'), MYIMGTS); }
 /* 成本口径（2026-10-13 用户定稿终版）：**只认云端**——口径存在发布记录 MARKED[c].cs
    里，渲染/亏钱哨兵/缺货哨兵只从 MARKED 读，本机不再存任何口径记忆。
    没发布的卡改口径 = 当场算账不落库（跟定价同款规矩）。 */
@@ -1391,12 +1396,21 @@ function syncImgs(){
         if (MYIMGS[c] !== 'hide'){ MYIMGS[c] = 'hide'; MYIMGOWN[c] = 'hide'; changed = true; }
         return;
       }
-      if (!MYIMGS[c]){ MYIMGS[c] = b; MYIMGOWN[c] = by; changed = true; }
+      if (!MYIMGS[c]){ MYIMGS[c] = b; MYIMGOWN[c] = by; if (e.t) MYIMGTS[c] = e.t; changed = true; }
       else if (MYIMGS[c] !== b){
-        imgCloudPush(c);                       // 本地不一样（可能是后来补的），把本地的推上去
+        /* 2026-11-14 根治封面打架：原来「不一样就推本地」，老设备残留的旧图会把
+           新图一次次顶回去（ES80H-D2S 封面反复跳回银色旧图实锤）。现在按时间戳
+           新者胜：云端 t 是服务端时间；本地新（或云端还是无时间戳的老迁移图）→
+           推本地，否则认云端。 */
+        var _lt = MYIMGTS[c] || 0, _ct = e.t || 0;
+        if (_lt >= _ct){
+          imgCloudPush(c);                     // 本地不比云端旧 → 推本地
+        } else {
+          MYIMGS[c] = b; MYIMGOWN[c] = by; MYIMGTS[c] = _ct; changed = true;
+        }
       }
     });
-    if (changed){ saveMyImgs(); saveMyImgOwn(); run(); }
+    if (changed){ saveMyImgs(); saveMyImgOwn(); saveMyImgTs(); run(); }
   }).catch(function(){});
 }
 var hideMarked = false;
@@ -1487,6 +1501,7 @@ function pickImage(core){
         cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height);   // 透明图补白底
         cx.drawImage(im, 0, 0, cv.width, cv.height);
         MYIMGS[core] = cv.toDataURL('image/jpeg', 0.72);
+        MYIMGTS[core] = Date.now(); saveMyImgTs();
         saveMyImgs();
         run();
         imgCloudPush(core);              // 上云：所有子账号登录都能看到这张图
@@ -9845,7 +9860,11 @@ document.addEventListener('click', function(e){
     e.preventDefault();
     var pr = el.getAttribute('data-exsetmain').split('|');
     exPost({ act: 'setmain', m: pr[0], rel: pr.slice(1).join('|') }).then(function(j){
-      if (j && j.ok){ toastMsg(j.msg || '主图换了'); openCands(pr[0]); }
+      if (j && j.ok){
+        toastMsg(j.msg || '主图换了'); openCands(pr[0]);
+        /* 2026-11-14 用户令「设为主图同步封面风险太大，不要」→ 已撤销自动同步。
+           主图只换 product.png；封面（补图 myimgs）仍由用户手动「换图」决定，两者互不越界。 */
+      }
       else alert((j && j.msg) || '换不了');
     });
     return;

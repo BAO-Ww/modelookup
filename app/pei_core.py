@@ -2138,8 +2138,9 @@ def zhipu_verify_whole(api_key, img_path=None, log=None, im=None):
             p = Path(img_path)
             if not p.is_file():
                 return None
-            # 结果缓存到同目录 _ai_verify_v1.json：{文件名: bool}，同一张图只问一次
-            cch = p.parent / "_ai_verify_v1.json"
+            # 结果缓存到同目录 _ai_verify_v2.json：{文件名: bool}，同一张图只问一次
+            # （v2：2026-11-14 问法升级+垫边裁切实锤，v1 旧答案作废）
+            cch = p.parent / "_ai_verify_v2.json"
             key = p.name
             try:
                 obj = json.loads(cch.read_text(encoding="utf-8"))
@@ -2156,20 +2157,33 @@ def zhipu_verify_whole(api_key, img_path=None, log=None, im=None):
         im.convert("RGB").save(buf, "JPEG", quality=88)
         data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
         prompt = (
-            "判断这张家电商品图：画面里是不是【完整机器】的产品照——能看到整机从头到脚的"
-            "完整轮廓（正面、侧面、斜角都算）。只拍到机器一小部分的算局部特写："
-            "比如拉开的洗涤剂抽屉、面板/顶盖一角、旋钮按键区、内筒近距离特写、"
-            "看不到机器整体外形的，都算局部特写。\n"
+            "判断这张家电商品图是不是【完整机器】的产品照。唯一标准：机器自身的外形轮廓"
+            "是否完整无缺——每个该有的部位都看得到（热水器的两个圆弧端盖、冰箱/洗衣机的"
+            "完整箱体等），机器与背景相接的边缘是机器真实的轮廓收边。\n"
+            "以下都算【局部特写】，whole 必须填 false：\n"
+            "· 只拍到机器一段/一角：机身中段、面板区域、旋钮按键、抽屉、内筒、端盖局部；\n"
+            "· 机器任何部位被画面切断：左右端被裁、顶部或底部被切平（圆筒机身两端看不出"
+            "圆弧端盖＝被裁了）；\n"
+            "· 【重点】有些裁切图会被垫上背景边框再摆回画面中央，机器四周留有背景空隙——"
+            "四周有留白≠机器完整。要看机器本身的形状：机器边缘是平直切断线而不是该有的"
+            "圆弧/收边，就是裁切图，whole=false。\n"
             "只回答一个 JSON，不要解释：{\"whole\":true} 或 {\"whole\":false}"
         )
-        txt = _vision_call(api_key, data_url, prompt, log=log)
-        m = re.search(r"\{[^{}]*\}", str(txt or ""))
+        # 废答案自动重试一次：复核原来只有一发，冷启动/抽风返回 None 就静默不拦
+        # （ES80H-D2S 实锤：复核失效 + 特写判成整机，双重漏网）
         whole = None
-        if m:
-            try:
-                whole = bool(json.loads(m.group(0)).get("whole"))
-            except Exception:
-                whole = None
+        for _attempt in (1, 2):
+            txt = _vision_call(api_key, data_url, prompt, log=log)
+            m = re.search(r"\{[^{}]*\}", str(txt or ""))
+            if m:
+                try:
+                    whole = bool(json.loads(m.group(0)).get("whole"))
+                except Exception:
+                    whole = None
+            if whole is not None:
+                break
+            if log:
+                log("AI 复核第 %d 次废答案，重试" % _attempt)
         if whole is None:
             return None     # 废答案绝不缓存（铁律），也绝不拦
         if cch is not None:
@@ -2214,7 +2228,7 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
     # cands——只要中间剔掉一张废图/海报，AI 报的编号就会映射到别的文件（选错图帮凶）。
     # 编号必须与最终候选严格一一对应，就按 cands 现取。
     names = [_rel[f] for f in cands]
-    cache = p / "_ai_pick_v6.json"   # v6：2026-11-04 局部特写铁律（抽屉特写当选 front 实锤），旧缓存作废
+    cache = p / "_ai_pick_v7.json"   # v7：2026-11-14 垫边裁切特写铁律（ES80H-D2S 实锤），旧缓存作废
     try:
         if cache.exists():
             _obj = json.loads(cache.read_text(encoding="utf-8"))
@@ -2246,7 +2260,10 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
         "哪怕整机拍得很好看也不能选，那是有字有价的广告图）；\n"
         "· 局部/部件特写图（2026-11-04 XQG110 实锤：洗涤剂抽屉特写被当成 front）："
         "只拍到机器一小部分的图——拉开的抽屉、面板/顶盖一角、旋钮按键、内筒近距离特写等，"
-        "看不到整机完整轮廓的，不是 front/angle/open 任何角色，绝不能选。\n"
+        "看不到整机完整轮廓的，不是 front/angle/open 任何角色，绝不能选。"
+        "特别注意（2026-11-14 ES80H-D2S 实锤）：有些特写是机身中段裁切后垫了背景边框的，"
+        "四周有留白但机器本身不完整——机器边缘是平直切断线、缺圆弧端盖/缺顶底的都是裁切图，"
+        "照样绝不能选。\n"
         "只回答一个 JSON，每个编号值必须是【单个数字】（如 \"front\":3），"
         "绝不要输出数组/列表：\n"
         "{\"front\":编号,\"angle\":编号,\"open\":编号,\"scene\":编号或null,"

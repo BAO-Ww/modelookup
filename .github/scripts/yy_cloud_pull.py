@@ -91,12 +91,14 @@ def login_and_fetch():
         page.wait_for_timeout(2500)
 
         # 账密表单：username + password（手机号/用户名都能走）
-        page.fill("input[name='username'], input[name='loginName']", USER, timeout=15000)
-        page.fill("input[name='password'], input[type='password']", PASS, timeout=15000)
+        # 2026-11-14 用友 CAS 改版：输入框只剩 id（#username/#password），name 属性没了——
+        # 老选择器 input[name='username'] 永远等不到 → 15s 超时 ×3 → #911-#915 全败（实锤）
+        page.fill("#username, input[name='username'], input[name='loginName']", USER, timeout=15000)
+        page.fill("#password, input[name='password'], input[type='password']", PASS, timeout=15000)
         log("账密已填，提交…")
-        # 提交按钮：submit/btn-primary/login
+        # 提交按钮：新版 CAS 是 #submit_btn_login（wui-button.login-btn）；老版选择器留着兜底
         clicked = False
-        for sel in ("button[type='submit']", "#login-btn", ".login-btn",
+        for sel in ("#submit_btn_login", "button[type='submit']", "#login-btn", ".login-btn",
                     "button.btn-primary", "input[type='submit']"):
             try:
                 b = page.locator(sel).first
@@ -111,14 +113,15 @@ def login_and_fetch():
             page.press("input[type='password']", "Enter")
         page.wait_for_timeout(6000)
 
-        # 登录成功判定：离开 cas/login；随后走 c2 → c3 SSO 链
+        # 登录成功判定：离开 CAS 域（新版是 SPA hash 路由 euc.yonyoucloud.com/cas/#/login，
+        # 字符串里根本没有 "cas/login"，老判定恒真会误判成功）；随后走 c2 → c3 SSO 链
         for _ in range(20):
             url = page.url
-            if "cas/login" not in url:
+            if "euc.yonyoucloud.com" not in url:
                 break
             page.wait_for_timeout(2000)
         log("登录后 URL:", page.url[:120])
-        if "cas/login" in page.url:
+        if "euc.yonyoucloud.com" in page.url and "#/login" in page.url:
             html = page.content()
             err = ""
             m = re.search(r"error_info\s*=\s*'([^']*)'", html)

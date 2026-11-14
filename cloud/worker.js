@@ -1529,7 +1529,7 @@ async function route(request, env, path, ctx) {
     const out = {};
     for (const [k, v] of Object.entries(raw)) {
       if (typeof v === "string") out[k] = { b: v, by: "__legacy__" };   // 旧格式兜一层
-      else if (v && typeof v === "object" && v.b) out[k] = { b: v.b, by: v.by || "__legacy__" };
+      else if (v && typeof v === "object" && v.b) out[k] = { b: v.b, by: v.by || "__legacy__", t: v.t || 0 };
     }
     return out;
   }
@@ -1548,7 +1548,9 @@ async function route(request, env, path, ctx) {
       if (!me || me.role !== "admin") return jerr("只有管理号能隐藏图", 403);
     } else if (String(b.b64).length > 400000) return jerr("图太大，压一压再传");
     const imgs = await getMyImgs(env);
-    imgs[c] = isHide ? { b: "hide", by: "hide" } : { b: String(b.b64), by: who };  // 归属 = 上传人（服务端定，不信客户端）
+    // 2026-11-14 封面打架根治：条目带服务端时间戳 t，前端 syncImgs 按「新者胜」收敛，
+    // 老设备残留的旧图不再把新图顶回去。老客户端只读 b/by，多出的 t 字段无影响。
+    imgs[c] = isHide ? { b: "hide", by: "hide", t: Date.now() } : { b: String(b.b64), by: who, t: Date.now() };  // 归属 = 上传人（服务端定，不信客户端）
     const total = JSON.stringify(imgs).length;
     if (total > 24000000) return jerr("云端补图库满了（" + Math.round(total/1048576) + "MB），清理后再传");
     await myimgsPut(env, imgs);

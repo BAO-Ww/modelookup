@@ -674,6 +674,32 @@ def set_main(model, rel):
         shutil.copy2(src, cur)
     except Exception as e:
         return {"ok": False, "msg": rep(e)}
+    # 换图必须压住 AI 选图缓存（2026-11-14 ES80H-D2S 实锤：用户换图 01.png 后，
+    # 重出时 AI 选图缓存 front=05.png 又把它选回去，「怎么又给我跳回来了」）。
+    # 把用户的选择写进各处 _ai_pick_v*.json 的 front——以后任何重选都尊重换图。
+    import glob as _glob
+    import json as _json
+    _name = os.path.basename(src)
+    for _d in {os.path.dirname(src), mdir,
+               os.path.join(mdir, "官网"), os.path.join(mdir, "欣盛")}:
+        for _cf in _glob.glob(os.path.join(_d, "_ai_pick_v*.json")):
+            try:
+                with io.open(_cf, encoding="utf-8") as _f:
+                    _obj = _json.load(_f)
+                if not isinstance(_obj, dict):
+                    continue
+                # rel 适配：缓存里的 front 是相对该缓存目录的路径（官网/01.png 或 01.png）
+                _rel = os.path.relpath(src, _d).replace("\\", "/")
+                if not os.path.isfile(os.path.join(_d, _rel)):
+                    _rel = _name
+                if not os.path.isfile(os.path.join(_d, _rel)):
+                    continue
+                if _obj.get("front") != _rel:
+                    _obj["front"] = _rel
+                    with io.open(_cf, "w", encoding="utf-8") as _f:
+                        _json.dump(_obj, _f, ensure_ascii=False)
+            except Exception:
+                pass
     log("img", model, "换了主图：" + rel)
     return {"ok": True, "msg": "主图换成 " + rel + "（重出一张/整套才生效）"}
 

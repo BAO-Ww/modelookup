@@ -77,7 +77,10 @@ def yy_call(win, page_index, page_size=YY_PAGE_SIZE):
 
 def yy_on_login_page(win):
     u = str(js_eval(win, "location.href", "") or "")
-    return ("cas/login" in u) or ("c2.yonyoucloud.com" in u and "/login" in u)
+    # 2026-11-14 用友 CAS 改版 SPA hash 路由：euc.yonyoucloud.com/cas/#/login（没有 "cas/login" 字样）
+    return (("cas/login" in u)
+            or ("euc.yonyoucloud.com" in u and "#/login" in u)
+            or ("c2.yonyoucloud.com" in u and "/login" in u))
 
 
 def yy_on_c3(win):
