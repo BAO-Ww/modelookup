@@ -53,7 +53,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
           $boot = Join-Path $dst 'sync_cache.py'
           $ok = $false
-          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+          for ($i = 1; $i -le 5 -and -not $ok; $i++) {
             try {
               $hdr = @{ 'User-Agent' = 'ml-runner' }
               if ($env:GH_TOKEN) { $hdr['Authorization'] = "Bearer $($env:GH_TOKEN)" }
@@ -66,7 +66,7 @@ jobs:
               $ok = $true
             } catch {
               Write-Host "取 sync_cache.py 第 $i 次失败：$($_.Exception.Message)"
-              Start-Sleep -Seconds (3 * $i)
+              Start-Sleep -Seconds ([Math]::Min(4 * $i, 20))
             }
           }
           if (-not $ok -and -not (Test-Path $boot)) { throw "拿不到 sync_cache.py，且本地无副本" }

@@ -66,7 +66,7 @@ def _api(path, timeout=45):
     return json.loads(_get(API + path, timeout=timeout).decode("utf-8"))
 
 
-def _retry(fn, times=3, base=3, label=""):
+def _retry(fn, times=5, base=5, label=""):
     last = None
     for i in range(1, times + 1):
         try:
@@ -75,7 +75,7 @@ def _retry(fn, times=3, base=3, label=""):
             last = e
             print("  %s 第 %d 次失败：%r" % (label, i, e), flush=True)
             if i < times:
-                time.sleep(base * i)
+                time.sleep(min(base * i, 30))
     raise last
 
 
@@ -83,10 +83,11 @@ def fetch_file(commit, path, blob_sha):
     """① jsDelivr（按 commit sha，国内快）→ ② api blobs（大文件也支持）"""
     try:
         return _retry(lambda: _get("%s/%s@%s/%s" % (CDN, REPO, commit, path), timeout=180),
-                      times=2, base=2, label="cdn " + path)
+                      times=3, base=3, label="cdn " + path)
     except Exception:
         pass
-    j = _retry(lambda: _api("/repos/%s/git/blobs/%s" % (REPO, blob_sha)), times=2, label="blob " + path)
+    j = _retry(lambda: _api("/repos/%s/git/blobs/%s" % (REPO, blob_sha)), times=3, base=3,
+               label="blob " + path)
     return base64.b64decode(j["content"])
 
 
@@ -105,9 +106,9 @@ def main():
     commit = ""
     tree = None
     try:
-        c = _retry(lambda: _api("/repos/%s/commits/%s" % (REPO, BRANCH)), times=3, base=3, label="commit")
+        c = _retry(lambda: _api("/repos/%s/commits/%s" % (REPO, BRANCH)), times=5, base=5, label="commit")
         commit = c["sha"]
-        t = _retry(lambda: _api("/repos/%s/git/trees/%s?recursive=1" % (REPO, commit)), times=3, base=3, label="tree")
+        t = _retry(lambda: _api("/repos/%s/git/trees/%s?recursive=1" % (REPO, commit)), times=5, base=5, label="tree")
         tree = [x for x in (t.get("tree") or []) if x.get("type") == "blob"]
         print("远端 commit %s，文件 %d 个" % (commit[:10], len(tree)))
     except Exception as e:
