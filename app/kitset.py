@@ -2368,6 +2368,39 @@ def _nums_gate(sizeimg, log, tag):
     return False
 
 
+_CAND_EXT = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+
+
+def _cand_newer(mdir, picked, slack=5.0):
+    """候选图里有没有比 product.png 更新的图（2026-11-14 用户令「首图不能吃陈图」）。
+
+    原逻辑：只要 product.png + sizeimg.jpg 都在就直接返回，官网后来抓到新图也永远
+    不重选——ES50H-CK3(1) 首图用了 4 天前的黑底老图实锤（AI 选图/把关根本没跑）。
+    现在候选目录里出现比主图新的图（> slack 秒，避开同一次抓取的时间抖动）就重选。
+    """
+    try:
+        pt = os.path.getmtime(picked)
+    except Exception:
+        return False
+    for sub in ("官网", "欣盛", "中关村", "其他", "AI背景"):
+        d = os.path.join(mdir, sub)
+        if not os.path.isdir(d):
+            continue
+        try:
+            fns = os.listdir(d)
+        except Exception:
+            continue
+        for fn in fns:
+            if not fn.lower().endswith(_CAND_EXT):
+                continue
+            try:
+                if os.path.getmtime(os.path.join(d, fn)) > pt + slack:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=None):
     """机图：①软件图库（payload imgs / 欣盛 ximg，与卡片同源）②抓取链候选做
     「边框同色+泛洪抠底」选抠出主体最大且落地的。官网尺寸线框图顺带识别存
@@ -2376,7 +2409,8 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
     picked = os.path.join(mdir, "product.png")
     sizeimg = os.path.join(mdir, "sizeimg.jpg")
     have_size = os.path.isfile(sizeimg)
-    if os.path.isfile(picked) and have_size:
+    # 2026-11-14：主图不再无限续命——候选里有新图就重走 AI 选图+把关（_cand_newer）
+    if os.path.isfile(picked) and have_size and not _cand_newer(mdir, picked):
         return picked
     # ① AI 选图先行（2026-10-29 用户令「蓝底也跟聚光一样会选好的图」）：
     # 复用聚光/发布图同款视觉选图（pei_core.zhipu_pick_images，缓存 _ai_pick_v5.json
@@ -3659,7 +3693,11 @@ def _qa_blue(model, info, mdir, cfg, points, prod, log):
     """蓝底四张 AI 复检（2026-10-29 用户令「蓝底也要接上」）：与聚光同一套
     pei_core.qa_render 视觉质检（商汤优先→GLM 兜底，无 key 静默跳过不挡出货）。
     压字/截断/出画等确定性布局问题用保守档（字号各缩一档）重渲该张一次；
-    风格/破图等需人工的只记日志。只复检一轮，不循环烧额度。"""
+    风格/破图等需人工的只记日志。只复检一轮，不循环烧额度。
+
+    2026-11-14 用户令「把 AI 复检去掉」：成片复检拦不住烂图（ES50H-CK3(1) 老图实锤），
+    还白烧视觉额度 → 停用。函数保留，要恢复把下面这行 return 删掉即可。"""
+    return
     try:
         import pei_core
         key = None
@@ -3820,11 +3858,7 @@ def _rerender_cached(model, mdir, old, log):
     _render_img3(cfg, points, os.path.join(bdir, "img_3.jpg"))
     _p("渲染 4/4 尺寸图…")
     _render_img4(cfg, os.path.join(bdir, "img_4.jpg"), prod)
-    _p("AI 复检成片…")
-    try:
-        _qa_blue(model, {}, mdir, cfg, points, prod, log)
-    except Exception as _e:
-        log("AI 复检跳过（不影响出图）：%r" % (_e,))
+    # 2026-11-14 用户令：成片 AI 复检停用（_qa_blue 内部已 return），这里连进度条也不报
     _p("聚光尺寸图对账…")
     try:
         sync_spot_size(model, None, log)
@@ -3978,10 +4012,7 @@ def generate(model, force=0, log=None):
     _render_img3(cfg, points, os.path.join(bdir, "img_3.jpg"))
     _p("渲染 4/4 尺寸图…")
     _render_img4(cfg, os.path.join(bdir, "img_4.jpg"), prod)
-    # AI 复检成片（2026-10-29 用户令「蓝底也要接上」）：与聚光同一套质检，
-    # 压字/截断/出画自动保守档重渲；复检完再做聚光时间线对账
-    _p("AI 复检成片…")
-    _qa_blue(model, info, mdir, cfg, points, prod, log)
+    # 2026-11-14 用户令：成片 AI 复检停用（拦住烂图靠选图把关，不靠画完再查）
     # 时间线对账：本次拿到的官方尺寸图可能比聚光四件套新（聚光先跑手绘落盘实锤）——
     # 自动重出聚光第 4 张，两套成品永远用官网图（2026-10-29 用户令）
     _p("聚光尺寸图对账…")
@@ -4177,12 +4208,7 @@ def regen_one(model, n, log=None):
         apply_water(bdir)
     except Exception:
         pass
-    # 单张重出的成片也得过一遍 AI 复检（跟整套同口径），失败不拦
-    try:
-        _qa_blue(model, (j.get("info") or {}), mdir, cfg, j.get("points") or [],
-                 prod if os.path.isfile(prod) else None, log)
-    except Exception as e:
-        log("单张复检跳过：%r" % (e,))
+    # 2026-11-14 用户令：单张也不再跑成片复检（_qa_blue 已停用）
     return {"ok": True, "n": n, "file": out, "blur": blur_warn(bdir)}
 
 

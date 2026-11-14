@@ -922,7 +922,11 @@ def _auto_qa_spot(model, info, src, out, style, paths, prog=None):
 
     2026-10-30 用户实锤「聚光的图一直出不来」：复检原本跑在生成线程里、还占着进度条，
     四张图早落盘了前端却一直「生成中 92%」等到复检跑完（1~3 分钟）。现在复检走独立
-    后台线程、prog 传 None = 不碰 JOB 进度（图先亮出来，修好的再静默替换）。"""
+    后台线程、prog 传 None = 不碰 JOB 进度（图先亮出来，修好的再静默替换）。
+
+    2026-11-14 用户令「把 AI 复检去掉」：成片复检拦不住烂图还白烧视觉额度 → 停用。
+    要恢复把下面这行 return 删掉即可。"""
+    return
     import pei_core
     _prog = prog or (lambda p, m: None)
     key = _ai_key() or pei_core._sf_key()

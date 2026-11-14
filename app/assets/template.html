@@ -1463,12 +1463,13 @@ applyFontScale();
 
 function imgOf(core){
   if (MYIMGS[core]) return MYIMGS[core];            // 自己补的图优先（'hide'=管理号隐藏标记，2026-10-24，调用方各自处理）
-  if (KITMAIN && KITMAIN[core]) return '/api/kitimg/' + encodeURIComponent(core) + '/product.png';
-                                                    // 抓取链选好的机图（官网干净整机图，2026-11-03 用户令：
-                                                    // 官网有图的用官网图——老图库的促销宣传图让位）
+  /* 2026-11-14 用户令「主图只管出套图，别换我卡片封面」：kitset 主图（product.png）
+     从卡片缩略图里撤下来——原来它排第二，挑主图/重出一次，卡片左上角的长相就跟着变。
+     现在缩略图只认「手动换过的图 → 老图库图」，kitset 主图退到最后兜底（老图库没图才用）。 */
   if (IMGS[core]) return IMGS[core];                // 内联的 dataURL（离线版）
   // exe 版：图片不内联，交给浏览器按需取，看得见才解码
   if (CFG.imgBase && IMGHAS && IMGHAS[core]) return CFG.imgBase + encodeURIComponent(core);
+  if (KITMAIN && KITMAIN[core]) return '/api/kitimg/' + encodeURIComponent(core) + '/product.png';
   return null;
 }
 function missCount(){
@@ -5995,7 +5996,7 @@ function openBaoView(k){
     +       '<span style="font-size:11px;color:#9a9ea6">标题三选一 · 卖点 · 售后</span>'
     +     '</div>'
     +     '<div id="bao_cpy_k" style="flex:1;min-height:0;overflow:auto"></div>'
-    +     '<div id="bao_cpy_s" data-topslot="#bao_topslot" style="flex:1;min-height:0;overflow:hidden;display:none"></div>'
+    +     '<div id="bao_cpy_s" style="flex:1;min-height:0;overflow:auto;display:none"></div>'
     +   '</div>'
     + '</div></div>';
   document.body.appendChild(wrap);
@@ -6275,7 +6276,9 @@ function openBaoView(k){
   }
   /* ---------- 文案栏（2026-11-04 用户令「宝的两套文案没了」）：
      蓝底文案 = 蓝底套图的 标题三选一/卖点/售后（只读 set.json，绝不触发生成）；
-     聚光文案 = 嵌整个写文案页（跟老聚光窗同规矩，首次切到才挂，省得白跑接口） ---------- */
+     聚光文案 = 聚光自己的文案（2026-11-14 用户选方案 A）：不再嵌写文案页——Pro 页是独立
+     功能，互不影响；聚光栏改成跟蓝底同款版面，读 /api/copy 的参数直给文案
+     （标题三选一 + 卖点一话一行 + 售后点选多版），分段式描述不再进聚光窗 ---------- */
   var KB = null, sMounted = false;
   function renderKCopy(D){
     var box = wrap.querySelector('#bao_cpy_k');
@@ -6346,6 +6349,111 @@ function openBaoView(k){
       .then(function(j){ KB = j; renderKCopy(j); })
       .catch(function(){ renderKCopy(null); });
   }
+  /* ---------- 聚光文案（2026-11-14 方案 A）：同款版面，参数直给口径，不碰 Pro 页 ---------- */
+  var SCPY = '#6d28d9', SCPY_BG = '#ede9fe', SCPY_BD = '#ddd6fe';
+  function scAfs(brand){
+    var b = (brand || '海尔').trim() || '海尔';
+    return [
+      '全新机，' + b + '全国联保。\n支持到货验货，破损可拒收。\n看中了就联系我，聊得来价格好商量。',
+      b + '官方正品，全新机，全国联保。\n品质保证，放心购买，售后无忧。',
+      '全新机，' + b + '全国联保。\n支持专业送货安装，当地有师傅上门。',
+      '全新机，' + b + '全国联保，支持验货。\n满意再确认，售后有保障。'
+    ];
+  }
+  function renderSCopy(D, AFS){
+    var box = wrap.querySelector('#bao_cpy_s');
+    if (!box) return;
+    var afSel = 0;
+    var h = '';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="font-size:12.5px">标题（三选一）</b>'
+      + '<button id="sc_copyall" style="border:none;background:' + SCPY + ';color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">一键复制全套</button></div>';
+    (D.titles || []).forEach(function(t, i){
+      h += '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px">'
+        + '<div style="flex:1;border:1px solid #e3e8f0;background:#fff;border-radius:8px;padding:7px 10px;line-height:1.55;font-size:12.5px"><b style="margin-right:8px;color:' + SCPY + '">' + ('ABC'[i] || '') + '</b>' + esc(t) + '</div>'
+        + '<button data-scct="' + esc(t) + '" style="border:1px solid ' + SCPY_BD + ';background:' + SCPY_BG + ';color:' + SCPY + ';border-radius:8px;padding:5px 11px;font-size:11.5px;flex:0 0 auto;cursor:pointer">复制</button></div>';
+    });
+    if (!(D.titles || []).length) h += '<div style="color:#b42318;font-size:12px;margin-bottom:8px">标题还没生成出来</div>';
+    h += '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">① 卖 点（一话一行）</div>'
+      + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc((D.points || []).join('\n') || '—') + '</div>';
+    var AF_TAGS = ['互动版', '品质版', '安装版', '简洁版', '版本5'];
+    var AF = (AFS && AFS.length) ? AFS : scAfs(D.brand);
+    h += '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">② 售 后（点一下挑一版）</div>'
+      + '<div style="margin-bottom:6px">' + AF.map(function(a, i){
+          return '<a href="javascript:void 0" data-scaf="' + i + '" style="display:inline-block;margin:0 6px 4px 0;padding:2px 10px;border-radius:99px;font-size:11.5px;font-weight:600;cursor:pointer;'
+            + (i === 0 ? 'background:' + SCPY + ';color:#fff;' : 'background:#eef1f6;color:#475467;') + '">' + (AF_TAGS[i] || ('版本' + (i + 1))) + '</a>';
+        }).join('') + '</div>'
+      + AF.map(function(a, i){
+          return '<div data-scafbody="' + i + '" style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33;'
+            + (i === 0 ? '' : 'display:none;') + 'border:1px solid ' + (i === 0 ? SCPY_BD : '#e3e8f0') + ';border-radius:8px;padding:7px 10px;margin-bottom:6px">' + esc(a || '—') + '</div>';
+        }).join('');
+    box.innerHTML = h;
+    box.querySelectorAll('[data-scct]').forEach(function(el){
+      el.onclick = function(){
+        copySafe(el.getAttribute('data-scct'), function(){
+          el.textContent = '已复制'; setTimeout(function(){ el.textContent = '复制'; }, 1200);
+        });
+      };
+    });
+    box.querySelectorAll('[data-scaf]').forEach(function(el){
+      el.onclick = function(){
+        afSel = +(el.getAttribute('data-scaf') || 0);
+        box.querySelectorAll('[data-scaf]').forEach(function(x){
+          var on = +(x.getAttribute('data-scaf') || 0) === afSel;
+          x.style.background = on ? SCPY : '#eef1f6';
+          x.style.color = on ? '#fff' : '#475467';
+        });
+        box.querySelectorAll('[data-scafbody]').forEach(function(b2){
+          var on = +(b2.getAttribute('data-scafbody') || 0) === afSel;
+          b2.style.display = on ? 'block' : 'none';
+          b2.style.borderColor = on ? SCPY_BD : '#e3e8f0';
+        });
+      };
+    });
+    var ca = box.querySelector('#sc_copyall');
+    if (ca) ca.onclick = function(){
+      copySafe((D.points || []).join('\n') + '\n\n' + (AF[afSel] || ''), function(){
+        ca.textContent = '已复制全套'; setTimeout(function(){ ca.textContent = '一键复制全套'; }, 1500);
+      });
+    };
+  }
+  function loadSCopy(force){
+    var box = wrap.querySelector('#bao_cpy_s');
+    if (!box) return;
+    function paintErr(msg){
+      box.innerHTML = '<div style="color:#b42318;font-size:12.5px;line-height:1.7">聚光文案没出来：' + esc(msg)
+        + '<br><button id="sc_retry" style="margin-top:6px;border:1px solid ' + SCPY_BD + ';background:' + SCPY_BG + ';color:' + SCPY + ';border-radius:8px;padding:5px 14px;font-size:12px;cursor:pointer">重新生成</button></div>';
+      var rb = box.querySelector('#sc_retry');
+      if (rb) rb.onclick = function(){ loadSCopy(true); };
+    }
+    box.innerHTML = '<div style="color:#475569;padding:20px 2px;font-size:12.5px">正在生成聚光文案（参数直给口径）…已 <b id="sc_secs">0</b> 秒（有缓存秒出）</div>';
+    /* kind=l 与写文案页共用同一份缓存与同一个任务键 → 不双跑爬虫；Pro 页正在跑时
+       接口会回「已在生成中」，那不是错误，接着轮询等它的结果就行 */
+    fetch('/api/copy?model=' + encodeURIComponent(k) + '&kind=l' + (force ? '&force=1' : '') + '&bg=1')
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var m = (j && j.msg) || '';
+        if (!j || (!j.ok && m.indexOf('已在生成中') < 0)) throw new Error(m || '启动失败');
+        T(pollJob('copy:' + k + ':l', function(res){
+          if (!res || !res.ok) throw new Error((res && res.msg) || '生成失败');
+          fetch('/api/kitset?model=' + encodeURIComponent(k) + '&read=1')
+            .then(function(r2){ return r2.json(); })
+            .then(function(kj){
+              var afs = (kj && kj.aftersales) ? kj.aftersales.filter(function(x){ return String(x || '').trim(); }) : [];
+              renderSCopy(res, afs.length ? afs : scAfs(res.brand || ''));
+            })
+            .catch(function(){ renderSCopy(res, scAfs(res.brand || '')); });
+        }, function(err){
+          paintErr(String(err.message || err));
+        }, function(sec){
+          var el = box.querySelector('#sc_secs'); if (el) el.textContent = sec;
+        }));
+      })
+      .catch(function(e){
+        var m2 = String(e.message || e);
+        if (m2.indexOf('Failed to fetch') >= 0) m2 = '服务连接中断（软件可能重启过或开了第二个实例）——点重新生成再试';
+        paintErr(m2);
+      });
+  }
   wrap.querySelectorAll('[data-baocpy]').forEach(function(el){
     el.addEventListener('click', function(){
       var t = el.getAttribute('data-baocpy');
@@ -6358,11 +6466,6 @@ function openBaoView(k){
       });
       wrap.querySelector('#bao_cpy_k').style.display = (t === 'k') ? 'block' : 'none';
       wrap.querySelector('#bao_cpy_s').style.display = (t === 's') ? 'block' : 'none';
-      if (t === 's' && !sMounted){
-        sMounted = true;
-        try { openCopyView(k, 'z', false, false, wrap.querySelector('#bao_cpy_s')); }
-        catch (e) { wrap.querySelector('#bao_cpy_s').innerHTML = '<div style="color:#b42318;font-size:12.5px">文案页没挂上：' + esc(String(e)) + '</div>'; }
-      }
     });
   });
   wrap.querySelectorAll('[data-baogen]').forEach(function(el){
@@ -6383,11 +6486,10 @@ function openBaoView(k){
   showK();
   loadKCopy();
   /* 聚光文案开窗就开写（2026-11-04 用户令「文案也要一起写了啊，不要我点了再写」）：
-     挂载即自动生成（openCopyView 内置），页签点击只切显示。素材接口后端会等蓝底
-     抓完复用（pubwork._wait_or_reuse_kitset），不会跟蓝底双爬 */
+     走 /api/copy 参数直给口径，与 Pro 页共用同一份缓存/任务键（不双跑爬虫），
+     页签点击只切显示。Pro 页本身独立存在，这里不挂它、也不改它 */
   sMounted = true;
-  try { openCopyView(k, 'z', false, false, wrap.querySelector('#bao_cpy_s')); }
-  catch (e) { wrap.querySelector('#bao_cpy_s').innerHTML = '<div style="color:#b42318;font-size:12.5px">文案页没挂上：' + esc(String(e)) + '</div>'; }
+  loadSCopy(false);
   loadLib(function(){
     /* 开窗自动补缺（跟婷窗同规矩）：蓝底缺→补蓝底，聚光缺→补聚光。
        2026-11-04 用户令「跑一个就够了」：两套都缺时聚光等蓝底抓完再跑，

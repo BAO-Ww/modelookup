@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """闲鱼配文 · 核心模块：官网抓取 + 文案生成 + 拼版主图"""
-import os, re, json, ssl, gzip, time, shutil, zipfile, threading, sys, io, base64, random
+import os, re, json, ssl, gzip, time, shutil, zipfile, threading, sys, io, base64, random, hashlib
 from pathlib import Path
 import urllib.request, urllib.error, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
@@ -2229,13 +2229,16 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
     # 编号必须与最终候选严格一一对应，就按 cands 现取。
     names = [_rel[f] for f in cands]
     cache = p / "_ai_pick_v7.json"   # v7：2026-11-14 垫边裁切特写铁律（ES80H-D2S 实锤），旧缓存作废
+    # 2026-11-14 用户令「首图不能吃陈图」：缓存还得认候选集——官网后来又抓到新图时，
+    # 旧答案（按老候选集挑的）不可信，必须重选（ES50H-CK3(1) 4 天前老图实锤）。
+    _sig = hashlib.md5(("|".join(sorted(names))).encode("utf-8")).hexdigest()[:12]
     try:
         if cache.exists():
             _obj = json.loads(cache.read_text(encoding="utf-8"))
             # 缓存校验：front/angle/open 指向的图现在是海报 → 旧答案不可信，重选
             _bad = any(_obj.get(_k) and (p / _obj[_k]) in _poster
                        for _k in ("front", "angle", "open"))
-            if not _bad:
+            if not _bad and _obj.get("_sig") == _sig:
                 return _obj
     except Exception:
         pass
@@ -2284,6 +2287,7 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
             txt = _vision_call(api_key, data_url, prompt, log=log)
             obj = _parse_pick(txt, cands, names)
             if obj:
+                obj["_sig"] = _sig          # 候选集指纹：候选变了缓存自动失效（2026-11-14）
                 cache.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
                 return obj
         except Exception:
