@@ -469,14 +469,17 @@ PROMPT = """你是闲鱼家电卖家文案写手。产品：{pname}（型号 {mo
    每条都必须有：型号全码 + 成色词（正品写「全新机」，样机写「展示样机」）+ 服务词（全国联保/原厂正品联保）。参考版式（品牌/容量/核心卖点/品类词照【真实数据】换）：
    {brand} 226L风冷无霜冰箱 {model} 全新机 家用三门 全国联保
    全新机 {brand} 226L 三门冰箱 风冷无霜 {model} 原厂正品联保
-   {brand}三门冰箱 226L 风冷无霜 {model} 全新原封全国联保
+   {brand}三门冰箱 226L 风冷无霜 {model} 全新机 家用节能 全国联保
    {kk_titles}
 3) points：正好5-8条**参数直给**卖点（聚光用，不是生活场景、不是口号）。每条≤30字，格式＝「参数值＋参数名，一句这个参数带来的结果」，
    每条必须至少含一个【真实数据】里出现的数字（防编造同时防空话）；示例（数字必须换成【真实数据】里的）：
    60L 容量，2200W 功率，一级能效
    整胆加热约 1.5 小时，最高水温 75℃
-   750×433×405mm，横式壁挂安装
    绝对禁止：生活化修辞（「不用排队」「不心疼电费」「隔夜还温」）、形容词堆砌、极限词、任何承诺类说法。
+   禁止把尺寸当卖点：外形尺寸/产品尺寸/净重/毛重/横式壁挂安装这类外观参数一律不写（640*420*390mm、横式壁挂节省空间这种就是尺寸，不是卖点）。
+   差异化硬要求（2026-11-14 用户令「卖点全是大同小异的要AI干嘛」）：先从【真实数据】里找出这台机器跟同品类其他型号**最不一样**的
+   2-3 个参数（容量档位、功率、能效等级、核心技术、特色功能、适用场景数字），把它们写成前 2-3 条；
+   所有同品类机型都一样的基础参数（如普通保温、常规安全防护）最多写 1 条；五条卖点放在一起必须能看出「这是这一台，不是随便哪台」。
    维度按下面【品类档案】的顺序挑，参数表里没有的维度一个字都不许写。
 4) 输出纯 JSON（不要 markdown 代码块）：
 {{"titles":["","",""],"points":["","","","",""]}}
@@ -510,6 +513,15 @@ def _facts_text(data, model):
 
 NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 SHIPY_RE = re.compile(r"发货|可发|物流|运费|包邮|偏远|送装|到家")
+# 2026-11-14 用户令「640*420*390mm 横式壁挂节省空间算什么卖点」：尺寸/外形类一票否决。
+# 两把尺：① 外形尺寸类词（外形尺寸/产品尺寸/机身尺寸/净重/毛重/装箱尺寸…）；
+#          ② 两段以上数字用 ×/*/x 拼一起的长宽高（640*420*390、750×433×405）。
+SIZE_WORD_RE = re.compile(
+    r"外形尺寸|产品尺寸|机身尺寸|外机尺寸|内机尺寸|包装尺寸|装箱尺寸|安装尺寸|净重|毛重|重量|"
+    r"横式壁挂|竖式安装|壁挂安装|外形.*mm|尺寸.*mm")
+SIZE_NUM_RE = re.compile(r"\d+(?:\.\d+)?\s*[*×xX]\s*\d+(?:\.\d+)?\s*[*×xX]\s*\d+(?:\.\d+)?")
+# 用户令「怎么文案里还会有全新原封」：这个词从词表里整体除名，标题/卖点出现即剔。
+NO_WORDS = ("全新原封", "全新未拆封", "全新未开封")
 
 _FACT_FLOATS = {}
 
@@ -521,14 +533,32 @@ def _fact_floats(facts):
     return _FACT_FLOATS[key]
 
 
+def _is_size_line(line):
+    """尺寸类卖点判定（2026-11-14）：长宽高连写 / 尺寸词命中都算。"""
+    s = str(line or "")
+    if SIZE_NUM_RE.search(s):
+        return True
+    if SIZE_WORD_RE.search(s):
+        return True
+    return False
+
+
 def _verify(ai, facts, nums_set, bans=()):
     """防编造：titles/points 整行剔除。
     2026-11-14 加两道闸（用户令「谁看得懂啊」+「这种肯定不是卖点」）：
       · 参数直给卖点每条必须含数字，光有形容词的空话直接扔；
-      · 品类禁写词（保证/绝对/隔夜还…）命中即扔，绝不承诺做不到的事。"""
+      · 品类禁写词（保证/绝对/隔夜还…）命中即扔，绝不承诺做不到的事。
+    2026-11-14 再加两道（用户令「尺寸算什么卖点」+「怎么还有全新原封」）：
+      · 尺寸/外形类整行扔（SIZE 判定）；
+      · 「全新原封/全新未拆封」等被除名的词命中即扔。"""
     fl = _fact_floats(facts)
 
     def ok(line):
+        if _is_size_line(line):
+            return False
+        for w in NO_WORDS:
+            if w in line:
+                return False
         for n in NUM_RE.findall(line):
             if n in facts or n in nums_set:
                 continue
@@ -574,9 +604,9 @@ def glm_copy(model, kind, data, log):
         bans = _cc.ban_words("%s %s" % (data.get('pname') or '', model), _props)
     except Exception:
         cat_block, bans = "品类：未识别（只写参数表里真实存在的项）", ()
-    kk_titles = ('注意：这是正品全新机——标题里必须用「全新机/全新原封」，绝不许出现「展示样机/样机」字样。'
+    kk_titles = ('注意：这是正品全新机——标题里必须用「全新机」，绝不许出现「展示样机/样机/全新原封」字样。'
                  if kind != 's' else
-                 '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新机/全新原封/全新」字样。')
+                 '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新机/全新/全新原封」字样。')
     nums_set = set(NUM_RE.findall(norm_model(model)))
     # 2026-10-13 用户反馈「小红书/闲鱼拉胯」整改：质量闸（剔空洞口号/一句话配文）
     # + 质量不够自动重试一次（两次取分高那次），AI 解析失败也不再炸整单
@@ -826,10 +856,13 @@ def generate(model, kind='l', force=0, log=None):
     # 卖点：AI 从真实参数提炼的加厚条优先（2026-10-13 用户定稿，官网 sellpoint 是
     # 「智能生活新选择」类空洞口号不要）；AI 全被剔才拿官网卖点兜底
     pts = ai['points'][:15] or [p for p in (data.get('sellpoints') or []) if p][:15]
-    # 2026-11-11 用户令「聚光的卖点尽量不要跟蓝底的写的一样，也是在5条以下，不能超过五条」：
+    # 2026-11-14 用户令「聚光的卖点尽量不要跟蓝底的写的一样，也是在5条以下，不能超过五条」：
     # 先跟蓝底 set.json 的卖点去重（整句/首段归一比对，换皮重复也拦），再统一砍到 ≤5 条；
     # 卖点 tab、描述里的 ·卖点 块、一键复制全吃这份，口径一致。
-    pts = _dedupe_vs_blue(pts, _blue_points(model), cap=5)
+    # 2026-11-14 用户令「640*420*390mm 横式壁挂节省空间算什么卖点」：尺寸/外形类
+    # 兜底再扫一遍（AI 闸在 _verify，这条兜官网 sellpoints 直通的漏网）。
+    _pts0 = _dedupe_vs_blue(pts, _blue_points(model), cap=5)
+    pts = [p for p in _pts0 if not _is_size_line(p) and not any(w in p for w in NO_WORDS)]
     res = {"ok": True, "cached": False, "model": model, "kind": kk,
            "source": data['source'], "source_url": data['url'],
            "pname": data['pname'], "price": data['price'],
@@ -956,7 +989,7 @@ def polish(model, kind, target, text, log=None, mode='polish'):
     if target == 'titles':
         cache_d = _load_cache(model, kk)
         orig = "\n".join((cache_d.get('titles') if cache_d else []) or []) or str(text or '')
-        kk_rule = ('成色词必须用「全新机/全新原封」，绝不许出现「样机」字样' if kk != 's'
+        kk_rule = ('成色词必须用「全新机」，绝不许出现「样机/全新原封」字样' if kk != 's'
                    else '成色词必须用「展示样机/功能完好」，绝不许出现「全新」字样')
         raw = _chat(POLISH_TITLES_PROMPT.format(kk_rule=kk_rule, facts=facts, orig=orig))
         m = re.search(r'\{.*\}', raw, re.S)
@@ -969,7 +1002,7 @@ def polish(model, kind, target, text, log=None, mode='polish'):
             _save_cache(model, kk, cache_d)
         return {"ok": True, "titles": good, "dropped": len(titles) - len(good)}
     # desc：正文直出，只做数字防编造校验（不合规段落回退原文）
-    kk_rule = ('成色词必须用「全新机/全新原封」，绝不许出现「样机」字样' if kk != 's'
+    kk_rule = ('成色词必须用「全新机」，绝不许出现「样机/全新原封」字样' if kk != 's'
                else '成色词必须用「展示样机/功能完好」，绝不许出现「全新」字样')
     _dprompt = REWRITE_DESC_PROMPT if mode == 'rewrite' else POLISH_DESC_PROMPT
     new = _chat(_dprompt.format(facts=facts, kk_rule=kk_rule, orig=str(text or ''))).strip()

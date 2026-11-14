@@ -67,11 +67,17 @@ class ApiGetMixin:
             if bg:
                 # Mac WKWebView fetch ~60s 超时（"Load failed" 实锤）→ 文案生成走后台，前端轮询 /api/jobget
                 import jobman
+                _ck = "copy:%s:%s" % (model, kind)
 
                 def _do():
-                    return copywriter.enrich(model, kind, force, style,
-                                             log=lambda s: state.LOG.append("[文案] " + s))
-                if not jobman.submit("copy:%s:%s" % (model, kind), _do):
+                    def _log(s):
+                        state.LOG.append("[文案] " + str(s))
+                        jobman.prog(_ck, str(s))
+                        # 2026-11-14 取消闸：每个日志打点自查，点了取消立刻收工
+                        if jobman.is_cancelled(_ck):
+                            raise jobman.CancelledError("已取消")
+                    return copywriter.enrich(model, kind, force, style, log=_log)
+                if not jobman.submit(_ck, _do):
                     self._send(200, json.dumps({"ok": False, "msg": "该型号文案已在生成中，等一下"},
                                                ensure_ascii=False))
                     return
@@ -129,17 +135,24 @@ class ApiGetMixin:
             if (q.get("bg") or ["0"])[0] in ("1", "true"):
                 # Mac WKWebView fetch ~60s 超时（"Load failed" 实锤）→ 生成走后台，前端轮询 /api/jobget
                 import jobman
+                _kk = "kitset:" + model
 
                 def _do():
+                    def _log(s):
+                        state.LOG.append("[蓝底] " + str(s))
+                        jobman.prog(_kk, str(s))
+                        # 2026-11-14 取消闸：每步打点自查，点了取消立刻收工
+                        if jobman.is_cancelled(_kk):
+                            raise jobman.CancelledError("已取消")
                     try:
-                        res = kitset.generate(model, force,
-                                              log=lambda s: (state.LOG.append("[蓝底] " + s),
-                                                             jobman.prog("kitset:" + model, s)))
+                        res = kitset.generate(model, force, log=_log)
                         res["dir"] = kitset.model_dir(model)
                         return res
                     except Exception as e:
                         # 2026-10-29 Mac 实锤：job 里炸了 app.log 啥都没有，远程没法查——
                         # 失败必记日志 + 上报诊断，再把异常抛回给 jobman 记进 job 状态
+                        if isinstance(e, jobman.CancelledError):
+                            raise
                         try:
                             state.LOG.append("[蓝底] 生成失败：%r" % e)
                             import cloud
@@ -148,7 +161,7 @@ class ApiGetMixin:
                         except Exception:
                             pass
                         raise
-                if not jobman.submit("kitset:" + model, _do,
+                if not jobman.submit(_kk, _do,
                                      _log=lambda s: state.LOG.append("[蓝底] " + s)):
                     # 2026-11-04 修「关窗重开不显示结果」：busy=true 让前端接管轮询，
                     # 不再当失败抛掉（旧窗口触发的 job 还在跑，重开窗必须能接上）
@@ -646,7 +659,9 @@ class ApiGetMixin:
             if j.get("running"):
                 j.update(ok=True, phase="running")
             elif j.get("done"):
-                if j.get("ok"):
+                if j.get("cancelled"):
+                    j["phase"] = "cancelled"      # 2026-11-14：用户主动取消
+                elif j.get("ok"):
                     j["phase"] = "done"
                 else:
                     j["phase"] = "failed"
@@ -654,6 +669,21 @@ class ApiGetMixin:
             else:
                 j.update(ok=True, phase="idle")
             self._send(200, json.dumps(j, ensure_ascii=False))
+            return
+
+        if path == "/api/jobcancel":
+            # 取消后台任务（2026-11-14 用户令「我连取消的按键都没有」）：立旗子，
+            # 任务线程在下一个打点自查收工。GET 同 /api/jobget 风格。
+            q = urllib.parse.parse_qs(u.query)
+            jk = (q.get("key") or [""])[0].strip()
+            if not jk:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 key"}, ensure_ascii=False))
+                return
+            import jobman
+            hit = jobman.cancel(jk)
+            self._send(200, json.dumps({"ok": True, "cancelled": bool(hit),
+                                        "msg": "已请求取消" if hit else "任务已结束，无需取消"},
+                                       ensure_ascii=False))
             return
 
         if path.startswith("/pubimg/"):

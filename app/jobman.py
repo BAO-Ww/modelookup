@@ -12,6 +12,29 @@ _LOCK = threading.Lock()
 _EMPTY = {"running": False, "done": False, "ok": None, "res": None, "err": "", "prog": ""}
 
 
+def cancel(key):
+    """请求取消（2026-11-14 用户令「连取消的按键都没有」）：只立旗子，线程在下一个
+    prog 打点/日志回调里自查（见 is_cancelled），到点抛 CancelledError 收工。
+    任务没在跑返回 False（没东西可取消）。"""
+    with _LOCK:
+        j = _JOBS.get(key)
+        if j and j.get("running"):
+            j["cancel"] = True
+            j["prog"] = "已请求取消，正在收尾…"
+            return True
+        return False
+
+
+def is_cancelled(key):
+    with _LOCK:
+        j = _JOBS.get(key)
+        return bool(j and j.get("cancel"))
+
+
+class CancelledError(RuntimeError):
+    """用户主动取消——任务链里逐层抛出，jobman 记成已取消而不是失败。"""
+
+
 def prog(key, text):
     """任务线程内打点当前步骤（2026-10-30 用户令「生成中要看到底在哪一步」）：
     前端轮询 /api/jobget 时随 state 带出；key 不存在（同步调用等）静默忽略。"""
@@ -39,6 +62,17 @@ def submit(key, fn, *args, **kw):
             ok = bool(r.get("ok", True)) if isinstance(r, dict) else True
             with _LOCK:
                 _JOBS[key].update(running=False, done=True, ok=ok, res=r)
+        except CancelledError as e:
+            # 2026-11-14：用户主动取消——记成 done/ok=False + cancelled 标记，前端按
+            # 「已取消」灰显，不当失败弹红。
+            if log:
+                try:
+                    log("任务已取消：%s" % key)
+                except Exception:
+                    pass
+            with _LOCK:
+                _JOBS[key].update(running=False, done=True, ok=False, res=None,
+                                  err="已取消", cancelled=True)
         except Exception as e:
             if log:
                 try:

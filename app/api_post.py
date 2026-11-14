@@ -365,6 +365,16 @@ class ApiPostMixin:
             return
 
         # ---------- 发布图工厂（2026-10-17，闲鱼配文 Pro 并入） ----------
+        if u.path == "/api/pubcancel":
+            # 取消当前在跑的聚光/素材任务（2026-11-14 用户令「我连取消的按键都没有」）：
+            # pubwork 串行槽立取消旗，_job_prog 下一个打点收工。
+            import pubwork
+            hit = pubwork.job_cancel()
+            self._send(200, json.dumps({"ok": True, "cancelled": bool(hit),
+                                        "msg": "已请求取消" if hit else "当前没有在跑的任务"},
+                                       ensure_ascii=False))
+            return
+
         if u.path in ("/api/pubgen", "/api/pubhero", "/api/pubsel", "/api/pubqa",
                       "/api/pubauto", "/api/pubimport", "/api/pubopen",
                       "/api/pubxy", "/api/kitwhite"):

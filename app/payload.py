@@ -325,6 +325,86 @@ def attach_xinsheng(payload, log):
         % (n_xp, n_img))
 
 
+def attach_stock_rows(payload, log):
+    """用友有库存、但价格总表里没有的型号 → 补一张卡（2026-11-14 用户令
+    「把用友里面所有的型号有库存的全部加到软件里面去，没价格的就显示指导价」）。
+    背景：卡片列表只来自金山价格总表，用友库存里有货但总表没收录的型号以前
+    根本搜不到。补卡只带最基本信息：
+      · c/mo = 库存聚合键（stockOf 直接命中，库存数立即可见）
+      · n    = 用友物料名称（mo2meta），没有就用型号
+      · code = 用友物料编码（mo2meta）
+      · lp   = 欣盛商城官方售价当零售指导价（没价格就显示指导价；商城也没有就不挂）
+      · k = 'z'（非滞销非样机）、b = ''（品牌前端按名称推断）
+    库存本身不重复存——前端 stockOf(mo, name, code) 自动对上实时库存。
+    没拉过实时库存（STOCK 空）时什么都不补，零风险。"""
+    try:
+        stock = state.STOCK or {}
+        agg = stock.get("stock") or {}
+        if not agg:
+            return
+        m2 = stock.get("mo2meta") or {}
+        sbc = stock.get("sbc") or {}
+        # 价格总表已有型号集合（mo/c 归一）+ 已有编码集合
+        have_mo, have_code = set(), set()
+        for r in payload.get("rows") or []:
+            _m = norm_model(r.get("mo") or r.get("c") or "")
+            if _m:
+                have_mo.add(_m)
+            _cd = str(r.get("code") or "").strip()
+            if _cd and not is_err_val(_cd):
+                have_code.add(_cd)
+        # 编码→已有型号映射：库存编码桶能对上已有卡的编码就不补（同一台机器）
+        code2mo = {}
+        for code, a in sbc.items():
+            if code in have_code:
+                code2mo[code] = True
+        added = 0
+        for key, a in agg.items():
+            key = norm_model(key)
+            if not key or key in have_mo:
+                continue
+            # 编码能对上已有卡 → 是同一台机器换个桶名，跳过
+            _meta = m2.get(key) or {}
+            _code = str(_meta.get("code") or "").strip()
+            if _code and _code in code2mo:
+                continue
+            # 只补真有货的（可用量/现存量任一 > 0）
+            if not ((a.get("a") or 0) > 0 or (a.get("q") or 0) > 0):
+                continue
+            row = {"c": key, "mo": key, "b": "", "k": "z",
+                   "n": str(_meta.get("n") or key).strip(),
+                   "code": _code, "src": "用友库存"}
+            if _code:
+                row["code"] = _code
+            added += 1
+            payload.setdefault("rows", []).append(row)
+        # 指导价：欣盛商城官方售价挂 lp（2026-11-14 用户令「没价格的就显示指导价」）
+        if added:
+            n_lp = 0
+            p = wp("xinsheng.sqlite3")
+            if os.path.isfile(p):
+                try:
+                    con = sqlite3.connect("file:%s?mode=ro" % p.replace("\\", "/"), uri=True)
+                    xmap = {}
+                    for code, sp in con.execute(
+                            "SELECT code, sale_price FROM products WHERE code IS NOT NULL AND code != ''"):
+                        if code not in xmap:
+                            xmap[code] = sp
+                    con.close()
+                    for r in payload["rows"]:
+                        if r.get("src") != "用友库存" or r.get("lp"):
+                            continue
+                        sp = xmap.get(r.get("code"))
+                        if isinstance(sp, (int, float)) and sp > 0:
+                            r["lp"] = round(float(sp), 2)
+                            n_lp += 1
+                except Exception as _e:
+                    log("补卡指导价挂失败（不影响补卡）：%s" % _e)
+            log("用友库存补卡：%d 个总表没有的在库型号进了列表（%d 个挂上指导价）" % (added, n_lp))
+    except Exception as e:
+        log("用友库存补卡失败（不影响原有数据）：%s" % e)
+
+
 def rebuild(log):
     """用工作目录里的 data.xlsx / price.xlsx 重建 payload。"""
     allrecs, month = [], ""
@@ -382,6 +462,7 @@ def rebuild(log):
     payload["meta"]["src"] = ""
     attach_subsidy(payload, log)          # 补贴表（以旧换新）：69码 + 售价
     attach_xinsheng(payload, log)         # 欣盛商城（2026-10-12）：官方售价 + 缺图补图
+    attach_stock_rows(payload, log)       # 用友有库存总表没有的型号补卡（2026-11-14 用户令）
     # 官网详情页直链（web 映射）从老 payload 继承，按新 rows 的 key 过滤
     if old and old.get("web"):
         _web = {r.get("c"): old["web"][r.get("c")] for r in payload["rows"] if r.get("c") in old["web"]}

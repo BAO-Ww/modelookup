@@ -5723,6 +5723,7 @@ function pollJob(key, onDone, onErr, tick){
         if (tick) tick(Math.round((Date.now() - t0) / 1000), j);
         if (!j) return;
         if (j.phase === 'done'){ clearInterval(timer); onDone(j.res || {}); }
+        else if (j.phase === 'cancelled'){ clearInterval(timer); onErr(new Error('已取消')); }
         else if (j.phase === 'failed'){ clearInterval(timer); onErr(new Error((j.res && j.res.msg) || j.err || '任务失败')); }
         else if (j.phase === 'idle'){ clearInterval(timer); onErr(new Error('任务不存在（服务端可能重启过）')); }
       })
@@ -5988,15 +5989,25 @@ function openBaoView(k){
     +     baoCard('k', '蓝底套图', '1080 × 1080 · 无价格', '#1d4ed8', '#eef2ff', '#c7d2fe')
     +     baoCard('s', '暗角聚光', '1080 × 1080 · 深色聚光', '#b45309', '#fff7e6', '#fcd34d')
     +   '</div>'
-    +   '<div style="flex:1;min-width:400px;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 16px;display:flex;flex-direction:column;min-height:0">'
-    +     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
-    +       '<button data-baocpy="k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer">蓝底文案</button>'
-    +       '<button data-baocpy="s" style="border:1px solid #e8e8e4;background:#fff;color:#43464c;border-radius:7px;padding:4px 12px;font-size:12px;cursor:pointer">聚光文案</button>'
-    +       '<span style="flex:1"></span>'
-    +       '<span style="font-size:11px;color:#9a9ea6">标题三选一 · 卖点 · 售后</span>'
-    +     '</div>'
-    +     '<div id="bao_cpy_k" style="flex:1;min-height:0;overflow:auto"></div>'
-    +     '<div id="bao_cpy_s" style="flex:1;min-height:0;overflow:auto;display:none"></div>'
+    +   '<div style="flex:1;min-width:420px;display:flex;gap:10px;min-height:0">'
+    +     /* 2026-11-14 用户令「对半分一半蓝底文案一半聚光文案」：文案栏改左右两半
+               同屏，不再用页签切换——左边蓝底、右边聚光，各自独立滚动。
+               坑：注释不能夹在两个加号中间——第二个加号会变成一元加，把后面的
+               字符串转成 NaN（本坑 2026-11-14 实锤，布局被拆散就是它）。 */
+      '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
+      +     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
+      +       '<b style="font-size:13px;color:#1d4ed8">蓝底文案</b>'
+      +       '<span style="font-size:11px;color:#9a9ea6">标题三选一 · 卖点 · 售后</span>'
+      +     '</div>'
+      +     '<div id="bao_cpy_k" style="flex:1;min-height:0;overflow:auto"></div>'
+      +   '</div>'
+      +   '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
+      +     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
+      +       '<b style="font-size:13px;color:#6d28d9">聚光文案</b>'
+      +       '<span style="font-size:11px;color:#9a9ea6">标题三选一 · 卖点 · 售后</span>'
+      +     '</div>'
+      +     '<div id="bao_cpy_s" style="flex:1;min-height:0;overflow:auto"></div>'
+      +   '</div>'
     +   '</div>'
     + '</div></div>';
   document.body.appendChild(wrap);
@@ -6013,11 +6024,43 @@ function openBaoView(k){
       +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
       +     '<div style="font-weight:700;font-size:13px">' + title + ' <span style="font-weight:400;font-size:11.5px;color:#8a929e">' + sub + ' · 点图看大图</span></div>'
       +     '<span style="flex:1"></span>'
+      +     '<button data-baocancel="' + t + '" style="border:1px solid #f0b9b3;background:#fff;color:#d92d20;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer;display:none">取消</button>'
       +     '<button data-baoopen="' + t + '" style="border:1px solid ' + bd + ';background:' + bg + ';color:' + c + ';border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
       +     '<button data-baogen="' + t + '" style="border:1px solid ' + bd + ';background:' + bg + ';color:' + c + ';border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
       +   '</div>'
       +   '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="bao_grid_' + t + '"></div>'
       + '</div>';
+  }
+  /* 取消按钮显隐 + 点击（2026-11-14 用户令「我连取消的按键都没有」）：
+     蓝底=jobman 任务（/api/jobcancel），聚光=pubwork 串行槽（/api/pubcancel）。
+     后端只立旗，任务在下一个进度打点收工。 */
+  function setCancelVis(t, on){
+    var b = wrap.querySelector('[data-baocancel="' + t + '"]');
+    if (b) b.style.display = on ? 'inline-block' : 'none';
+  }
+  wrap.querySelectorAll('[data-baocancel]').forEach(function(el){
+    el.addEventListener('click', function(){
+      var t = el.getAttribute('data-baocancel');
+      if (t === 'k'){
+        fetch('/api/jobcancel?key=' + encodeURIComponent('kitset:' + k));
+      } else {
+        fetch('/api/pubcancel', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+      }
+      msg(t, '取消中…');
+    });
+  });
+  /* 失败记忆（2026-11-14 用户令「跑失败了再点进来又接着跑」）：失败记进 localStorage，
+     开窗自动补缺时不再自动重跑——显示「上次生成失败」，想跑点「重新生成」（点时清记录）。 */
+  var FKEY = 'bao_fail_v1';
+  function failMap(){ try { return JSON.parse(localStorage.getItem(FKEY) || '{}') || {}; } catch(e){ return {}; } }
+  function markFail(t){ var m = failMap(); m[k + ':' + t] = Date.now(); try { localStorage.setItem(FKEY, JSON.stringify(m)); } catch(e){} }
+  function clearFail(t){ var m = failMap(); delete m[k + ':' + t]; try { localStorage.setItem(FKEY, JSON.stringify(m)); } catch(e){} }
+  function failedBefore(t){ return !!failMap()[k + ':' + t]; }
+  function failMsg(t, e){
+    var s = String((e && (e.message || e)) || '生成失败');
+    markFail(t);
+    if (s.indexOf('已取消') >= 0){ msg(t, '已取消'); return; }
+    msg(t, '✗ ' + s, true);
   }
   var KLAB = {1: '主图', 2: '参数', 3: '卖点', 4: '尺寸'};
   var SLAB = {'1_首图': '首图', '2_机器图': '机器展示', '4_核心参数': '机器参数', '5_尺寸图': '尺寸图'};
@@ -6130,6 +6173,7 @@ function openBaoView(k){
        （querySelector 返回 null 直接 return），重开窗会由 HEAD 探测/接管兜住 */
     T(pollJob('kitset:' + k, function(res){
       kGen = false;
+      setCancelVis('k', false); clearFail('k');
       if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
       msg('k', res && res.cached ? '缓存秒出' : '✓ 蓝底四张完成');
       showK();
@@ -6137,8 +6181,9 @@ function openBaoView(k){
       if (done) done();
     }, function(err){
       kGen = false;
+      setCancelVis('k', false);
       if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
-      msg('k', '✗ ' + (err && err.message || '蓝底生成失败'), true);
+      failMsg('k', err);            // 2026-11-14：失败记档，重开窗不再自动重跑
       if (done) done();   // 蓝底失败也放行聚光（后端会自己抓素材）
     }, function(sec, st){
       msg('k', ((st && st.prog) || '生成中…') + '（已 ' + sec + ' 秒）');
@@ -6147,6 +6192,7 @@ function openBaoView(k){
   function genK(force, btn, done){
     if (kGen){ msg('k', '蓝底已在生成中…'); return; }
     kGen = true;
+    setCancelVis('k', true); clearFail('k');
     if (btn){ btn.disabled = true; btn.textContent = '生成中…'; }
     var tried = 0;
     (function go(){
@@ -6166,8 +6212,9 @@ function openBaoView(k){
         .catch(function(err){
           if (tried++ < 1){ T(setTimeout(go, 1500)); return; }
           kGen = false;
+          setCancelVis('k', false);
           if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
-          msg('k', '✗ 请求失败：' + err, true);
+          failMsg('k', new Error('请求失败：' + err));
         });
     })();
   }
@@ -6184,12 +6231,14 @@ function openBaoView(k){
   }
   function failS(btn, e){
     sGen = false;
+    setCancelVis('s', false);
     if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
-    msg('s', '✗ ' + ((e && (e.message || e)) || '聚光生成失败'), true);
+    failMsg('s', e);   /* 2026-11-14：失败记档，重开窗不再自动重跑；已取消灰显不红 */
   }
   function genS(btn){
     if (sGen){ msg('s', '聚光已在生成中…'); return; }
     sGen = true;
+    setCancelVis('s', true); clearFail('s');
     if (btn){ btn.disabled = true; btn.textContent = '生成中…'; }
     var nQ = 0;   /* 撞锁排队次数（防两窗互抢死循环） */
     function grabPub(){
@@ -6233,6 +6282,7 @@ function openBaoView(k){
               loadLib(function(){
                 if (SFILES.length){
                   sGen = false;
+                  setCancelVis('s', false); clearFail('s');
                   if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
                   msg('s', '✓ 生成完成 · AI 后台复检中');
                 } else startGen();
@@ -6243,10 +6293,14 @@ function openBaoView(k){
           if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
           pollPub(function(jb){
             sGen = false;
+            setCancelVis('s', false);
             if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
             if (jb.ok){
+              clearFail('s');
               msg('s', '✓ 生成完成 · AI 后台复检中');
               loadLib();
+            } else if (String(jb.err || '').indexOf('已取消') >= 0){
+              msg('s', '已取消');
             } else msg('s', '✗ ' + (jb.err || '聚光生成失败'), true);
           });
         })
@@ -6351,13 +6405,15 @@ function openBaoView(k){
   }
   /* ---------- 聚光文案（2026-11-14 方案 A）：同款版面，参数直给口径，不碰 Pro 页 ---------- */
   var SCPY = '#6d28d9', SCPY_BG = '#ede9fe', SCPY_BD = '#ddd6fe';
+  /* 聚光专属售后 4 版（2026-11-14 用户令「怎么蓝底跟聚光都是一样的呢」）：
+     不再读蓝底 set.json 的售后——聚光自己这套措辞，跟蓝底那四版完全不同款。 */
   function scAfs(brand){
     var b = (brand || '海尔').trim() || '海尔';
     return [
-      '全新机，' + b + '全国联保。\n支持到货验货，破损可拒收。\n看中了就联系我，聊得来价格好商量。',
-      b + '官方正品，全新机，全国联保。\n品质保证，放心购买，售后无忧。',
-      '全新机，' + b + '全国联保。\n支持专业送货安装，当地有师傅上门。',
-      '全新机，' + b + '全国联保，支持验货。\n满意再确认，售后有保障。'
+      '全新机，' + b + '旗舰店同款同源，全国联保。\n到货先验货再签收，有问题直接拒收退回。\n想了解的随时问我，看到就回。',
+      b + '原厂正品，全新未启动，联保生效。\n机器可查序列号，支持官方售后验证。\n放心拍，售后问题全程跟进。',
+      '全新机，' + b + '全国联保，可预约师傅上门安装。\n安装费按当地标准，买前可以先问清楚。\n同城可自提，外地发物流。',
+      '全新正品，' + b + '全国联保。\n验货满意再确认收货。'
     ];
   }
   function renderSCopy(D, AFS){
@@ -6435,13 +6491,9 @@ function openBaoView(k){
         if (!j || (!j.ok && m.indexOf('已在生成中') < 0)) throw new Error(m || '启动失败');
         T(pollJob('copy:' + k + ':l', function(res){
           if (!res || !res.ok) throw new Error((res && res.msg) || '生成失败');
-          fetch('/api/kitset?model=' + encodeURIComponent(k) + '&read=1')
-            .then(function(r2){ return r2.json(); })
-            .then(function(kj){
-              var afs = (kj && kj.aftersales) ? kj.aftersales.filter(function(x){ return String(x || '').trim(); }) : [];
-              renderSCopy(res, afs.length ? afs : scAfs(res.brand || ''));
-            })
-            .catch(function(){ renderSCopy(res, scAfs(res.brand || '')); });
+          /* 2026-11-14 用户令「售后怎么蓝底跟聚光都是一样的呢」：聚光售后不再读
+             蓝底 set.json——固定用自己的四版（scAfs），两边措辞完全不同 */
+          renderSCopy(res, scAfs(res.brand || ''));
         }, function(err){
           paintErr(String(err.message || err));
         }, function(sec){
@@ -6454,20 +6506,7 @@ function openBaoView(k){
         paintErr(m2);
       });
   }
-  wrap.querySelectorAll('[data-baocpy]').forEach(function(el){
-    el.addEventListener('click', function(){
-      var t = el.getAttribute('data-baocpy');
-      wrap.querySelectorAll('[data-baocpy]').forEach(function(x){
-        var on = x === el;
-        x.style.background = on ? (x.getAttribute('data-baocpy') === 'k' ? '#eef2ff' : '#ede9fe') : '#fff';
-        x.style.color = on ? (x.getAttribute('data-baocpy') === 'k' ? '#1d4ed8' : '#6d28d9') : '#43464c';
-        x.style.borderColor = on ? (x.getAttribute('data-baocpy') === 'k' ? '#c7d2fe' : '#ddd6fe') : '#e8e8e4';
-        x.style.fontWeight = on ? '600' : '400';
-      });
-      wrap.querySelector('#bao_cpy_k').style.display = (t === 'k') ? 'block' : 'none';
-      wrap.querySelector('#bao_cpy_s').style.display = (t === 's') ? 'block' : 'none';
-    });
-  });
+  /* 2026-11-14 文案栏改左右两半后页签删除——旧 data-baocpy 切换逻辑一并下线 */
   wrap.querySelectorAll('[data-baogen]').forEach(function(el){
     el.addEventListener('click', function(){
       (el.getAttribute('data-baogen') === 'k') ? genK(true, el) : genS(el);
@@ -6493,17 +6532,29 @@ function openBaoView(k){
   loadLib(function(){
     /* 开窗自动补缺（跟婷窗同规矩）：蓝底缺→补蓝底，聚光缺→补聚光。
        2026-11-04 用户令「跑一个就够了」：两套都缺时聚光等蓝底抓完再跑，
-       别两条爬虫同时爬同一台机器（后端也会等蓝底素材复用，双保险） */
+       别两条爬虫同时爬同一台机器（后端也会等蓝底素材复用，双保险）。
+       2026-11-14 用户令「跑失败了再点进来又接着跑」：上次失败过的不再自动重跑——
+       提示「上次生成失败」，想跑点「重新生成」（点的时候自动清失败记录）。 */
     var sNeed = !SFILES.length;
+    var kAuto = !failedBefore('k'), sAuto = !failedBefore('s');
+    function _sStart(){ genS(wrap.querySelector('[data-baogen="s"]')); }
     try {
       fetch(kImg(1), {method: 'HEAD'}).then(function(r){
         if (!r.ok){
+          if (!kAuto){
+            msg('k', '上次生成失败——点「重新生成」再试', true);
+            if (sNeed && sAuto) _sStart();   /* 蓝底不自动跑，聚光不受牵连 */
+            return;
+          }
           genK(false, wrap.querySelector('[data-baogen="k"]'), function(){
-            if (sNeed) genS(wrap.querySelector('[data-baogen="s"]'));
+            if (sNeed && sAuto) _sStart();
           });
-        } else if (sNeed) genS(wrap.querySelector('[data-baogen="s"]'));
-      }).catch(function(){ if (sNeed) genS(wrap.querySelector('[data-baogen="s"]')); });
-    } catch (e) { if (sNeed) genS(wrap.querySelector('[data-baogen="s"]')); }
+        } else if (sNeed){
+          if (!sAuto){ msg('s', '上次生成失败——点「重新生成」再试', true); return; }
+          _sStart();
+        }
+      }).catch(function(){ if (sNeed && sAuto) _sStart(); });
+    } catch (e) { if (sNeed && sAuto) _sStart(); }
     if (!sNeed) msg('s', '缓存秒出');
   });
 }
@@ -9645,10 +9696,36 @@ function openJobs(){
         + lst.map(function(x){
             var st = x.running ? '<span style="color:#c2760a">跑着</span>'
                    : (x.ok === true ? '<span class="ok">完成</span>' : '<span class="bad">失败</span>');
-            return '<tr><td class="mono" style="font-size:11.5px">' + esc(x.k) + '</td><td>' + st + '</td>'
+            /* 2026-11-14 用户令「能直接点击就跳到他生成文案的那个界面」：
+               copy:<型号>:<kind> → 打开写文案页；kitset:/kitwhite: → 打开宝套图/婷套图窗。
+               认不出的 key（pubqa 等内部任务）不可点。 */
+            var jk = String(x.k || ''), mm = jk.match(/^copy:(.+):(l|s|z)$/), jump = '';
+            if (mm) jump = 'copy';
+            else if (jk.indexOf('kitset:') === 0) jump = 'bao';
+            else if (jk.indexOf('kitwhite:') === 0) jump = 'white';
+            return '<tr' + (jump ? ' data-jump="' + jump + '" data-jk="' + esc(jk) + '" style="cursor:pointer" title="点击打开对应界面"' : '')
+              + '><td class="mono" style="font-size:11.5px">' + esc(x.k) + '</td><td>' + st + '</td>'
               + '<td style="font-size:12px">' + esc(x.prog || x.err || '—') + '</td></tr>';
           }).join('') + '</table>'
-        + '<div style="margin-top:8px;font-size:11.5px;color:#98a2b3">每 2 秒自动刷新；关掉这个窗也不影响任务继续跑。</div>';
+        + '<div style="margin-top:8px;font-size:11.5px;color:#98a2b3">每 2 秒自动刷新；关掉这个窗也不影响任务继续跑。点任务行可以直接跳到对应界面。</div>';
+      /* 跳转事件（2026-11-14）：重建 innerHTML 后重挂 */
+      m.querySelector('.exmb').querySelectorAll('tr[data-jump]').forEach(function(tr){
+        tr.addEventListener('click', function(){
+          var jk = tr.getAttribute('data-jk') || '';
+          var jp = tr.getAttribute('data-jump');
+          if (jp === 'copy'){
+            var mm = jk.match(/^copy:(.+):(l|s|z)$/);
+            if (mm) openCopyView(mm[1], mm[2], false);
+          } else if (jp === 'bao'){
+            openBaoView(jk.slice('kitset:'.length));
+          } else if (jp === 'white'){
+            /* kitwhite:<型号>:<tone> → 婷套图窗 */
+            var k2 = jk.slice('kitwhite:'.length).replace(/:(blue|purple)$/, '');
+            openWhiteView(k2);
+          }
+          m.remove();   /* 跳过去就把任务列表收起来，别挡着 */
+        });
+      });
     });
   }
   draw();

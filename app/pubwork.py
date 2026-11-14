@@ -176,17 +176,36 @@ def mdir(model):
 # ---------------------------------------------------------------- 后台任务状态（前端轮询）
 
 JOB = {"running": False, "model": "", "what": "", "pct": 0, "msg": "",
-       "ok": None, "err": "", "t": 0}
+       "ok": None, "err": "", "t": 0, "cancel": False}
 _JLOCK = threading.Lock()
 
 
 def _job_begin(model, what):
     with _JLOCK:
         JOB.update({"running": True, "model": model, "what": what, "pct": 1,
-                    "msg": "准备中 ...", "ok": None, "err": "", "t": 0})
+                    "msg": "准备中 ...", "ok": None, "err": "", "t": 0, "cancel": False})
+
+
+def job_cancel():
+    """请求取消当前在跑的任务（2026-11-14 用户令「连取消的按键都没有」）：
+    立旗子，_job_prog 在下一个进度打点抛 CancelledError 收工。
+    返回 True=立上了（有任务在跑）。"""
+    with _JLOCK:
+        if JOB.get("running"):
+            JOB["cancel"] = True
+            JOB["msg"] = "已请求取消，正在收尾…"
+            return True
+        return False
 
 
 def _job_prog(pct, msg):
+    with _JLOCK:
+        _cancel = JOB.get("cancel")
+    if _cancel:
+        # 2026-11-14 取消闸：进度打点=任务链的检查点，到点立刻收工。
+        # 生成链各处把 prog/progress 回调包在 try 里吞异常的极少——真吞了
+        # 就等下一个打点，最迟也是整单结束前退出。
+        raise RuntimeError("已取消")
     with _JLOCK:
         JOB["pct"] = max(1, min(100, int(pct)))
         if msg:

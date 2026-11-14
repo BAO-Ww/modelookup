@@ -1111,7 +1111,7 @@ def titles(info):
     例（海尔 243 升 三门冰箱）：
       1 海尔 243 升风冷无霜冰箱 BCD-243WGHC2E7XM 全新机 家用三门 全国联保
       2 全新机 海尔 243L 三门冰箱 风冷无霜 BCD-243WGHC2E7XM 原厂正品联保
-      3 海尔三门冰箱 243 升 风冷无霜 BCD-243WGHC2E7XM 全新原封全国联保
+      3 海尔三门冰箱 243 升 风冷无霜 BCD-243WGHC2E7XM 全新机 官方正品 全国联保
     """
     b = (info.get("brand") or "海尔").strip()
     model = (info.get("model") or "").strip()
@@ -1132,8 +1132,8 @@ def titles(info):
               ("家用" + tw) if tw else "", "全国联保")
     # 版本2：成色 品牌 容量(无空格) 类型+品类 核心功能 型号 售后(原厂)
     v2 = join("全新机", b, cap_ns, (tw + cat) if tw else cat, feat, model, "原厂正品联保")
-    # 版本3：品牌+类型+品类 容量 核心功能 型号 成色简+售后
-    v3 = join((b + tw + cat) if tw else (b + cat), cap_sp, feat, model, "全新原封全国联保")
+    # 版本3：品牌+类型+品类 容量 核心功能 型号 成色简+售后（2026-11-14 用户令：全新原封除名）
+    v3 = join((b + tw + cat) if tw else (b + cat), cap_sp, feat, model, "全新机", "官方正品全国联保")
     # 闲鱼标题按「字符数」计上限（每个汉字算 1 字），用字符数截断，避免中文被双算砍掉
     def clip(s, n=60):
         s = re.sub(r"\s+", " ", str(s)).strip()
