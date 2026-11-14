@@ -20,6 +20,10 @@ on:
       - 'v*'
     branches:
       - main
+    # 2026-11-14：只改 .github/ 下的 workflow（抓取加固等）不再触发一次完整构建；
+    # tag 推送不受 paths-ignore 影响，发版链路照旧。
+    paths-ignore:
+      - '.github/**'
 
 permissions:
   contents: write

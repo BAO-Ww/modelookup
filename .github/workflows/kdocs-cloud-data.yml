@@ -32,14 +32,76 @@ jobs:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
       PY: C:\actions-runner\_work\_tool\Python\3.11.9\x64\python.exe   # 本机预置 Python
+      SCRIPTS: C:\actions-runner\_scriptcache\modelookup\.github\scripts   # 脚本本地缓存（不走 checkout）
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      # 2026-11-14 用户令「怎么稳定怎么改」：本机到 codeload.github.com 频繁 TLS 断连，
+      # actions/checkout@v4 一挂整班白跑（#940 实锤，后面步骤全 skipped）。
+      # 改用「只取本班要用的脚本」：三路来源 + 重试，成功一份就落本地缓存
+      # （网络全挂时用缓存副本照常出数据；抓取脚本本身零仓库依赖，纯标准库）。
+      - name: Prepare scripts (cache + 3 sources + retry)
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dst = $env:SCRIPTS
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          $f = 'kdocs_cloud_pull.py'
+          $target = Join-Path $dst $f
+          $ok = $false
+
+          # ① api.github.com（本机实测最稳的一路）
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            try {
+              $hdr = @{ 'User-Agent' = 'ml-runner' }
+              if ($env:GH_TOKEN) { $hdr['Authorization'] = "Bearer $($env:GH_TOKEN)" }
+              $u = "https://api.github.com/repos/BAO-Ww/modelookup/contents/.github/scripts/$f" + "?ref=main"
+              $j = Invoke-RestMethod -Uri $u -Headers $hdr -TimeoutSec 30
+              $b = [Convert]::FromBase64String(($j.content -replace "`n|`r", ""))
+              [IO.File]::WriteAllBytes("$target.tmp", $b)
+              Move-Item -Force "$target.tmp" $target
+              Write-Host "[$f] api.github.com OK ($($b.Length) B)"
+              $ok = $true
+            } catch {
+              Write-Host "[$f] api 第 $i 次失败：$($_.Exception.Message)"
+              Start-Sleep -Seconds (4 * $i)
+            }
+          }
+
+          # ② raw.githubusercontent.com
+          for ($i = 1; $i -le 2 -and -not $ok; $i++) {
+            try {
+              Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 `
+                -Uri "https://raw.githubusercontent.com/BAO-Ww/modelookup/main/.github/scripts/$f" `
+                -OutFile "$target.tmp"
+              Move-Item -Force "$target.tmp" $target
+              Write-Host "[$f] raw.githubusercontent OK"
+              $ok = $true
+            } catch {
+              Write-Host "[$f] raw 第 $i 次失败：$($_.Exception.Message)"
+              Start-Sleep -Seconds (4 * $i)
+            }
+          }
+
+          # ③ 本地缓存副本（可能是上一版，但网络全挂时照样有数据）
+          if (-not $ok) {
+            if (Test-Path $target) { Write-Host "[$f] 网络全失败，用本地缓存副本（非最新）"; $ok = $true }
+          }
+          if (-not $ok) { throw "拿不到脚本：$f" }
+          Write-Host "scripts ready -> $target"
 
       - name: Install Playwright + Chromium + openpyxl
         run: |
-          & "$env:PY" -m pip install playwright==1.48.0 openpyxl
-          & "$env:PY" -m playwright install chromium
+          $ok = $false
+          foreach ($i in 1..3) {
+            & "$env:PY" -m pip install --disable-pip-version-check -q playwright==1.48.0 openpyxl
+            & "$env:PY" -m playwright install chromium
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "== 依赖安装第 $i 次失败，30 秒后重试 =="
+            Start-Sleep -Seconds 30
+          }
+          if (-not $ok) { exit 1 }
 
       - name: Pull KDocs tables and upload
         env:
@@ -48,7 +110,7 @@ jobs:
         run: |
           $ok = $false
           foreach ($i in 1..3) {
-            & "$env:PY" .github/scripts/kdocs_cloud_pull.py
+            & "$env:PY" "$env:SCRIPTS\kdocs_cloud_pull.py"
             if ($LASTEXITCODE -eq 0) { $ok = $true; break }
             Write-Host "== 第 $i 次失败，60 秒后重试 =="
             Start-Sleep -Seconds 60
@@ -57,8 +119,8 @@ jobs:
 
       # 自建 runner 每跑一班写一对 _diag 诊断日志，只进不出（2026-10-30 实测 280MB/661 个）。
       # 每次抓取清一次：删 3 天前的旧日志（留最近 3 天够排障）+ 清空 runner 临时目录。
-      # 数据文件本身不留（脚本临时目录自清、checkout 自动清仓）；_work\_tool 里的预置
-      # Python 是 yml 写死的工具链，绝不能动。失败也照清（always）。
+      # 数据文件本身不留（脚本临时目录自清）；_work\_tool 里的预置 Python 是 yml 写死的
+      # 工具链、_scriptcache 是脚本缓存，这两处绝不能动。失败也照清（always）。
       - name: Cleanup runner residue
         if: always()
         shell: powershell
