@@ -42,6 +42,8 @@ jobs:
       # 手机版页面 + 自己的脚本），本地 sha 没变就跳过；下载优先 jsDelivr CDN（国内快、
       # 按 sha 取不会串版本），退 api blobs；API 全挂就沿用本地快照照常出数据。
       # 结构保持仓库相对路径——脚本按 __file__ 往上三层找 app/ 与 mobile/ 才能照旧工作。
+      # 注意：下面 PS 脚本里的提示语一律写 ASCII——runner 把 .ps1 按 GBK 解，中文字符
+      # 紧贴收尾引号时会把引号吃掉导致整段语法错误（#946/#947/#948 连挂就是这么来的）。
       - name: Sync repo snapshot (manifest, no checkout)
         shell: powershell
         env:
@@ -62,16 +64,16 @@ jobs:
               $b = [Convert]::FromBase64String(($j.content -replace "`n|`r", ""))
               [IO.File]::WriteAllBytes("$boot.tmp", $b)
               Move-Item -Force "$boot.tmp" $boot
-              Write-Host "sync_cache.py 就绪（$($b.Length) B）"
+              Write-Host "sync_cache.py ready ($($b.Length) B)"
               $ok = $true
             } catch {
-              Write-Host "取 sync_cache.py 第 $i 次失败：$($_.Exception.Message)"
+              Write-Host "fetch sync_cache.py try $i failed : $($_.Exception.Message)"
               Start-Sleep -Seconds ([Math]::Min(4 * $i, 20))
             }
           }
-          if (-not $ok -and -not (Test-Path $boot)) { throw "拿不到 sync_cache.py，且本地无副本" }
+          if (-not $ok -and -not (Test-Path $boot)) { throw "sync_cache.py unavailable (no network, no cache)" }
           & "$env:PY" $boot $root
-          if ($LASTEXITCODE -ne 0) { throw "仓库快照同步失败（关键文件缺失）" }
+          if ($LASTEXITCODE -ne 0) { throw "repo snapshot sync failed (required files missing)" }
 
       - name: Install Playwright + Chromium + openpyxl
         run: |
