@@ -527,6 +527,8 @@ def is_wide(prod):
 
 
 def place_band(cv, prod, top, bot, maxw=1000):
+    import pei_core as _pc
+    prod = _pc.defringe_white(prod)   # 端面浅灰拉白，贴白底不显色圈（2026-11-14）
     scale = TUNE.get("machine_scale", 1.0)
     top = top + int(TUNE.get("top_pad", 0))
     ar = prod.width / prod.height
@@ -585,6 +587,16 @@ def save(cv, p):
         return wm_paper.stamp_save(cv, p, 96)
     cv.convert("RGB").save(p, quality=96)
     return p
+
+
+def _hint_pill(cv):
+    """聚光尺寸图底部红胶囊（2026-11-14 用户定稿，pei_core 统一画）。"""
+    try:
+        if core is not None:
+            core.hint_pill(cv, core.HINT_TEXT["spot"])
+    except Exception:
+        pass
+    return cv
 
 
 # ================= 9 张 =================
@@ -665,15 +677,24 @@ def _brand_minimal(cv, dr, x=64, y=74, dark=False):
     im = _brand_logo_im(white=not dark, h=46)
     if im is not None:
         cv.alpha_composite(im, (x, y - 8))
+        # logo 下面加型号（2026-11-13 用户令）：2026-11-13 二改——字号 26 墨色、
+        # 金条拉高对齐文字块，跟 logo 组成一个整体，不再小灰字单薄
+        dr.rectangle([x, y + 40, x + 5, y + 70], fill=(176, 141, 73) if dark else GOLD)
+        T(dr, (x + 16, y + 55), (P.get('model') or '').strip(), 26,
+          INK_TXT if dark else TX1, "lm")
         return
     if dark:
         t_en = " ".join(list(str(P.get('ben', '')).upper()))
         T(dr, (x, y), t_en, 24, "#8a93a5", "lm")
         T(dr, (x, y + 46), str(P.get('brand', '')), 40, INK_TXT, "lm")
+        dr.rectangle([x, y + 76, x + 5, y + 106], fill=(176, 141, 73))
+        T(dr, (x + 16, y + 91), (P.get('model') or '').strip(), 26, INK_TXT, "lm")
         return
     t_en = " ".join(list(str(P.get('ben', '')).upper()))
     T(dr, (x, y), t_en, 24, GOLD, "lm")
     T(dr, (x, y + 46), str(P.get('brand', '')), 40, TX1, "lm")
+    dr.rectangle([x, y + 76, x + 5, y + 106], fill=GOLD)
+    T(dr, (x + 16, y + 91), (P.get('model') or '').strip(), 26, TX1, "lm")
 
 def _brand_line(dr, cx=None, y=74):
     """首图顶部居中品牌行：HAIER 海尔（金+白）。"""
@@ -826,6 +847,19 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
         _px = W // 2 - _pw // 2
         dr.rounded_rectangle([_px, _py, _px + _pw, _py + _ph], _ph // 2, fill=(255, 199, 0, 255))
         T(dr, (W // 2, _py + _ph // 2 + 2), _mt, _cb, "#ffffff", "mm")
+        # 底部卖点行（2026-11-14 用户令「聚光首图下面没有卖点了」）：跟蓝底 img1
+        # 同源——读 set.json cfg['features_line']（蓝底抓取时落盘的 3-4 个参数短词）；
+        # 没有快照就不画，不拦出图。
+        _feat = ""
+        try:
+            import io as _io, json as _json
+            _sp = os.path.join(P.get("_root") or "", "set.json")
+            if os.path.isfile(_sp):
+                _feat = (_json.load(_io.open(_sp, encoding="utf-8")).get("cfg") or {}).get("features_line") or ""
+        except Exception:
+            _feat = ""
+        if _feat:
+            T(dr, (W // 2, 998), _feat, 30, INK_TXT, "mm")
         return save(cv, out / "1_首图.jpg")
     # 顶栏：成色 + 全国联保
     dim(cv, (0, 0, W, 52), SCRIM_COL, SCRIM_A)
@@ -1112,7 +1146,7 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
             T(dr, (W // 2, 972), "宽 %s mm · 高 %s mm · 深 %s mm" % (Wd, Hd, Dd), 25, _t2, "mm")
         else:
             T(dr, (W // 2, 940), "%s %s" % (P['brand'], P['model']), 30, _t1, "mm")
-        return save(cv, dst)
+        return save(_hint_pill(cv), dst)
     if dims:
         # 暗底手绘线框：正视图+宽高金色标注，深度一句话（几何同蓝底、线条改浅色）
         Wd, Hd, Dd = dims
@@ -1168,7 +1202,7 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
             _pt = " · ".join(_kv)
             _ps = 23 if dr.textlength(_pt, font=font(23, True)) <= W - 120 else 19
             T(dr, (W // 2, 972), _pt, _ps, _t2, "mm")
-        return save(cv, dst)
+        return save(_hint_pill(cv), dst)
     # 没官方线稿、连尺寸数字都没有（绝不瞎编数字）：拿机图描一张浅色线稿占主位，
     # 底部品牌型号+一句话兜底（2026-10-28 用户令「没有尺寸的你就画一个」）
     sk = (_sketch_rgba(front, color=(28, 30, 34)) if _SPOT_LIGHT else _sketch_rgba(front)) if front else None
@@ -1187,7 +1221,7 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
         T(dr, (W // 2, 972), _pt, _ps, _t2, "mm")
     else:
         T(dr, (W // 2, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格", 24, _t2b, "mm")
-    return save(cv, dst)
+    return save(_hint_pill(cv), dst)
 
 
 def img5(openpng, out):               # 开门大容量
@@ -1880,6 +1914,7 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
             ai_copy = None
     P = build_text(info, version, sell_price, ai_copy)
     P["title"] = str(info.get("title") or "").strip()   # 软件条目标题（聚光首图标题用，2026-10-30）
+    P["_root"] = str(info.get("dir") or "")             # 型号根目录（聚光首图读蓝底 set.json 卖点行用，2026-11-14）
     if GEN_STYLE == "spot":
         # 聚光首图中部标题：优先软件条目标题去型号段（2026-10-30 用户令），
         # 取不到才退回「品牌+品类+容量」组合（如 海尔滚筒洗衣机10公斤）

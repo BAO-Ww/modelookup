@@ -27,15 +27,19 @@ import random
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-WM_ON = True                       # 总开关（出问题可一键关）
-ALPHA = 26                         # 融字水印不透明度（26/255 = 10%，用户 2026-11-13 二次定档）
-WM_COL = (178, 170, 154)           # 暖灰水印色
+WM_ON = False                      # 总开关（2026-11-13 20:31 用户令「水印去掉吧」→ 关）
+                                   # 关掉后 stamp/paper_bg_wm/white_bg_wm 全部不出水印，
+                                   # 纸感白底纹理保留，蓝底回纯白。要恢复改 True 即可。
+ALPHA = 204                        # 融字水印不透明度（204/255 = 80%，用户 2026-11-13 定档）
+WM_SIZE = 30                       # 水印字号（2026-11-13 用户定档 30px）
+WM_COL = (158, 150, 138)           # 暖灰水印色（中性偏灰，色度下采样不毁亮度差）
 B3 = (254, 254, 252)               # 纸感白底色（用户定稿档）
 SECRET = "TINGBAO-PAPER-2026"      # 微点阵密钥（勿入仓库外任何明文）
 TXT = {
     "spot": "当代打太极的科科",     # 聚光水印文案（用户 2026-11-13 定稿）
     "blue": "椅子上带薪神游的东星斑",  # 蓝底水印文案
 }
+BRAND_SAFE = (0, 0, 560, 215)      # 品牌避让区（左上 logo+型号），水印不进这块
 DOT_N = 240                        # 每张图微点数量
 _FONT_CANDS = (
     "C:/Windows/Fonts/msyh.ttc",
@@ -91,15 +95,21 @@ def _wm_layer(w, h, txt, alpha=None):
     a = ALPHA if alpha is None else int(alpha)
     layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    f = _font(28)
-    sx = int(d.textlength(txt, font=f)) + 56
-    sy = 168
+    f = _font(WM_SIZE)
+    # 稀疏平铺（2026-11-13 用户令「不要那么密集」）：间距取「字号倍数」与「固定像素」
+    # 的大者——小字号也保持 3 行左右，不会因为字小就挤成一片。
+    sx = int(d.textlength(txt, font=f)) + max(int(WM_SIZE * 2.2), 150)
+    sy = max(int(WM_SIZE * 6.5), 340)
     for ry in range(-2, h // sy + 3):
         for rx in range(-2, w // sx + 3):
             x = rx * sx + (sx // 2 if ry % 2 else 0)
             y = ry * sy
             d.text((x, y), txt, font=f, fill=WM_COL + (a,))
-    return layer.rotate(28, expand=False, resample=Image.BICUBIC)
+    lay = layer.rotate(28, expand=False, resample=Image.BICUBIC)
+    # 避让左上品牌区（2026-11-13 用户令「别让 logo 压在水印上」）：logo+型号
+    # 附近整块擦透明，品牌区四周干干净净，水印只在其他底色处出现。
+    ImageDraw.Draw(lay).rectangle(BRAND_SAFE, fill=(0, 0, 0, 0))
+    return lay
 
 
 def _dots_layer(w, h):

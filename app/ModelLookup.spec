@@ -49,6 +49,8 @@ a = Analysis(
     hiddenimports=[
         "openpyxl", "et_xmlfile",
         "webview", "webview.menu", "webview.platforms.winforms",
+        # 品类档案（2026-11-14）：蓝底卖点模板 + 聚光 PROMPT 必讲维度共用，必须打进包
+        "copy_cats",
         "clr", "pythonnet", "clr_loader",
         # 促销首图合成（copywriter.make_featured）：主图 + 价格角标 PIL 拼图
         "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont",

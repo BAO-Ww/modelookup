@@ -279,7 +279,7 @@ def _crop_prod(img):
 
 
 def _paste_product(C, img, cx, bottom_y, target_h, max_w=1080):
-    img = _crop_prod(img)
+    img = pei_core.defringe_white(_crop_prod(img))   # 端面浅灰拉白，贴白底不显色圈
     w, h = img.size
     if h < 10:
         return
@@ -330,7 +330,10 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
     _lw = _paste_logo(d, C, cfg, (60, 88), white=False, h=38)
     if _lw <= 0:
         _spaced(d, (60, 88), cfg.get("brand_en", "HAIER"), _font(F_LIGHT, 30), INK, tracking=14)
-    _spaced(d, (60, 132), cfg["series"], _font(F_LIGHT, 24), GRAY, tracking=8)
+    # logo 下面加型号（2026-11-13 用户令）；系列字与胶囊重复，主图只放型号。
+    # 左侧品牌蓝小竖条提设计感
+    d.rectangle([60, 128, 64, 156], fill=_accent)
+    d.text((74, 142), cfg.get("model") or "", font=_font(F_BOLD, 26), fill=INK, anchor="lm")
     d.rectangle([60, 186, 108, 189], fill=_accent)
     th = cfg.get("img1_h", 860)
     # 电视等 16:9 横图实际渲染高远小于 th，按 th 定位会沉底/偏移——用实际高定位（2026-10-22）
@@ -427,7 +430,14 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
 def _render_img2(cfg, prod, out, safe=False):
     C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
-    _header(d, "核 心 参 数")
+    # 左上角 logo + 型号（2026-11-13 用户令），标题整体下移让位（机器 top_min=250，安全）
+    if _paste_logo(d, C, cfg, (60, 56), white=False, h=32, max_w=170) > 0:
+        d.rectangle([60, 88, 64, 112], fill=BLUE)
+        d.text((74, 100), cfg.get("model") or "", font=_font(F_REG, 20), fill=GRAY, anchor="lm")
+        d.rectangle([60, 126, 132, 128], fill=BLUE)
+        _spaced(d, (60, 152), "核 心 参 数", _font(F_REG, 34), INK, tracking=10)
+    else:
+        _header(d, "核 心 参 数")
     th2 = cfg.get("img2_h", 640)
     # 定位预算用裁完边的内容尺寸（2026-10-28 实锤）：原图透明边距大时预算高偏小，
     # 机器实际贴出来上沿顶进「核心参数」标题——先裁再算，所见即所得
@@ -505,10 +515,13 @@ def _render_img3(cfg, points, out, safe=False):
     C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     # 左上角品牌 logo（2026-11-13 用户令），没有 logo 图的品牌退回原两行文字
-    if _paste_logo(d, C, cfg, (66, 112), white=False, h=36) <= 0:
+    if _paste_logo(d, C, cfg, (66, 108), white=False, h=36) <= 0:
         d.text((66, 92), " ".join(cfg.get("brand_en") or "HAIER"), font=_font(F_BOLD, 26), fill=(150, 158, 168), anchor="lm")
         d.text((66, 132), (cfg.get("brand") or "") + (cfg.get("cat") or ""), font=_font(F_BOLD, 26), fill=(90, 98, 108), anchor="lm")
-    d.rounded_rectangle([66, 158, 116, 163], 2, fill=BLUE)
+    # logo 下面加型号（2026-11-13 用户令），蓝色短竖线让位下移
+    d.rectangle([66, 146, 70, 170], fill=BLUE)
+    d.text((80, 158), cfg.get("model") or "", font=_font(F_REG, 20), fill=GRAY, anchor="lm")
+    d.rounded_rectangle([66, 196, 116, 201], 2, fill=BLUE)
     vt = "官方卖点"
     vy0 = 264
     d.rounded_rectangle([100, vy0 + 10, 104, vy0 + 10 + 130], 2, fill=(201, 168, 102))
@@ -682,6 +695,10 @@ def _sketch_rgba(path, color=(28, 30, 34)):
 def _render_img4(cfg, out, prod=None, safe=False):
     C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
+    # 左上角 logo + 型号（2026-11-13 用户令）；标题仍居中，左上空白区不冲突
+    if _paste_logo(d, C, cfg, (60, 62), white=False, h=34, max_w=170) > 0:
+        d.rectangle([60, 94, 64, 118], fill=BLUE)
+        d.text((74, 106), cfg.get("model") or "", font=_font(F_REG, 20), fill=GRAY, anchor="lm")
     _t4 = 46 if safe else 50
     _b4 = 27 if safe else 30
     _d4 = 23 if safe else 25
@@ -721,6 +738,8 @@ def _render_img4(cfg, out, prod=None, safe=False):
         if dims and all(dims):
             d.text((540, 972), "宽 %d mm · 高 %d mm · 深 %d mm" % tuple(dims),
                    font=_font(F_REG, _d4), fill=GRAY, anchor="mm")
+        # 底部红胶囊提示语（2026-11-14 用户定稿：拍前告知省市、好查库存）
+        pei_core.hint_pill(C, pei_core.HINT_TEXT["blue"])
         wm_paper.stamp_save(C, out, 95)
         return
     if cfg.get("dims"):
@@ -770,6 +789,8 @@ def _render_img4(cfg, out, prod=None, safe=False):
                font=_font(F_BOLD, _b4), fill=INK, anchor="mm")
         d.text((540, 972), "外形尺寸以实物为准 · 可咨询客服获取详细规格",
                font=_font(F_REG, _d4), fill=GRAY, anchor="mm")
+    # 手绘/无尺寸两种兜底分支同样挂红胶囊（版式一致，2026-11-14）
+    pei_core.hint_pill(C, pei_core.HINT_TEXT["blue"])
     wm_paper.stamp_save(C, out, 95)
 
 
@@ -3771,12 +3792,86 @@ def sync_spot_size(model, info, log=None):
 
 
 @serialized
+def _rerender_cached(model, mdir, old, log):
+    """用已抓好的 set.json 快照重渲染蓝底四张（2026-11-13 用户令「重新生成别重新抓」）。
+    抓取产物（product.png / sizeimg.jpg / 官网图）都在盘上，只重跑渲染 + AI 复检，
+    不走网络。set.json 或 product.png 缺料时调用方回退完整抓取链。"""
+    cfg = old.get("cfg") or {}
+    titles = old.get("titles") or []
+    points = old.get("points") or []
+    aftersale = old.get("aftersale") or ""
+    aftersales = old.get("aftersales") or ([aftersale] if aftersale else [])
+    prod = os.path.join(mdir, "product.png")
+    bdir = os.path.join(mdir, BLUE_SUB)
+    os.makedirs(bdir, exist_ok=True)
+    log("用已抓取的数据重新渲染（不重新抓）…")
+
+    def _p(s):
+        try:
+            import jobman
+            jobman.prog("kitset:" + model, s)
+        except Exception:
+            pass
+    _p("渲染 1/4 主图…")
+    _render_img1(cfg, Image.open(prod), os.path.join(bdir, "img_1.jpg"))
+    _p("渲染 2/4 参数图…")
+    _render_img2(cfg, Image.open(prod), os.path.join(bdir, "img_2.jpg"))
+    _p("渲染 3/4 卖点图…")
+    _render_img3(cfg, points, os.path.join(bdir, "img_3.jpg"))
+    _p("渲染 4/4 尺寸图…")
+    _render_img4(cfg, os.path.join(bdir, "img_4.jpg"), prod)
+    _p("AI 复检成片…")
+    try:
+        _qa_blue(model, {}, mdir, cfg, points, prod, log)
+    except Exception as _e:
+        log("AI 复检跳过（不影响出图）：%r" % (_e,))
+    _p("聚光尺寸图对账…")
+    try:
+        sync_spot_size(model, None, log)
+    except Exception:
+        pass
+    res = {"ok": True, "cached": False, "regen": True,
+           "model": cfg.get("model") or model,
+           "name": (cfg.get("series") or "") + " " + (cfg.get("model") or ""),
+           "titles": titles, "points": points, "aftersale": aftersale, "aftersales": aftersales,
+           "params": dict(cfg.get("params_rows") or {}), "src": cfg.get("url") or "",
+           "imgs": ["1", "2", "3", "4"]}
+    res["cfg"] = cfg
+    try:
+        apply_water(bdir)
+    except Exception as _e:
+        log("水印没叠上（不影响出图）：%r" % (_e,))
+    try:
+        res["blur"] = blur_warn(bdir)
+    except Exception:
+        res["blur"] = {}
+    try:
+        with io.open(os.path.join(mdir, "set.json"), "w", encoding="utf-8") as f:
+            json.dump(res, f, ensure_ascii=False)
+    except Exception:
+        pass
+    return res
+
+
 def generate(model, force=0, log=None):
     log = log or (lambda s: None)
     if not os.path.isfile(F_REG):
         raise RuntimeError("缺系统字体 msyh.ttc（%s）" % F_REG)
     mdir = model_dir(model)
+    cache = os.path.join(mdir, "set.json")
     if force:
+        # 用户令 2026-11-13「重新生成别重新抓」：抓好的料还在（set.json 快照 + product.png）
+        # 就用快照重渲染四张，不重新爬。缺料才落到底下的完整抓取链。
+        _prod0 = os.path.join(mdir, "product.png")
+        if os.path.isfile(cache) and os.path.isfile(_prod0):
+            try:
+                with io.open(cache, encoding="utf-8") as f:
+                    _old = json.load(f)
+                _cfg = _old.get("cfg") or {}
+                if _cfg.get("model") and (_cfg.get("params_rows") or {}):
+                    return _rerender_cached(model, mdir, _old, log)
+            except Exception:
+                pass
         # 强制重出时清掉旧的尺寸图缓存（251WBIU1 白门板假阳性实锤：不改代码也得能自愈）
         _stale = os.path.join(mdir, "sizeimg.jpg")
         if os.path.isfile(_stale):

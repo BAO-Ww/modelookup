@@ -52,6 +52,8 @@ a = Analysis(
     hiddenimports=[
         "openpyxl", "et_xmlfile",
         "webview", "webview.menu", "webview.platforms.cocoa",
+        # 品类档案（2026-11-14）：蓝底卖点模板 + 聚光 PROMPT 必讲维度共用，必须打进包
+        "copy_cats",
         # 发布图工厂（2026-10-17 闲鱼配文 Pro 并入）：pei_ai9/pei_hero/pei_core + copywriter 促销首图
         "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont",
         "PIL.ImageFilter", "PIL.ImageStat", "PIL.ImageChops", "PIL.ImageEnhance",

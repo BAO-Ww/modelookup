@@ -471,14 +471,18 @@ PROMPT = """你是闲鱼家电卖家文案写手。产品：{pname}（型号 {mo
    全新机 {brand} 226L 三门冰箱 风冷无霜 {model} 原厂正品联保
    {brand}三门冰箱 226L 风冷无霜 {model} 全新原封全国联保
    {kk_titles}
-3) points：正好12-15条加厚卖点（宁可写满15条，绝不许偷懒只给几条）。每条20-45字，格式＝「核心功能（括号里带具体参数/数字）＋给用户的好处」，一条只讲一个卖点，从【真实数据】的参数表里逐项提炼（总容积/耗电/能效等级/压缩机/制冷方式/变温区/面板材质/尺寸/重量/噪音/冷冻能力/净化除菌/智能功能/开门方式/搁物架/照明……有什么写什么，参数表里每一行都尽量用上）。
-   绝对禁止「智能生活新选择」「品质生活从XX开始」「高效XX利器」这类官网空洞口号。
-   参考口吻（照这个密度写，具体参数数字必须换成【真实数据】里的）：
-   一级双变频（变频压缩机+变频离心风机），省电节能运行平稳降噪
-   风冷无霜，不用手动除霜，制冷均匀食材不结冰
-   中门全变温区（果蔬/珍品/零度/软冻/冷冻五种模式），一台顶多台
+3) points：正好5-8条**参数直给**卖点（聚光用，不是生活场景、不是口号）。每条≤30字，格式＝「参数值＋参数名，一句这个参数带来的结果」，
+   每条必须至少含一个【真实数据】里出现的数字（防编造同时防空话）；示例（数字必须换成【真实数据】里的）：
+   60L 容量，2200W 功率，一级能效
+   整胆加热约 1.5 小时，最高水温 75℃
+   750×433×405mm，横式壁挂安装
+   绝对禁止：生活化修辞（「不用排队」「不心疼电费」「隔夜还温」）、形容词堆砌、极限词、任何承诺类说法。
+   维度按下面【品类档案】的顺序挑，参数表里没有的维度一个字都不许写。
 4) 输出纯 JSON（不要 markdown 代码块）：
-{{"titles":["","",""],"points":["","","","","","","","","","","","","","",""]}}
+{{"titles":["","",""],"points":["","","","",""]}}
+
+【品类档案】
+{cat_block}
 
 【真实数据】
 {facts}"""
@@ -517,8 +521,11 @@ def _fact_floats(facts):
     return _FACT_FLOATS[key]
 
 
-def _verify(ai, facts, nums_set):
-    """防编造：titles/points 整行剔除。"""
+def _verify(ai, facts, nums_set, bans=()):
+    """防编造：titles/points 整行剔除。
+    2026-11-14 加两道闸（用户令「谁看得懂啊」+「这种肯定不是卖点」）：
+      · 参数直给卖点每条必须含数字，光有形容词的空话直接扔；
+      · 品类禁写词（保证/绝对/隔夜还…）命中即扔，绝不承诺做不到的事。"""
     fl = _fact_floats(facts)
 
     def ok(line):
@@ -533,9 +540,19 @@ def _verify(ai, facts, nums_set):
             return False
         return True
 
+    def ok_pt(line):
+        if not ok(line):
+            return False
+        if not NUM_RE.search(line):      # 参数直给：没有数字=空话
+            return False
+        for b in bans:
+            if b and b in line:
+                return False
+        return True
+
     out = {}
     out['titles'] = [t for t in ai.get('titles') or [] if isinstance(t, str) and ok(t)][:3]
-    out['points'] = [p for p in ai.get('points') or [] if isinstance(p, str) and ok(p)][:15]
+    out['points'] = [p for p in ai.get('points') or [] if isinstance(p, str) and ok_pt(p)][:8]
     out['xhs'] = []
     return out
 
@@ -546,6 +563,17 @@ def glm_copy(model, kind, data, log):
     no_params = ("（本次没有抓到参数表，只有型号：文案里绝不允许出现任何具体参数和数字，"
                  "只写成色/交易保障/通用卖点）" if not has_params else "")
     brand = (data.get('brand') or '').strip() or '品牌'
+    # 品类档案（2026-11-14）：认出品类的必讲维度/禁写词，认不出走通用兜底
+    _props = []
+    for _g, _kv in (data.get('groups') or []):
+        if isinstance(_kv, (list, tuple)):
+            _props += [x for x in _kv if isinstance(x, (list, tuple)) and len(x) == 2]
+    try:
+        import copy_cats as _cc
+        cat_block = _cc.dims_text("%s %s" % (data.get('pname') or '', model), _props)
+        bans = _cc.ban_words("%s %s" % (data.get('pname') or '', model), _props)
+    except Exception:
+        cat_block, bans = "品类：未识别（只写参数表里真实存在的项）", ()
     kk_titles = ('注意：这是正品全新机——标题里必须用「全新机/全新原封」，绝不许出现「展示样机/样机」字样。'
                  if kind != 's' else
                  '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新机/全新原封/全新」字样。')
@@ -558,26 +586,27 @@ def glm_copy(model, kind, data, log):
     for attempt in range(2):
         try:
             raw = _chat(PROMPT.format(model=model, pname=data.get('pname') or model, brand=brand,
-                                      no_params=no_params, kk_titles=kk_titles, facts=facts))
+                                      no_params=no_params, kk_titles=kk_titles, facts=facts,
+                                      cat_block=cat_block))
             m = re.search(r'\{.*\}', raw, re.S)
             ai = json.loads(m.group(0)) if m else {}
         except Exception as e:
             log("AI 第 %d 次生成失败：%s" % (attempt + 1, e))
             ai = {}
-        res = _verify(ai, facts, nums_set)
+        res = _verify(ai, facts, nums_set, bans)
         # 价格尾巴兜底：AI 没听话写出 1649.0元 → 1649元（4.5kg 这类真小数不受影响）
         for _k in ('titles', 'points'):
             res[_k] = [re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', s) for s in res[_k]]
-        # 质量闸：卖点 8-60 字（剔「智能生活新选择」类口水话）
-        res['points'] = [p for p in res['points'] if 8 <= len(p) <= 60]
+        # 质量闸：卖点 8-40 字（参数直给不写长句，剔口水话）
+        res['points'] = [p for p in res['points'] if 8 <= len(p) <= 40]
         score = len(res['points']) + len(res['titles'])
         if score > best_score:
             best, best_score = res, score
-        if len(res['points']) >= 12:
+        if len(res['points']) >= 5:
             break
-        log("第 %d 次生成质量不够（卖点 %d/15），自动重试" % (attempt + 1, len(res['points'])))
+        log("第 %d 次生成质量不够（卖点 %d/5，空话或无数字被剔）" % (attempt + 1, len(res['points'])))
     res = best or {'titles': [], 'points': [], 'xhs': []}
-    dropped = ((3 - len(res['titles'])) + (15 - len(res['points'])))
+    dropped = ((3 - len(res['titles'])) + (8 - len(res['points'])))
     if dropped > 0:
         log("防编造/质量闸共剔除 %d 条不合格内容" % dropped)
     return res
