@@ -36,70 +36,42 @@ jobs:
     timeout-minutes: 25
     steps:
       # 2026-11-14 用户令「怎么稳定怎么改」：本机到 codeload.github.com 频繁 TLS 断连，
-      # actions/checkout@v4 一挂整班白跑（#940 实锤，后面步骤全 skipped）。
-      # 改为只取本班真正要用的文件，按仓库相对结构落本地缓存（脚本按 __file__ 往上
-      # 三层找 app/ 与 mobile/，结构对齐才能让手机端 payload 与手机版页照旧上云）：
-      # 三路来源 + 重试，成功即刷新缓存；网络全挂时用缓存副本照常出数据。
-      - name: Prepare files (cache + 3 sources + retry)
+      # actions/checkout@v4 一挂整班白跑（#940 实锤，抓取步骤根本没执行）。
+      # 改为「带清单的仓库快照同步」：先取 .github/scripts/sync_cache.py（体积小、走 api），
+      # 由它按 commit sha 只同步本班要用的文件（app/**.py + 手机端 payload 读的几张库 +
+      # 手机版页面 + 自己的脚本），本地 sha 没变就跳过；下载优先 jsDelivr CDN（国内快、
+      # 按 sha 取不会串版本），退 api blobs；API 全挂就沿用本地快照照常出数据。
+      # 结构保持仓库相对路径——脚本按 __file__ 往上三层找 app/ 与 mobile/ 才能照旧工作。
+      - name: Sync repo snapshot (manifest, no checkout)
         shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
           $root = 'C:\actions-runner\_scriptcache\modelookup'
-          $files = @(
-            '.github/scripts/kdocs_cloud_pull.py',
-            'app/paths.py',
-            'app/config.py',
-            'mobile/app/www/index.html'
-          )
-          $missing = @()
-          foreach ($rel in $files) {
-            $target = Join-Path $root $rel
-            New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
-            $got = $false
-
-            # ① api.github.com（本机实测最稳的一路）
-            for ($i = 1; $i -le 3 -and -not $got; $i++) {
-              try {
-                $hdr = @{ 'User-Agent' = 'ml-runner' }
-                if ($env:GH_TOKEN) { $hdr['Authorization'] = "Bearer $($env:GH_TOKEN)" }
-                $u = "https://api.github.com/repos/BAO-Ww/modelookup/contents/$rel" + "?ref=main"
-                $j = Invoke-RestMethod -Uri $u -Headers $hdr -TimeoutSec 30
-                $b = [Convert]::FromBase64String(($j.content -replace "`n|`r", ""))
-                [IO.File]::WriteAllBytes("$target.tmp", $b)
-                Move-Item -Force "$target.tmp" $target
-                Write-Host "OK  $rel ($($b.Length) B)"
-                $got = $true
-              } catch {
-                Write-Host "api 第 $i 次失败 $rel：$($_.Exception.Message)"
-                Start-Sleep -Seconds (3 * $i)
-              }
-            }
-
-            # ② raw.githubusercontent.com
-            for ($i = 1; $i -le 2 -and -not $got; $i++) {
-              try {
-                Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 `
-                  -Uri "https://raw.githubusercontent.com/BAO-Ww/modelookup/main/$rel" `
-                  -OutFile "$target.tmp"
-                Move-Item -Force "$target.tmp" $target
-                Write-Host "OK(raw) $rel"
-                $got = $true
-              } catch {
-                Write-Host "raw 第 $i 次失败 $rel：$($_.Exception.Message)"
-                Start-Sleep -Seconds (3 * $i)
-              }
-            }
-
-            # ③ 本地缓存副本（可能是上一版，但网络全挂时照样有数据）
-            if (-not $got) {
-              if (Test-Path $target) { Write-Host "网络全失败，用缓存副本 $rel" }
-              else { $missing += $rel }
+          $dst = Join-Path $root '.github\scripts'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          $boot = Join-Path $dst 'sync_cache.py'
+          $ok = $false
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            try {
+              $hdr = @{ 'User-Agent' = 'ml-runner' }
+              if ($env:GH_TOKEN) { $hdr['Authorization'] = "Bearer $($env:GH_TOKEN)" }
+              $u = "https://api.github.com/repos/BAO-Ww/modelookup/contents/.github/scripts/sync_cache.py" + "?ref=main"
+              $j = Invoke-RestMethod -Uri $u -Headers $hdr -TimeoutSec 30
+              $b = [Convert]::FromBase64String(($j.content -replace "`n|`r", ""))
+              [IO.File]::WriteAllBytes("$boot.tmp", $b)
+              Move-Item -Force "$boot.tmp" $boot
+              Write-Host "sync_cache.py 就绪（$($b.Length) B）"
+              $ok = $true
+            } catch {
+              Write-Host "取 sync_cache.py 第 $i 次失败：$($_.Exception.Message)"
+              Start-Sleep -Seconds (3 * $i)
             }
           }
-          if ($missing.Count) { throw "拿不到文件：$($missing -join ',')" }
-          Write-Host "cache ready -> $root"
+          if (-not $ok -and -not (Test-Path $boot)) { throw "拿不到 sync_cache.py，且本地无副本" }
+          & "$env:PY" $boot $root
+          if ($LASTEXITCODE -ne 0) { throw "仓库快照同步失败（关键文件缺失）" }
 
       - name: Install Playwright + Chromium + openpyxl
         run: |
