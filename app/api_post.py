@@ -484,6 +484,69 @@ class ApiPostMixin:
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
             return
 
+        if u.path == "/api/imgclip":
+            # 2026-11-17 用户令「复制的是四张，不是拼在一起的」：把图作为文件列表
+            # （CF_HDROP）放进系统剪贴板——闲鱼/微信粘贴一次就是四张独立图。
+            # body: {"urls": ["/api/kitimg/<型号>/蓝底/img_N.jpg" | "/pubimg/..."]}。
+            # 图片地址解析口径与 api_get 的 kitimg/pubimg 完全一致，只许读 kitset 内。
+            try:
+                ln = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(ln).decode("utf-8") or "{}")
+                urls = [str(x) for x in (d.get("urls") or []) if str(x).strip()]
+                import kitset
+                import pubwork
+                fps = []
+                for pu in urls[:4]:
+                    core = urllib.parse.unquote(pu.split("?")[0])
+                    if core.startswith("/api/kitimg/"):
+                        base = os.path.abspath(kitset.kit_root())
+                        fp = os.path.abspath(os.path.join(
+                            base, core[len("/api/kitimg/"):]))
+                        if not fp.startswith(base):
+                            raise ValueError("越界路径")
+                    elif core.startswith("/pubimg/"):
+                        parts = core[len("/pubimg/"):].split("/")
+                        if len(parts) >= 2 and parts[1] in (pubwork.SPOT_SUB, "AI6张_聚光"):
+                            if parts[1] != pubwork.SPOT_SUB:
+                                parts[1] = pubwork.SPOT_SUB
+                            base = kitset.model_dir(parts[0])
+                            parts = parts[1:]
+                        else:
+                            base = pubwork.sroot()
+                        fp = os.path.abspath(os.path.join(base, *parts))
+                        if not fp.startswith(os.path.abspath(base)):
+                            raise ValueError("越界路径")
+                    else:
+                        raise ValueError("不认识的图片地址")
+                    if not os.path.isfile(fp):
+                        raise ValueError("图片不在本机: " + os.path.basename(fp))
+                    fps.append(fp)
+                if not fps:
+                    raise ValueError("没拿到图片")
+
+                def _clip_files(paths):
+                    import struct
+                    import win32clipboard
+                    import win32con
+                    # DROPFILES 头：pFiles=20、pt=(0,0)、fNC=0、fWide=1（UTF-16 文件名）
+                    header = struct.pack("Iiiii", 20, 0, 0, 0, 1)
+                    payload = "".join(p + "\0" for p in paths) + "\0"
+                    data = header + payload.encode("utf-16-le") + b"\0\0"
+                    win32clipboard.OpenClipboard()
+                    try:
+                        win32clipboard.EmptyClipboard()
+                        win32clipboard.SetClipboardData(win32con.CF_HDROP, data)
+                    finally:
+                        win32clipboard.CloseClipboard()
+
+                _clip_files(fps)
+                self._send(200, json.dumps(
+                    {"ok": True, "n": len(fps)}, ensure_ascii=False))
+            except Exception as e:
+                self._send(200, json.dumps(
+                    {"ok": False, "msg": str(e)}, ensure_ascii=False))
+            return
+
         if u.path != "/api/upload":
             self._send(404, json.dumps({"ok": False, "msg": "not found"}, ensure_ascii=False))
             return

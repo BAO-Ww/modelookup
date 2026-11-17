@@ -5998,6 +5998,7 @@ function openBaoView(k){
       +       '<button data-baoopen="k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
       +       '<button data-baogen="k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
       +       '<button id="mjd_k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">样机</button>'
+      +       '<button id="cpk_k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制文案</button>'
       +       '<button id="cp4_k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制图片</button>'
       +     '</div>'
       +     '<div id="bao_cpy_k" style="flex:0 1 auto;min-height:0;overflow:auto;cursor:copy"></div>'
@@ -6011,6 +6012,7 @@ function openBaoView(k){
       +       '<button data-baoopen="s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
       +       '<button data-baogen="s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
       +       '<button id="mjd_s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">样机</button>'
+      +       '<button id="cpk_s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制文案</button>'
       +       '<button id="cp4_s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制图片</button>'
       +     '</div>'
       +     '<div id="bao_cpy_s" style="flex:0 1 auto;min-height:0;overflow:auto;cursor:copy"></div>'
@@ -6022,6 +6024,7 @@ function openBaoView(k){
       +       '<span style="flex:1"></span>'
       +       '<button id="baogen3" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
       +       '<button id="mjd_k2" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">样机</button>'
+      +       '<button id="cpk_k2" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制文案</button>'
       +       '<button id="cp4_k2" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制图片</button>'
       +     '</div>'
       +     '<div id="bao_cpy_k2" style="flex:0 1 auto;min-height:0;overflow:auto;cursor:copy"></div>'
@@ -6118,31 +6121,25 @@ function openBaoView(k){
     im.onerror = function(){ msg(tone, '图片加载失败，复制没成', true); };
     im.src = src + '?t=' + Date.now();
   }
-  /* 四张图拼成一张 2×2 复制（2026-11-17 用户令「我要的是四张复制，不是单张」）：
-     取栏内 4 张图，最大宽高对齐铺进画布（蓝底/聚光都是 1080×1080，不会变形），
-     一次性进剪贴板 —— 闲鱼那边粘贴一次就是整张四宫格。 */
+  /* 复制四张图 = 四个文件进系统剪贴板（2026-11-17 用户令「我要复制的是四张不是四张
+     拼在一起的」）：不再拼 2×2，前端把栏内四张图的地址 POST 给 /api/imgclip，
+     后端解析成本地文件以 CF_HDROP（文件列表）放剪贴板——闲鱼粘贴一次就是四张独立图。 */
   function copyImages4(gridId, tone){
     var g = wrap.querySelector('#bao_grid_' + gridId);
     var imgs = g ? Array.prototype.slice.call(g.querySelectorAll('img')) : [];
     imgs = imgs.filter(function(im){ return im.complete && im.naturalWidth; });
     if (imgs.length < 4){ msg(tone, '四张图还没齐，等生成完再复制', true); return; }
-    var cw = 0, ch = 0;
-    imgs.slice(0, 4).forEach(function(im){
-      cw = Math.max(cw, im.naturalWidth); ch = Math.max(ch, im.naturalHeight);
-    });
-    var GAP = 8;
-    var c = document.createElement('canvas');
-    c.width = cw * 2 + GAP; c.height = ch * 2 + GAP;
-    var ctx = c.getContext('2d');
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
-    imgs.slice(0, 4).forEach(function(im, i){
-      ctx.drawImage(im, (i % 2) * (cw + GAP), Math.floor(i / 2) * (ch + GAP), cw, ch);
-    });
-    c.toBlob(function(bl){
-      navigator.clipboard.write([new ClipboardItem({'image/png': bl})]).then(function(){
-        msg(tone, '四张图已拼成一张复制');
-      }, function(){ msg(tone, '复制失败（剪贴板写入被拒）', true); });
-    }, 'image/png');
+    var urls = imgs.slice(0, 4).map(function(im){
+      return (im.getAttribute('src') || '').split('?')[0];
+    }).filter(Boolean);
+    fetch('/api/imgclip', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({urls: urls})
+    }).then(function(r){ return r.json(); }).then(function(j){
+      if (j && j.ok) msg(tone, '四张图已复制（独立四张），去闲鱼 Ctrl+V 一次贴四张');
+      else msg(tone, '✗ ' + ((j && j.msg) || '复制失败'), true);
+    }).catch(function(e){ msg(tone, '✗ ' + (e.message || e), true); });
   }
   /* 2026-11-17 用户令：图片单击开大图、双击重出这张。单击延时 260ms 去抖，
      双击先取消掉那次延时的 zoom 再走重出；无 regen 的格子单击照旧立刻开。
@@ -6463,6 +6460,20 @@ function openBaoView(k){
     return s;
   }
   /* 蓝底口径文案画法：科科列用；文案三列走 renderK2Copy（第三种文案，kind=x） */
+  /* 栏头「复制文案」钮用的整套文本（2026-11-17 用户令）：三个渲染函数各自存最新一份 */
+  var KCTXT = {k: '', s: '', k2: ''};
+  /* 点击文案处浮「✓ 已复制」小徽标（2026-11-17 用户令「点击文案复制」）：
+     fixed 定位跟鼠标走，1.1s 自灭——顶栏 msg 太远看不见，提示要出在手上。 */
+  function copyTipAt(x, y){
+    var t = document.createElement('div');
+    t.textContent = '✓ 已复制';
+    t.style.cssText = 'position:fixed;left:' + Math.max(60, x) + 'px;top:' + Math.max(8, y - 34) + 'px;'
+      + 'z-index:9999;background:#16a34a;color:#fff;border-radius:8px;padding:4px 12px;'
+      + 'font-size:12.5px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.25);'
+      + 'pointer-events:none;transform:translateX(-50%)';
+    document.body.appendChild(t);
+    setTimeout(function(){ t.remove(); }, 1100);
+  }
   function _kpaint(bx, D, mj, done){
     if (!bx) return;
     if (!D || !D.ok){
@@ -6483,10 +6494,13 @@ function openBaoView(k){
       + '<div style="height:10px"></div>'
       + '<div style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33">' + esc(AF1) + '</div>'
       + '</div>';
-    /* 双击文案胶囊 = 整套复制（2026-11-17 用户令「双击文案直接就复制」） */
-    bx.ondblclick = function(){
-      copySafe([KT, PTS === '—' ? '' : PTS, AF1].filter(Boolean).join('\n\n'), function(){
+    /* 2026-11-17 用户令「点击文案复制不是点复制按键」：单击文案胶囊整套复制，
+       鼠标处浮「✓ 已复制」；栏头「复制文案」钮照旧直复。 */
+    KCTXT.k = [KT, PTS === '—' ? '' : PTS, AF1].filter(Boolean).join('\n\n');
+    bx.onclick = function(e){
+      copySafe(KCTXT.k, function(){
         msg('k', (done || '整套文案已复制') + (mj ? '（样机版）' : ''));
+        copyTipAt(e.clientX, e.clientY);
       });
     };
   }
@@ -6515,9 +6529,11 @@ function openBaoView(k){
       + '<div style="height:10px"></div>'
       + '<div style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33">' + esc(AF1) + '</div>'
       + '</div>';
-    bx.ondblclick = function(){
-      copySafe([KT, PTS === '—' ? '' : PTS, AF1].filter(Boolean).join('\n\n'), function(){
+    KCTXT.k2 = [KT, PTS === '—' ? '' : PTS, AF1].filter(Boolean).join('\n\n');
+    bx.onclick = function(e){
+      copySafe(KCTXT.k2, function(){
         msg('k', '文案三整套已复制' + (MJD.k2 ? '（样机版）' : ''));
+        copyTipAt(e.clientX, e.clientY);
       });
     };
   }
@@ -6581,11 +6597,12 @@ function openBaoView(k){
       + '<div style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33">' + esc(SA) + '</div>'
       + '</div>';
     box.innerHTML = h;
-    /* 双击文案胶囊 = 整套复制（2026-11-17 用户令） */
-    box.ondblclick = function(){
-      var PTS = _mjrep(SCPTS.join('\n') || '', MJD.s);
-      copySafe([ST, PTS, SA].filter(Boolean).join('\n\n'), function(){
+    KCTXT.s = [ST, _mjrep(SCPTS.join('\n') || '', MJD.s), SA].filter(Boolean).join('\n\n');
+    /* 2026-11-17 用户令：单击文案整套复制 + 浮标提示 */
+    box.onclick = function(e){
+      copySafe(KCTXT.s, function(){
         msg('s', '整套文案已复制' + (MJD.s ? '（样机版）' : ''));
+        copyTipAt(e.clientX, e.clientY);
       });
     };
   }
@@ -6662,10 +6679,26 @@ function openBaoView(k){
    ['cp4_k2', 'k2', '#1d4ed8', '#c7d2fe', '#eef2ff']].forEach(function(p){
     var b = wrap.querySelector('#' + p[0]);
     if (!b) return;
-    b.onclick = function(){
+      b.onclick = function(){
       b.textContent = '复制中…';
       copyImages4(p[1], p[1] === 's' ? 's' : 'k');
       setTimeout(function(){ b.textContent = '复制图片'; }, 1500);
+    };
+  });
+  /* 复制文案钮（2026-11-17 用户令）：栏头一键整套复制，双击胶囊照旧。
+     文案三（k2）的状态提示也走 'k' 顶栏（与双击行为一致）。 */
+  [['cpk_k', 'k', 'k'], ['cpk_s', 's', 's'], ['cpk_k2', 'k2', 'k']].forEach(function(p){
+    var b = wrap.querySelector('#' + p[0]);
+    if (!b) return;
+    b.onclick = function(){
+      var t = KCTXT[p[1]];
+      if (!t){ msg(p[2], '文案还没生成出来，等一下再点', true); return; }
+      copySafe(t, function(){
+        msg(p[2], '整套文案已复制');
+        /* 2026-11-17 用户令：复制到了要在按钮上看得见——按钮回弹「已复制」 */
+        b.textContent = '已复制';
+        setTimeout(function(){ b.textContent = '复制文案'; }, 1200);
+      });
     };
   });
   var g3 = wrap.querySelector('#baogen3');
