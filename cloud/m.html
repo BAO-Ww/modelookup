@@ -473,10 +473,11 @@ function dlg(msg, withInput, cb){
   inp.onkeydown = function(e){ if (e.key==='Enter'){ e.preventDefault(); document.getElementById('dlgOk').click(); } };
 }
 
-/* 仓库黑名单（2026-11-05 用户令）：「东莞事业部统仓统配（东莞）ZP仓」不要、
-   不算进库存（全部型号）。云端数据源（yy_cloud_pull/app yy_agg）已同口径整行剔除，
+/* 仓库黑名单：「东莞事业部统仓统配（东莞）ZP仓」（2026-11-05）、
+   「内部福利仓」（2026-11-16）不要、不算进库存（全部型号）。云端数据源
+   （yy_cloud_pull/app yy_agg）已同口径整行剔除，
    这里洗旧缓存兜底（下次云端推送前仍有旧仓残留）。同款逻辑见 template.html scrubStock。 */
-var WH_EXCLUDE = ['东莞事业部统仓统配'];
+var WH_EXCLUDE = ['东莞事业部统仓统配', '内部福利仓'];
 function scrubStock(sd){
   if (!sd) return;
   var bs = [sd.stock, sd.sbc];

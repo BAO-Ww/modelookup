@@ -761,12 +761,13 @@ function showYyAlert(msg){
 /* 实时库存（exe 版从用友 YonSuite 拉的现存量，点「更新实时库存」刷新）：
    STOCK = { 型号norm: { q:现存量, a:可用量, wt:{仓库类型:可用量} } }，键与 norm() 同一套归一 */
 var STOCKDATA = null;
-/* 仓库黑名单（2026-11-05 用户令）：「东莞事业部统仓统配（东莞）ZP仓」不要、
-   不算进库存（全部型号）。后端 yy_agg / CI yy_cloud_pull 已同口径整行剔除；
+/* 仓库黑名单：「东莞事业部统仓统配（东莞）ZP仓」（2026-11-05）、
+   「内部福利仓」（2026-11-16）不要、不算进库存（全部型号）。
+   后端 yy_agg / CI yy_cloud_pull 已同口径整行剔除；
    这里再洗一遍**旧缓存**（上次拉库存还带着该仓），改版立即生效不用等重拉。
    注意只重算 a/wt/whs——q（现存合计）没按仓拆、洗不了，短暂偏大，
    下一轮拉库存后端过滤后自动归正。故意不用「ZP仓」做关键词（不能误伤分销统仓统配ZP仓）。 */
-var WH_EXCLUDE = ['东莞事业部统仓统配'];
+var WH_EXCLUDE = ['东莞事业部统仓统配', '内部福利仓'];
 function whExcluded(w){
   var s = String(w || '');
   for (var i = 0; i < WH_EXCLUDE.length; i++){ if (s.indexOf(WH_EXCLUDE[i]) >= 0) return true; }
@@ -3761,7 +3762,8 @@ function renderItem(it){
     var m = encodeURIComponent(x.mo || x.c || '');
     if (!m) return '';
     if (x.b === '卡萨帝') return 'https://www.casarte.com/search/?searchword=' + m;
-    if (x.b === '海尔' || x.b === '统帅') return 'https://www.haier.com/cn/search/?q=' + m;
+    if (x.b === '统帅') return 'https://www.leader.com.cn/search/?searchword=' + m;   /* 统帅自己的官网（2026-11-16 用户令「官网按键对不上」：以前错跳 haier.com） */
+    if (x.b === '海尔') return 'https://www.haier.com/cn/search/?q=' + m;
     if (x.b === '美的') return 'https://www.midea.cn/#/search?keyword=' + m;
     if (x.b === '容声') return 'https://mall.hisense.com/search?q=' + m;
     return '';

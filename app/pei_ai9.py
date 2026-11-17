@@ -1041,12 +1041,15 @@ def img4(front, out):                 # 核心参数
     return save(cv, out / "4_核心参数.jpg")
 
 
-def _sketch_rgba(path):
-    """机图 → 浅色线稿 RGBA（聚光深底用）；实现统一收在 kitset._sketch_rgba（带颜色参数），
-    这里只传浅色。失败返回 None。"""
+def _sketch_rgba(path, color=None):
+    """机图 → 线稿 RGBA（聚光用）；实现统一收在 kitset._sketch_rgba（带颜色参数）。
+    color=None 时按底色自动选：纸感浅底（_SPOT_LIGHT）→ 深色线稿，深底 → 浅色线稿。
+    失败返回 None。"""
     try:
         import kitset
-        return kitset._sketch_rgba(path, color=(238, 242, 248))
+        if color is None:
+            color = (28, 30, 34) if _SPOT_LIGHT else (238, 242, 248)
+        return kitset._sketch_rgba(path, color=color)
     except Exception:
         return None
 

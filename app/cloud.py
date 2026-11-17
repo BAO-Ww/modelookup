@@ -467,7 +467,9 @@ def kit_push_cloud(rel, data, ctype="image/jpeg", timeout=90):
 
 
 _KIT_IMG_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif")
-_KIT_SRC_SUBS = ("官网", "欣盛")       # 云端图库收录的抓取图子目录（2026-11-10 用户令全型号补图）
+# 云端图库收录的抓取图子目录（2026-11-10 用户令全型号补图）
+# 2026-11-16 用户令「所有的都抓取放到 R2 里面」：中关村也进清单（原漏，只传官网/欣盛）
+_KIT_SRC_SUBS = ("官网", "欣盛", "中关村")
 
 def kit_local_images():
     """本机 kitset 里可上云的抓取图清单：每个型号的 官网/**、欣盛/**（仅图片）
@@ -546,6 +548,62 @@ def kit_sync_cloud(log):
             len(fails), len(missing), "；".join(fails[:3])))
     log("官网图云同步：新传 %d 张（云端补齐，本机共 %d 张）" % (n_ok, len(rels)))
     return n_ok, None
+
+
+def kit_push_model(model, log=None):
+    """单型号抓取图上云（2026-11-16 用户令「所有的都抓取放到 R2 里面」）：
+    kitset/<型号>/{官网,欣盛,中关村} 的图 → /kitexists 探测 → 只传缺的。
+    挂在抓图落盘后异步跑，失败不打扰出图。返回 (n_push, err|None)。"""
+    log = log or (lambda s: None)
+    if not _cloud_token():
+        return 0, None
+    try:
+        import kitset as _ks
+        md = _ks.model_dir(model)
+    except Exception:
+        return 0, None
+    if not os.path.isdir(md):
+        return 0, None
+    rels, paths = [], {}
+    for sub in _KIT_SRC_SUBS:
+        sd = os.path.join(md, sub)
+        if not os.path.isdir(sd):
+            continue
+        for f in sorted(os.listdir(sd)):
+            if f.startswith(".") or not f.lower().endswith(_KIT_IMG_EXT):
+                continue
+            rel = "%s/%s/%s" % (model, sub, f)
+            rels.append(rel)
+            paths[rel] = os.path.join(sd, f)
+    if not rels:
+        return 0, None
+    missing = []
+    for i in range(0, len(rels), 500):
+        j, err = cloud_req("/kitexists", "POST", {"keys": rels[i:i + 500]}, timeout=120)
+        if err or not j or not j.get("ok"):
+            return 0, err or (j or {}).get("msg")
+        missing.extend(j.get("missing") or [])
+    if not missing:
+        return 0, None
+    n = 0
+    for rel in missing:
+        fp = paths.get(rel)
+        try:
+            if not fp or not os.path.isfile(fp):
+                continue
+            with io.open(fp, "rb") as f:
+                data = f.read()
+            ext = fp.rsplit(".", 1)[-1].lower()
+            ct = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                  "webp": "image/webp", "gif": "image/gif"}.get(ext, "application/octet-stream")
+            okk, _e = kit_push_cloud(rel, data, ct)
+            if okk:
+                n += 1
+        except Exception:
+            pass
+    if n:
+        log("本型号新图已上云：%d 张" % n)
+    return n, None
 
 
 # ---------------- 数据链路哨兵（2026-10-24）----------------

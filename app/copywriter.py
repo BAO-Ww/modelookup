@@ -7,6 +7,7 @@
 零第三方依赖：urllib + gzip + re + json + sqlite3。参考实现：haier_scraper/collect.py（接口已验证）。
 """
 import gzip
+import html as _html_lib
 import io
 import json
 import os
@@ -277,8 +278,13 @@ BAD_IMG = re.compile(r'logo|icon|erweima|qrcode|sprite|placeholder|banner|bitmap
                      r'|favicon|weibo|weixin|share|avatar', re.I)
 
 
-def extract_images(html):
-    """官网图：域名白名单 + 去装饰 + www 死链域名自动换 image.* 救活（collect.py 经验）"""
+def extract_images(html, page_url=""):
+    """官网图：域名白名单 + 去装饰 + www 死链域名自动换 image.* 救活（collect.py 经验）。
+
+    2026-11-16 用户令「尺寸图都没抓取到」：leader 详情页的长图和尺寸线稿不在 <img src> 里，
+    而是塞在 sd_data="[{&quot;src&quot;:&quot;RESOURCEDOMAINW020...jpg&quot;}]" 这种 JSON 属性中，
+    占位符 RESOURCEDOMAIN 要换成 image 域名 + 页面所在目录。老逻辑只认 <img> → 这批图全漏。
+    """
     urls, seen = [], set()
     for m in IMG_RE.finditer(html):
         u = m.group(1).strip()
@@ -293,6 +299,20 @@ def extract_images(html):
             if re.search(r'\.(jpg|jpeg|png|webp)(\?|$)', u, re.I) and u not in seen:
                 seen.add(u)
                 urls.append(u)
+    # sd_data 等内联 JSON 里的图（leader 详情长图 / 尺寸线稿走这条）
+    if page_url and "leader.com.cn" in page_url:
+        _d = os.path.dirname(urllib.parse.urlparse(page_url).path).strip("/")
+        _pfx = "https://image.leader.com.cn/" + (_d + "/" if _d else "")
+        for m in re.finditer(r'sd_data="([^"]+)"', html):
+            raw = _html_lib.unescape(m.group(1))
+            for s in re.findall(r'"src"\s*:\s*"([^"]+)"', raw):
+                s = s.strip()
+                if not re.search(r'\.(jpg|jpeg|png|webp)$', s, re.I):
+                    continue
+                u = s.replace("RESOURCEDOMAIN", _pfx)
+                if u not in seen:
+                    seen.add(u)
+                    urls.append(u)
     out = []
     stems = set()
     for u in urls:
@@ -336,15 +356,22 @@ def _par_local():
             _PAR_LOCAL["pars"] = {}
     return _PAR_LOCAL["pars"]
 
-def fetch_official(model, log):
+def fetch_official(model, log, need_imgs=False):
     """官网三站顺序找；命中详情页→参数/卖点/产品名/价/图。没命中返回 None。
 
     2026-11-10 用户令「写文案是不是不需要再抓取数据就能写」：入口先查云端参数库
     （par_cloud.json），型号命中（≥3 条参数）直接组 data 返回——完全不打官网，
-    秒级出参数、防反爬；参数库里没有 sellpoints/图，价格靠欣盛兜底（原逻辑不变）。"""
+    秒级出参数、防反爬；参数库里没有 sellpoints/图，价格靠欣盛兜底（原逻辑不变）。
+
+    need_imgs=True（2026-11-16 用户令「所有的都抓取放到 R2 里面」）：参数库命中也不短路，
+    照样打官网拿图/官网直链/卖点；官网没抓到再退回参数库那份（参数照旧、图空），两不误。"""
+    _kv = None
     try:
         _kv = _par_local().get(norm_model(model))
-        if _kv and len(_kv) >= 3:
+    except Exception:
+        _kv = None
+    if _kv and len(_kv) >= 3:
+        if not need_imgs:
             log("参数库命中（%d 条参数），跳过官网抓取" % len(_kv))
             # 2026-11-10 深夜修：groups 必须 [[组名,[[k,v]...]]] 两层——之前直接给扁平
             # [[k,v]...]，_facts_text/build_desc 里 for a,b in kv 拿字符串拆就炸
@@ -352,8 +379,7 @@ def fetch_official(model, log):
             return {'source': '云端参数库', 'brand': '', 'pname': model, 'price': '',
                     'url': '', 'groups': [["参数", [[k, v] for k, v in _kv.items()]]],
                     'sellpoints': [], 'imgs': []}
-    except Exception:
-        pass
+        log("参数库命中（%d 条），但图库要图，继续打官网" % len(_kv))
     nm = norm_model(model)
     for sk in ('haier', 'casarte', 'leader'):
         s = SITES[sk]
@@ -386,7 +412,12 @@ def fetch_official(model, log):
         log("官网[%s]命中：%s / 参数 %d 组" % (s['name'], pname[:30], len(groups)))
         return {'source': '官网', 'brand': s['name'], 'pname': pname, 'price': price or '',
                 'url': url, 'groups': [[g, kv] for g, kv in groups],
-                'sellpoints': parse_sellpoints(html), 'imgs': extract_images(html)}
+                'sellpoints': parse_sellpoints(html), 'imgs': extract_images(html, url)}
+    if _kv and len(_kv) >= 3:
+        log("官网没抓到可用详情页，退回参数库（%d 条参数、无图）" % len(_kv))
+        return {'source': '云端参数库', 'brand': '', 'pname': model, 'price': '',
+                'url': '', 'groups': [["参数", [[k, v] for k, v in _kv.items()]]],
+                'sellpoints': [], 'imgs': []}
     return None
 
 
@@ -476,6 +507,10 @@ PROMPT = """你是闲鱼家电卖家文案写手。产品：{pname}（型号 {mo
    60L 容量，2200W 功率，一级能效
    整胆加热约 1.5 小时，最高水温 75℃
    绝对禁止：生活化修辞（「不用排队」「不心疼电费」「隔夜还温」）、形容词堆砌、极限词、任何承诺类说法。
+   绝对禁止用括号标注参数原名——「12kg超大洗涤容量（洗涤容量12kg），轻松应对…」这种括号是废话，
+   参数名要自然融进句子里，不要额外加「（参数名:参数值）」「（参数名值）」。正确写法只有一句：
+   12kg超大洗涤容量，轻松应对全家衣物洗涤需求
+   一级能效等级，省电节能降低日常使用成本
    禁止把尺寸当卖点：外形尺寸/产品尺寸/净重/毛重/横式壁挂安装这类外观参数一律不写（640*420*390mm、横式壁挂节省空间这种就是尺寸，不是卖点）。
    差异化硬要求（2026-11-14 用户令「卖点全是大同小异的要AI干嘛」）：先从【真实数据】里找出这台机器跟同品类其他型号**最不一样**的
    2-3 个参数（容量档位、功率、能效等级、核心技术、特色功能、适用场景数字），把它们写成前 2-3 条；
@@ -664,6 +699,37 @@ def _ptkey(s):
     return t.replace("公斤", "kg").replace("KG", "kg").lower()
 
 
+# 2026-11-16 用户令「括号里面的加进去了干什么呢」：AI 爱在卖点后面补一句参数原名标注，
+# 「12kg超大洗涤容量（洗涤容量12kg），轻松应对…」括号纯属重复。凡括号里带冒号/等号或数字的，
+# 整段括号剥掉（正常括号如「（一级能效）」不动，因为后面没数字也不是 key:value）。
+_META_PAREN_RE = re.compile(r"[（(][^（()）]{0,30}?(?:[:：=]|\d)[^（()）]{0,30}[）)]")
+_ANY_PAREN_RE = re.compile(r"[（(]([^（()）]{1,30})[）)]")
+
+
+def _strip_meta_paren(line):
+    """剥掉卖点里的参数原名括号标注，并清理留下的多余空格/重复标点。
+
+    两把尺：① 括号里带「参数名:值」或数字 → 剥（（洗净比:1.28）、（12kg））；
+            ② 括号内容在括号前已经写过 → 剥（一级能效等级（一级能效）这种纯重复）。
+    """
+    s = str(line or "")
+    for _ in range(3):                      # 可能连着两层括号
+        before = s
+        s = _META_PAREN_RE.sub("", s)
+
+        def _rep(m):
+            inner, head = m.group(1), s[:m.start()]
+            k = _ptkey(inner)
+            return "" if k and k in _ptkey(head) else m.group(0)
+
+        s = _ANY_PAREN_RE.sub(_rep, s)
+        if s == before:
+            break
+    s = re.sub(r"\s+([，,。；;])", r"\1", s)
+    s = re.sub(r"([，,。；;])\1+", r"\1", s)
+    return s.strip().strip("，,。；; ")
+
+
 def _dedupe_vs_blue(pts, blue, cap=5):
     """聚光卖点跟蓝底去重（整句 + 首段两把尺），再砍到 ≤cap 条（用户令「不能超过五条」）。
     「尽量不要一样」：全撞车时保底用原序前 cap 条——条数合规优先，差异尽力而为。"""
@@ -816,6 +882,19 @@ def generate(model, kind='l', force=0, log=None):
             with io.open(cache, encoding="utf-8") as f:
                 res = json.load(f)
             res["cached"] = True
+            # 2026-11-16 用户实锤「啥都没改到」：缓存直读绕过了括号剥离——旧档在这里再兜一道，
+            # 剥完跟原档不一致就回写，desc 逐行剥（卖点块/正文里残留的参数原名括号）。
+            _pt = [p for p in (_strip_meta_paren(x) for x in (res.get("points") or [])) if p]
+            _dl = lambda t: "\n".join(_strip_meta_paren(x) for x in str(t or "").split("\n"))
+            if _pt != res.get("points"):
+                res["points"] = _pt
+                res["desc_nat"] = _dl(res.get("desc_nat"))
+                res["desc_rep"] = _dl(res.get("desc_rep"))
+                try:
+                    with io.open(cache, "w", encoding="utf-8") as f:
+                        json.dump(res, f, ensure_ascii=False)
+                except Exception:
+                    pass
             return res
         except Exception:
             pass
@@ -856,6 +935,9 @@ def generate(model, kind='l', force=0, log=None):
     # 卖点：AI 从真实参数提炼的加厚条优先（2026-10-13 用户定稿，官网 sellpoint 是
     # 「智能生活新选择」类空洞口号不要）；AI 全被剔才拿官网卖点兜底
     pts = ai['points'][:15] or [p for p in (data.get('sellpoints') or []) if p][:15]
+    # 2026-11-16 用户令「括号里面的加进去了干什么呢」：剥掉「（洗涤容量12kg）」这类
+    # 参数原名括号标注（prompt 侧已禁写，这里对缓存/旧档再兜一道），剥空的整条丢掉。
+    pts = [p for p in (_strip_meta_paren(x) for x in pts) if p]
     # 2026-11-14 用户令「聚光的卖点尽量不要跟蓝底的写的一样，也是在5条以下，不能超过五条」：
     # 先跟蓝底 set.json 的卖点去重（整句/首段归一比对，换皮重复也拦），再统一砍到 ≤5 条；
     # 卖点 tab、描述里的 ·卖点 块、一键复制全吃这份，口径一致。

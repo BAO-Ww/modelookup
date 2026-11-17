@@ -262,6 +262,81 @@ def _autocrop_white(im, margin=16):
     return im.crop((l, t, r, b))
 
 
+def _trim_sizeimg_drawing(im, log=None):
+    """尺寸图清洗（2026-11-16 用户令「图自带的这些要来干哈」）：中关村拼接图常捎带
+    源图自己的「产品参数」标题和 D1/D2/D3 说明文字，跟我们版式上的「产品尺寸」
+    标题/宽高深行重复。按行墨量找连续内容段，只留最高那段（= 线稿主体），
+    标题/说明这种矮段全部裁掉。官方单块线稿只有一段，等于只裁白边，无损。"""
+    try:
+        g = _flat_white(im).convert("L")
+        W, H = g.size
+        raw = g.tobytes()
+        rows = []
+        for y in range(H):
+            base = y * W
+            ink = 0
+            for x in range(0, W, 2):
+                if raw[base + x] < 200:
+                    ink += 1
+            rows.append(ink)
+        # 连续内容段：行墨量≥2 算内容，空隙 ≥90px 才断段（前后视图间大空隙不断开）
+        segs = []
+        s = None
+        gap = 0
+        for y, n in enumerate(rows):
+            if n >= 2:
+                if s is None:
+                    s = y
+                gap = 0
+            elif s is not None:
+                gap += 1
+                if gap >= 90:
+                    segs.append((s, y - gap + 1))
+                    s = None
+                    gap = 0
+        if s is not None:
+            segs.append((s, H))
+        if not segs:
+            return im
+        top, bot = max(segs, key=lambda t: t[1] - t[0])
+        if bot - top < H * 0.3:
+            return im   # 主体占不到三成，八成是误判，不动
+        # 段内截断：说明文字（D1/D2/D3）常跟线稿主体同段（虚线间隔 <90px）。
+        # 找段内 ≥40px 的空白带，若空白带后面的内容明显比前面矮 → 是尾巴说明，砍掉。
+        run = 0
+        for y in range(top, bot):
+            if rows[y] < 2:
+                run += 1
+                if run >= 40:
+                    gs, ge = y - run + 1, y + 1
+                    if (bot - ge) < (gs - top) * 0.6 and (gs - top) > 60:
+                        bot = gs
+                        break
+            else:
+                run = 0
+        m = 12
+        return im.crop((0, max(0, top - m), W, min(H, bot + m)))
+    except Exception:
+        return im
+
+
+def _clean_sizeimg(src, dst):
+    """尺寸图兜底落盘统一走这里：清洗（去源图自带标题/说明）+ 垫白 + 裁边，
+    只留线稿主体。失败退回直接复制。"""
+    try:
+        im = Image.open(src)
+        im = _autocrop_white(_trim_sizeimg_drawing(im), margin=10)
+        im.convert("RGB").save(dst, quality=92)
+        return True
+    except Exception:
+        try:
+            import shutil as _sh0
+            _sh0.copyfile(src, dst)
+            return True
+        except Exception:
+            return False
+
+
 def _crop_prod(img):
     """机图裁边成紧贴内容的 RGBA（透明 bbox / 白底转 alpha 再裁）。
     img1/img2 的定位预算必须用这份裁后尺寸——原图带透明边距时按原图算预算高偏小，
@@ -1125,6 +1200,299 @@ def _http_text(url, referer=None):
     return data.decode("utf-8", "replace")
 
 
+# 2026-11-16 用户实锤「中关村的图片呢怎么没有」：老正则写的是 (zol-img\.com|zol\.com\.cn)/product/，
+# 实际 CDN 是 2c.zol-img.com.cn/product/…（.cn 被漏掉）→ 从上线起一张都没匹配到过。
+_ZOL_IMG_RE = re.compile(
+    r'(?:https?:)?//[^"\'\s<>]*?zol-img\.com\.cn/product/(\d+)_(\d+)x(\d+)/([^"\'\s<>/]+?\.[A-Za-z]{3,4})')
+
+
+def _zol_pic_url(it):
+    """picList 条目 → CDN 原图地址。路径 = product/{picId前3}_{源宽}x{源高}/{picId后3}/{hash}.{ext}"""
+    try:
+        pid = str(it.get("picId") or "")
+        hs = str(it.get("hash") or "")
+        if len(pid) < 6 or not hs:
+            return ""
+        si = (it.get("sizeInfo") or {}).get("source") or ["0", "0"]
+        w0, h0 = int(si[0]), int(si[1])
+        if min(w0, h0) < 260:            # 缩略图/图标不要
+            return ""
+        ext = (it.get("extName") or "jpg").lstrip(".")
+        return "https://2d.zol-img.com.cn/product/%s_%dx%d/%s/%s.%s" % (
+            pid[:3], w0, h0, pid[-3:], hs, ext)
+    except Exception:
+        return ""
+
+
+def _zol_imgs_in(html, sink):
+    """详情页正文里的产品图 → sink（同图多尺寸只留最大那张）。"""
+    try:
+        for m in _ZOL_IMG_RE.finditer(html or ""):
+            u, w, h, tail = m.group(0), int(m.group(2)), int(m.group(3)), m.group(4)
+            if not u.startswith("http"):
+                u = "https:" + u
+            if re.search(r"logo|icon|banner|watermark|avatar", u, re.I):
+                continue
+            key = (m.group(1), tail)
+            old = sink.get(key)
+            if old is None or w * h > old[0]:
+                sink[key] = (w * h, u)
+    except Exception:
+        pass
+    return sink
+
+
+def _zol_stitch_size(ddir, log=None):
+    """把被切在两块交界的尺寸线稿自动拼回一张（2026-11-16 用户令「不是单单一个型号，是所有的型号」）。
+
+    ZOL 详情页是 790×991 等宽长图切块，尺寸/安装线稿经常拦腰切在 zol_NN / zol_NN+1 之间
+    （XQGL120-L732EH 实锤）。判定「跨缝线稿」两把尺：
+      ① 缝上下各 15 行接近纯白（白底线稿才有）；
+      ② 缝两侧的竖线列位置重合（IoU≥0.5 且重合列≥8）——照片/彩色海报不会出现这种对齐。
+    命中就取上块「最后一段白带之下」到下块「第一段白带之前」拼成 zol_size.jpg。
+    纯 PIL 实现，不引 numpy（打包 spec 里 numpy 在 excludes）。"""
+    log = log or (lambda s: None)
+    try:
+        files = sorted([p for p in glob.glob(os.path.join(ddir, "zol_*.jpg"))
+                        if os.path.basename(p) not in ("zol_size.jpg",)],
+                       key=lambda p: int(re.sub(r"\D", "", os.path.basename(p)) or 0))
+        if len(files) < 2:
+            return None
+        W = 200                                   # 缩略分析宽度，够判线位置又不慢
+
+        def _small(p):
+            im = Image.open(p).convert("L")
+            h = max(1, int(im.height * W / im.width))
+            return im.resize((W, h)), h
+
+        def _darkrows(sm):
+            data = list(sm.getdata())
+            w = sm.width
+            return [sum(1 for v in data[y * w:(y + 1) * w] if v < 180) for y in range(sm.height)]
+
+        def _inkcols(sm, y0, y1):
+            data = list(sm.getdata())
+            w = sm.width
+            cols = set()
+            for y in range(y0, y1):
+                base = y * w
+                for x in range(w):
+                    if data[base + x] < 180:
+                        cols.add(x)
+            return cols
+
+        def _band(p, top):
+            """块的一端（top=True 取上 30%，否则下 30%）是不是「白底线稿」：
+            白占比 ≥0.4 且彩色像素 ≤15%（海报/照片/彩色卡片一票否决）。"""
+            im = Image.open(p).convert("RGB")
+            h = im.height
+            band = (im.crop((0, 0, im.width, int(h * 0.3))) if top
+                    else im.crop((0, int(h * 0.7), im.width, h)))
+            band = band.resize((120, 40))
+            px = list(band.getdata())
+            n = float(len(px))
+            white = sum(1 for r, g, b in px if min(r, g, b) > 235) / n
+            color = sum(1 for r, g, b in px if max(r, g, b) - min(r, g, b) > 40) / n
+            return white, color
+
+        for i in range(len(files) - 1):
+            wa, ca = _band(files[i], False)
+            wb, cb = _band(files[i + 1], True)
+            if wa < 0.4 or wb < 0.4 or ca > 0.15 or cb > 0.15:
+                continue
+            a_s, ah = _small(files[i])
+            b_s, bh = _small(files[i + 1])
+            A = Image.open(files[i]).convert("L")
+            B = Image.open(files[i + 1]).convert("L")
+
+            def _rows_ink(im):
+                """全分辨率按列采样的每行墨量（200px 缩略图上细线会整条消失，判不准）。"""
+                w, h = im.size
+                raw = im.tobytes()
+                xs = list(range(0, w, max(1, w // 260)))
+                return [sum(1 for x in xs if raw[y * w + x] < 170) for y in range(h)]
+
+            def _gaps(rows, lo, hi, need=10):
+                res, run, st = [], 0, 0
+                for y in range(lo, hi):
+                    if rows[y] == 0:
+                        if run == 0:
+                            st = y
+                        run += 1
+                    else:
+                        if run >= need:
+                            res.append((st, y))
+                        run = 0
+                if run >= need:
+                    res.append((st, hi))
+                return res
+
+            def _dens(rows, y0, y1):
+                if y1 <= y0:
+                    return 1.0
+                return sum(rows[y0:y1]) / float((y1 - y0) * 260)
+
+            ra, rb = _rows_ink(A), _rows_ink(B)
+            # 起点：下 45% 里第一段「白带 + 后面跟着 ≥150px 稀疏内容（线稿）」的白带下沿
+            start = 0
+            for g0, g1 in _gaps(ra, int(len(ra) * 0.55), len(ra)):
+                if len(ra) - g1 >= 150 and _dens(ra, g1, len(ra)) <= 0.15:
+                    start = g1
+                    break
+            if not start:
+                start = int(A.height * 0.55)
+            # 终点：上 60% 里第一段「前面 ≥100px 稀疏内容」的白带上沿，再捎带紧随的短说明块
+            end = 0
+            for g0, g1 in _gaps(rb, int(bh * 0.05), int(bh * 0.75)):
+                if g0 >= 100 and _dens(rb, 0, g0) <= 0.15:
+                    end = g0
+                    nxt = [x for x in _gaps(rb, g1, int(bh * 0.9)) if x[0] <= g1 + 4]
+                    if nxt and nxt[0][0] - g1 <= 60 and _dens(rb, g1, nxt[0][0]) <= 0.12:
+                        end = nxt[0][0]        # 尺寸说明（D1/D2/D3）跟着一起留
+                    break
+            if not end or end > B.height * 0.8:
+                end = int(B.height * 0.45)
+            top = A.crop((0, start, A.width, A.height))
+            bot = B.crop((0, 0, B.width, end))
+            out = Image.new("RGB", (A.width, top.height + bot.height), (255, 255, 255))
+            out.paste(top.convert("RGB"), (0, 0))
+            out.paste(bot.convert("RGB"), (0, top.height))
+            if out.height < 300 or out.height > (A.height + B.height) * 0.95:
+                continue
+            # 特征复核：尺寸线稿 = 大面积白底 + 极低墨量（实测线稿 light 0.89 / ink 0.11，
+            # 检测报告表 light 0.78 / ink 0.22）。_looks_like_sizeimg 那把尺是给产品候选用的，
+            # 会否掉带彩色标题的尺寸图（24+25 实锤），这里单用墨量。
+            g2 = out.convert("L").resize((160, 160))
+            _px = list(g2.getdata())
+            _n = float(len(_px))
+            _light = sum(1 for v in _px if v >= 220) / _n
+            _ink = sum(1 for v in _px if 40 < v < 220) / _n
+            if _light < 0.8 or _ink > 0.18:
+                if log:
+                    log("跨缝候选 %s+%s 墨量不像线稿（light=%.2f ink=%.2f），跳过" % (
+                        os.path.basename(files[i]), os.path.basename(files[i + 1]), _light, _ink))
+                continue
+            p = os.path.join(ddir, "zol_size.jpg")
+            out.save(p, quality=92)
+            log("中关村尺寸图跨缝拼接：%s + %s → zol_size.jpg（%dx%d）" % (
+                os.path.basename(files[i]), os.path.basename(files[i + 1]), out.width, out.height))
+            return p
+        # 跨缝没有 → 单块兜底（BCD-226WGHC3E9SW zol_19 实锤：完整尺寸图自带灰底产品照，
+        # 过不了严格线稿检测）：灰白底 + 低彩色 + 有长直线的块里挑墨量最低的
+        best = None
+        for p in files:
+            try:
+                im = Image.open(p).convert("RGB")
+                s = im.convert("L").resize((160, 160))
+                _px = list(s.getdata())
+                _n = float(len(_px))
+                light = sum(1 for v in _px if v >= 200) / _n
+                g = im.resize((160, 160))
+                gc = list(g.getdata())
+                color = sum(1 for r, gr, b in gc if max(r, gr, b) - min(r, gr, b) > 40) / _n
+                if light < 0.55 or color > 0.10:
+                    continue
+                # 全量一遍循环算行/列墨量（步进采样会漏 1-2px 细线，19 号块实测 vl=0）
+                W2, H2 = im.size
+                raw = im.convert("L").tobytes()
+                rc = [0] * H2
+                cc = [0] * W2
+                i2 = 0
+                for y in range(H2):
+                    rcr = rc
+                    ccr = cc
+                    for x in range(W2):
+                        if raw[i2] < 170:
+                            rcr[y] += 1
+                            ccr[x] += 1
+                        i2 += 1
+                hl = sum(1 for c in rc if c > W2 * 0.30)
+                vl = sum(1 for c in cc if c > H2 * 0.30)
+                if hl + vl < 2:
+                    continue
+                ink = sum(1 for v in _px if 40 < v < 220) / _n
+                if best is None or ink < best[0]:
+                    best = (ink, p)
+            except Exception:
+                continue
+        if best and best[0] < 0.32:
+            p = os.path.join(ddir, "zol_size.jpg")
+            Image.open(best[1]).convert("RGB").save(p, quality=92)
+            log("中关村尺寸图单块兜底：%s（ink=%.2f）→ zol_size.jpg" % (
+                os.path.basename(best[1]), best[0]))
+            return p
+        return None
+    except Exception as e:
+        if log:
+            log("中关村尺寸图拼接失败：%r" % (e,))
+        return None
+
+
+def _zol_archive(model, urls, log=None, cap=60):
+    """中关村图集全量落盘到 kitset/<型号>/中关村/（2026-11-16 用户令「所有的都抓取放到 R2 里面」）。
+
+    以前中关村图只当「候选」喂 _pick_prod，选完机图+尺寸图就 break → 大部分图根本没落盘，
+    用户翻图片库只见 官网/欣盛、没有 中关村。这里独立归档：并发 8 路、md5 去重、
+    目录已有 ≥10 张就当已归档直接跳过。返回本地路径列表（可直接当候选，省二次下载）。"""
+    import hashlib
+    from concurrent.futures import ThreadPoolExecutor
+    log = log or (lambda s: None)
+    try:
+        mdir = model_dir(model)
+        ddir = os.path.join(mdir, "中关村")
+        have = []
+        if os.path.isdir(ddir):
+            have = [p for p in (glob.glob(os.path.join(ddir, "*.jpg")) +
+                                glob.glob(os.path.join(ddir, "*.png")))]
+        if len(have) >= 10:
+            if not os.path.isfile(os.path.join(ddir, "zol_size.jpg")):
+                _zol_stitch_size(ddir, log)      # 已归档过的型号补拼一次，不用重下
+            return have
+        os.makedirs(ddir, exist_ok=True)
+        seen = set()
+        for p in have:
+            try:
+                seen.add(hashlib.md5(io.open(p, "rb").read()).hexdigest())
+            except Exception:
+                pass
+        todo = list(dict.fromkeys([u for u in (urls or []) if u]))[:cap]
+
+        def _one(u):
+            try:
+                raw = fetch(u, extra_headers={"Referer": "https://detail.zol.com.cn/"},
+                            binary=True, timeout=25)
+                if not raw or len(raw) < 3000:
+                    return None
+                h = hashlib.md5(raw).hexdigest()
+                if h in seen:
+                    return None
+                return (h, raw)
+            except Exception:
+                return None
+
+        got = 0
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for r in ex.map(_one, todo):
+                if not r:
+                    continue
+                h, raw = r
+                if h in seen:
+                    continue
+                seen.add(h)
+                got += 1
+                with io.open(os.path.join(ddir, "zol_%02d.jpg" % got), "wb") as f:
+                    f.write(raw)
+        if log and got:
+            log("中关村图集归档 %d 张（%s）" % (got, ddir))
+        _zol_stitch_size(ddir, log)
+        return [p for p in (glob.glob(os.path.join(ddir, "*.jpg")) +
+                            glob.glob(os.path.join(ddir, "*.png")))]
+    except Exception as e:
+        if log:
+            log("中关村归档失败：%r" % (e,))
+        return []
+
+
 def _zol_data(model, brand, log):
     """中关村在线兜底（下架/冷门型号官网欣盛都无图无参时用）。返回 (图片URL列表, 参数kv列表)。
     直连搜索会被反爬挡（返回空页），所以走两路：直搜 → 必应中转搜 detail.zol.com.cn 详情页。
@@ -1134,6 +1502,11 @@ def _zol_data(model, brand, log):
     for attempt in (0, 1):
         imgs, props = _zol_data_once(model, brand, log if attempt == 0 else None)
         if imgs or props:
+            if imgs:
+                # 图集先全量归档（所有图进 中关村/，随 R2 上云），候选直接用本地文件不再二次下载
+                _loc = _zol_archive(model, imgs, log)
+                if _loc:
+                    return _loc, props
             return imgs, props
         if attempt == 0:
             _t.sleep(2)
@@ -1171,13 +1544,11 @@ def _zol_data_once(model, brand, log):
     if log:
         log("中关村候选详情页 %d 个" % len(pages))
     imgs, props = [], []
+    _sink = {}                      # (picId前3, 文件名) → (面积, 最大尺寸URL)，跨详情页/图集去重
     for page in pages:
         try:
             html2 = _http_text(page, "https://www.bing.com/")
-            for m in re.finditer(r'(https?://[^"\'\s]+?(?:zol-img\.com|zol\.com\.cn)/product/[^"\'\s]+?\.(?:jpg|png))', html2):
-                u = re.sub(r"_\d+x\d+/", "_500x375/", m.group(1))   # 升到 500px 大图
-                if u not in imgs and not re.search(r"logo|icon|banner|watermark", u, re.I):
-                    imgs.append(u)
+            _zol_imgs_in(html2, _sink)
             # 参数子页：ZOL 两种结构都要吃——
             #   旧版 <p title="…"><span>键：</span>值</p>；
             #   现行表格 <th><span id="newPmName_N">键</span></th>
@@ -1195,10 +1566,32 @@ def _zol_data_once(model, brand, log):
                         k, v = km.strip(), vm.strip()
                         if k and v and v != "-" and (k, v) not in props:
                             props.append((k, v))
-            if imgs or props:
+            # 图集（2026-11-16 用户令「所有的都抓取放到 R2」）：picture_index 页的 var picList
+            # 是完整清单（hash/picId/源尺寸都有），比详情页正文捞图全得多，原图直拉
+            for gal in list(dict.fromkeys(re.findall(
+                    r'href="(/picture_index_\d+/index[^"]+?\.shtml)"', html2 or "")))[:3]:
+                try:
+                    gh = _http_text("https://detail.zol.com.cn" + gal, page)
+                    ml = re.search(r"var\s+picList\s*=\s*(\[.*?\])\s*;", gh or "", re.S)
+                    if not ml:
+                        continue
+                    for it in json.loads(ml.group(1)) or []:
+                        u = _zol_pic_url(it)
+                        if not u:
+                            continue
+                        key = (str(it.get("picId") or "")[:3], u.rsplit("/", 1)[-1])
+                        old = _sink.get(key)
+                        si = (it.get("sizeInfo") or {}).get("source") or [0, 0]
+                        area = int(si[0]) * int(si[1])
+                        if old is None or area > old[0]:
+                            _sink[key] = (area, u)
+                except Exception:
+                    continue
+            if props and len(_sink) >= 12:
                 break
         except Exception:
             continue
+    imgs = [u for _a, u in sorted(_sink.values(), key=lambda x: -x[0])][:60]
     if log:
         log("中关村：%d 张图 / %d 条参数" % (len(imgs), len(props)))
     return imgs, props
@@ -1445,22 +1838,39 @@ def _gather_info(model, log):
         for _p in _r2:
             _par = os.path.basename(os.path.dirname(_p))
             imgs.append((_p, _par if _par in _SRC_TAG_DIRS else "其他"))
-    # 参数也够（≥5 条）就直接用，不再爬官网/欣盛；参数残缺才爬（那边能补参数表）
-    _need_crawl = (not imgs) or len((info or {}).get("props") or []) < 5
-    if _need_crawl:
+    # 2026-11-16 用户令「所有的都抓取放到 R2 里面」：以前是「R2 有图 + 参数够」就整体不爬，
+    # 官网/欣盛/中关村三源各只有一部分图，尺寸线稿这种只在详情长图里的永远补不上。
+    # 改成按来源目录独立判断——哪个来源目录里一张图都没有就去补那个来源，
+    # 每个来源只补一次（抓过即跳过），既不重复爬也不留空档。
+    _mdir_src = model_dir(model)
+
+    def _src_has(_sub):
+        _p = os.path.join(_mdir_src, _sub)
         try:
-            data = fetch_official(model, log)
+            return os.path.isdir(_p) and any(
+                f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")) for f in os.listdir(_p))
+        except Exception:
+            return False
+
+    _miss_gw = not _src_has("官网")
+    _miss_xs = not _src_has("欣盛")
+    _miss_zol = not _src_has("中关村")
+    _low_props = len((info or {}).get("props") or []) < 5
+    if _miss_gw or _low_props:
+        try:
+            data = fetch_official(model, log, need_imgs=True)   # need_imgs：参数库命中也要抓官网图
         except Exception:
             data = None
+    if _miss_xs or _low_props:
         try:
             xs = fetch_xinsheng(model, log)
         except Exception:
             xs = None
-        for src, _tag in ((data, "官网"), (xs, "欣盛")):
-            if src and src.get("imgs"):
-                # 2026-10-31 用户令：下载的图按来源分文件夹——候选带来源标签，
-                # _pick_prod 落盘时进 官网\ / 欣盛\ 子目录
-                imgs.extend([(u, _tag) for u in src["imgs"] if u])
+    for src, _tag in ((data, "官网"), (xs, "欣盛")):
+        if src and src.get("imgs"):
+            # 2026-10-31 用户令：下载的图按来源分文件夹——候选带来源标签，
+            # _pick_prod 落盘时进 官网\ / 欣盛\ 子目录
+            imgs.extend([(u, _tag) for u in src["imgs"] if u])
     if imgs:
         # 大图变体优先（_1200 > 其他 > _600）：透明底机图锁定不比面积，先到先得，
         # 600px 小图先到会顶掉 1200px 大图导致成图发糊（2026-10-22 XQS100 用户实锤）
@@ -1494,7 +1904,9 @@ def _gather_info(model, log):
     # 中关村全量参数源（2026-10-29 LTD-575WDS9U1 实锤：leader 官网 WAF 拦 IP 403、
     # pubwork/欣盛 0 参数、必应 0 结果，ZOL 却有 23 条全参数）——必应之前先问 ZOL，
     # 图也并进候选。负缓存键 zol_params 与 _ensure_dims 的 zol_dims（尺寸专用）分开。
-    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "zol_params"):
+    # 2026-11-16 用户令「所有的都抓取放到 R2 里面」：中关村从「参数 <5 条才兜底」
+    # 改成「缺中关村图也要抓」（_miss_zol 由上面分源判断给出），图并进候选、参数照旧补缺。
+    if (_miss_zol or len(info.get("props") or []) < 5) and not _neg_get(_mdir, "zol_params"):
         try:
             _zi, _zp = _zol_data(model, (info.get("brand") or ""), log)
             if _zi:
@@ -2775,6 +3187,15 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                         log("中关村图集也没有尺寸图（已记住，2 天内不再重复找）")
             except Exception:
                 pass
+    # 2026-11-16 用户令「所有的都抓取放到 R2 里面」：主图/候选落盘完，异步把本型号
+    # 官网/欣盛/中关村 三源新图推上云端 R2 图库（探测后只传缺的，失败不影响出图）。
+    try:
+        import threading as _th
+        import cloud as _cl
+        if getattr(_cl, "_cloud_token", lambda: "")():
+            _th.Thread(target=_cl.kit_push_model, args=(model, log), daemon=True).start()
+    except Exception:
+        pass
     return picked
 
 
@@ -3517,6 +3938,13 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None):
     # kitset/ES60H-Q3/ —— sizeimg.jpg 明明落了盘这里却 isfile=False，img4 永远退化手绘。
     # 改为 generate 直传 mdir（同一次调用里落盘和读取必须同一目录）。
     _si = os.path.join(mdir, "sizeimg.jpg") if mdir else os.path.join(model_dir(model), "sizeimg.jpg")
+    # 官网没抓到官方尺寸图时，用中关村的拼接/兜底尺寸图顶上（2026-11-16 用户令：
+    # 中关村都有尺寸图了蓝底还画手绘线稿说不通）。复制成 sizeimg.jpg，一次落盘永久生效。
+    if not os.path.isfile(_si) and mdir:
+        _zs = os.path.join(mdir, "中关村", "zol_size.jpg")
+        if os.path.isfile(_zs):
+            if _clean_sizeimg(_zs, _si) and log:
+                log("尺寸图：官网没有，用中关村拼接图顶上（已清洗掉源图自带标题/说明）")
     cfg = {
         "brand": brand, "brand_en": brand_en, "model": model, "cat": cat, "cap": cap,
         "series": (brand + cat) or brand,
@@ -3835,6 +4263,32 @@ def _rerender_cached(model, mdir, old, log):
     抓取产物（product.png / sizeimg.jpg / 官网图）都在盘上，只重跑渲染 + AI 复检，
     不走网络。set.json 或 product.png 缺料时调用方回退完整抓取链。"""
     cfg = old.get("cfg") or {}
+    # 重新生成也要补尺寸图：旧快照里 sizeimg 常是 None（当时官网没抓到），后来
+    # 中关村归档拼出了 zol_size.jpg —— 这里对账补上，否则第 4 张永远手绘线稿
+    # （2026-11-16 XQGL120-L732EH 实锤）。
+    _si = os.path.join(mdir, "sizeimg.jpg")
+    if not (cfg.get("sizeimg") and os.path.isfile(cfg["sizeimg"])):
+        if not os.path.isfile(_si):
+            _zs = os.path.join(mdir, "中关村", "zol_size.jpg")
+            if os.path.isfile(_zs):
+                if _clean_sizeimg(_zs, _si) and log:
+                    log("尺寸图：官网没有，用中关村拼接图顶上（已清洗掉源图自带标题/说明）")
+        if os.path.isfile(_si):
+            cfg["sizeimg"] = _si   # 末尾 res["cfg"]=cfg 会随 set.json 落盘回写
+    # 尺寸数字补账：旧快照 dims/size_pills 是空的 → img_2 只能写「以实物为准」、
+    # img_4 底部没有宽高深（聚光却有，两版不对齐，2026-11-16 用户实锤）。
+    # 官方图自己印的数字最权威，AI 读一次；读出后随 set.json 回写，下次不再读。
+    if cfg.get("sizeimg") and not (cfg.get("dims") and all(cfg.get("dims") or [])):
+        try:
+            _dims = _ai_read_size_nums(cfg["sizeimg"], log)
+            if _dims and all(_dims):
+                cfg["dims"] = [int(x) for x in _dims]
+                cfg["size_pills"] = ["%d × %d mm" % (_dims[0], _dims[1]),
+                                     "深 %d mm" % _dims[2]]
+                if log:
+                    log("尺寸数字：AI 读官方图 %d/%d/%d，参数图与尺寸图底部已补" % tuple(_dims))
+        except Exception:
+            pass
     titles = old.get("titles") or []
     points = old.get("points") or []
     aftersale = old.get("aftersale") or ""
