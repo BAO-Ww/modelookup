@@ -409,7 +409,8 @@ class ApiPostMixin:
                     etitle = str(d.get("title") or "").strip()
                     threading.Thread(target=pubwork.gen_style,
                                      args=(model, style, price, ver),
-                                     kwargs={"entry_title": etitle}, daemon=True).start()
+                                     kwargs={"entry_title": etitle,
+                                             "only": d.get("only")}, daemon=True).start()
                     self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
                     return
                 if u.path == "/api/pubhero":

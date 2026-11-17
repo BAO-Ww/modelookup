@@ -791,7 +791,9 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
         # 标题+黄底白字型号胶囊整组居中压在机器上。**不压整幅暗带**——那会把
         # 银色机器压黑（EC5003-BK3U1 用户实锤），改用标题深色描边保可读。
         cv = _spot_bg(cy=560, strength=1.15)
-        pf, px, py = place_band(cv, front, 185, 1035, maxw=1160)
+        # 2026-11-17 用户实锤「字都被机图盖住了」：机器带底边从 1035 收到 975，
+        # 给底部卖点行让出干净纸面（原 y=998 正好压在机器身上，深机器+深字=看不见）。
+        pf, px, py = place_band(cv, front, 185, 975, maxw=1160)
         halo(cv, px, py, pf.width, pf.height, strength=34, blur=60, m=190, col=(205, 218, 238))
         soft_shadow(cv, px, py, pf.width, pf.height, alpha=135, blur=32, drop=16, w=0.98)
         cv.alpha_composite(pf, (px, py))
@@ -859,7 +861,8 @@ def img1(front, out):                 # 首图：干净版——不放大数字/
         except Exception:
             _feat = ""
         if _feat:
-            T(dr, (W // 2, 998), _feat, 30, INK_TXT, "mm")
+            # 2026-11-17 机器带底边收到 975 后，卖点行挪到机器下方的纸面上（对齐蓝底首图版式）
+            T(dr, (W // 2, 1020), _feat, 30, INK_TXT, "mm")
         return save(cv, out / "1_首图.jpg")
     # 顶栏：成色 + 全国联保
     dim(cv, (0, 0, W, 52), SCRIM_COL, SCRIM_A)
@@ -1860,7 +1863,7 @@ def build_text(info, version, sell_price, ai_copy=None):
 # ================= 主入口 =================
 def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
              api_key=None, progress=None, ai_copy=None, pop=False, slots=None,
-             style=None, overview=True, tune=None):
+             style=None, overview=True, tune=None, only=None):
     """生成套图（默认 9 张 + 九宫格总览；slots 指定则只出对应几张，overview=False 不拼总览），
     返回路径列表。
 
@@ -2031,6 +2034,13 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
             (5, "尺寸图", lambda: img_size(info, front, out)),
         ]
         slots = [s for s, _, _ in STEPS]
+        # only=N：只重出一张（2026-11-17 宝套图双击单张重出）
+        try:
+            _only = int(only or 0)
+        except (TypeError, ValueError):
+            _only = 0
+        if _only in slots:
+            slots = [_only]
     else:
         STEPS = [
             (1, "首图", lambda: img1(front, out)),

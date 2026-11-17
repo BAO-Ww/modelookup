@@ -976,15 +976,17 @@ def cat_from_url(url):
 
 
 def cat_name(info):
-    """品类名：优先用抓取的 cat，没有就从标题里认"""
+    """品类名：优先用抓取的 cat，没有就从标题里认。
+    「电器/家电」是抓取链的废词兜底（2026-11-17 HRF-H57SSEDU1 实锤标题出
+    「571L风冷无霜电器」），当没认出来处理，走标题里的品类词。"""
     cat = (info.get("cat") or "").strip()
-    if cat:
+    if cat and cat not in ("电器", "家电"):
         return cat
     t = info.get("title") or ""
     for w in CAT_WORDS:
         if w in t:
             return w
-    return ""
+    return cat or ""
 
 
 def title_points(info):

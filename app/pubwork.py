@@ -991,7 +991,7 @@ def _auto_qa_spot(model, info, src, out, style, paths, prog=None):
 
 
 @serialized
-def gen_style(model, style, sell_price=None, version="N", entry_title=None):
+def gen_style(model, style, sell_price=None, version="N", entry_title=None, only=None):
     """生成一套 6 张精修（后台线程跑，JOB 汇报进度）。
     entry_title（2026-11-04 用户令）：软件条目标题，聚光首图大字用它——
     官网抓取链会把 info.title 覆盖成页面标题（HP-35 实锤变成「大通量前置过滤器」），
@@ -1065,7 +1065,7 @@ def gen_style(model, style, sell_price=None, version="N", entry_title=None):
             out = os.path.join(src, STYLE_DIRS.get(style, style))
         paths = pei_ai9.generate(info, src, out, version=version, sell_price=sell_price,
                                  api_key=_ai_key(), progress=_job_prog, style=style,
-                                 slots=SLOTS6, overview=False)
+                                 slots=SLOTS6, overview=False, only=only)
         _last_set(model, paths, out, style)
         _logf()("发布图·%s 生成完成：%d 张 -> %s" % (name, len(paths), out))
         # 2026-10-30 用户实锤「图一直出不来」：先收尾让前端立刻亮图，复检挪后台线程。

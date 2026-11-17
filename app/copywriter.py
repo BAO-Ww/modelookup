@@ -1,3 +1,21 @@
+# 第三套文案（2026-11-17 用户定稿）：卖家干货直叙体——像真闲鱼卖家随手打的，
+# 口语、长短错落、一条塞足干货；禁广告腔（拉满/正合适/拿得出手）、禁个人感受、
+# 禁承诺回复时效。标题=品牌+品类+容量+型号+全新，不堆卖点。
+STYLE3_X = """
+
+【本单特殊要求——第三套文案（卖家干货体）】
+这一单是同一台机器的第三套文案，写法必须跟「参数直给型」「场景型」都拉开距离：
+- 身份：你就是卖机器的卖家，写给买家看的干货介绍——不是广告词，不是使用感想；
+  「我觉得/真省心/我家实测」这类第一人称感受一律不写；「看到就回/随时在线」这类
+  回复时效承诺一律不写；「拉满/正合适/拿得出手」这类空话一律不写。
+- 句式：口语直叙、长短错落，像随手打出来的，别每条一个模子、别对仗工整。
+- 内容：每条 = 具体功能 + 具体细节（参数/数字/用法），一条顶一条，不许空洞。
+- 标题三条：品牌 + 品类 + 容量 + 型号全码 + 全新机为主，不堆卖点，每条≤30字，
+  成色词用「全新机」，服务词保留一条联保类。
+- 卖点 5-8 条，每条仍锚定【真实数据】的真实参数，数字一个不许编。
+"""
+
+
 # -*- coding: utf-8 -*-
 """copywriter.py — 闲鱼/小红书文案生成（2026-10-12）
 链路：官网三站（海尔/卡萨帝/统帅）实抓 → 欣盛商城库兜底 → 都没有才 AI 裸写（禁编参数）。
@@ -502,16 +520,9 @@ PROMPT = """你是闲鱼家电卖家文案写手。产品：{pname}（型号 {mo
    全新机 {brand} 226L 三门冰箱 风冷无霜 {model} 原厂正品联保
    {brand}三门冰箱 226L 风冷无霜 {model} 全新机 家用节能 全国联保
    {kk_titles}
-3) points：正好5-8条**参数直给**卖点（聚光用，不是生活场景、不是口号）。每条≤30字，格式＝「参数值＋参数名，一句这个参数带来的结果」，
-   每条必须至少含一个【真实数据】里出现的数字（防编造同时防空话）；示例（数字必须换成【真实数据】里的）：
-   60L 容量，2200W 功率，一级能效
-   整胆加热约 1.5 小时，最高水温 75℃
-   绝对禁止：生活化修辞（「不用排队」「不心疼电费」「隔夜还温」）、形容词堆砌、极限词、任何承诺类说法。
-   绝对禁止用括号标注参数原名——「12kg超大洗涤容量（洗涤容量12kg），轻松应对…」这种括号是废话，
-   参数名要自然融进句子里，不要额外加「（参数名:参数值）」「（参数名值）」。正确写法只有一句：
-   12kg超大洗涤容量，轻松应对全家衣物洗涤需求
-   一级能效等级，省电节能降低日常使用成本
-   禁止把尺寸当卖点：外形尺寸/产品尺寸/净重/毛重/横式壁挂安装这类外观参数一律不写（640*420*390mm、横式壁挂节省空间这种就是尺寸，不是卖点）。
+3) points：正好5-8条卖点（聚光用）。【真实数据】是你唯一的事实来源：每条必须锚定至少一个真实参数（数字或参数名/参数值），数字一个都不许编、参数表里没有的维度一个字都不许写，每条≤36字。
+   文风放开（2026-11-17 用户令「让AI自由发挥」）：像懂行的卖家向朋友推荐这台机器——句式每条不一样，可以有场景、有画面、有对比（「夜里洗衣服也不吵」「一周食材一次买齐」这种生活表达随便用），不要每条都是「参数值＋参数名，一句结果」一个模子；但也别堆形容词喊口号，每条都得落到这台机器的真实本事上。
+   依然禁止：编造【真实数据】里没有的数字或功能；把尺寸/外形/净重当卖点；极限词；括号标注参数名。
    差异化硬要求（2026-11-14 用户令「卖点全是大同小异的要AI干嘛」）：先从【真实数据】里找出这台机器跟同品类其他型号**最不一样**的
    2-3 个参数（容量档位、功率、能效等级、核心技术、特色功能、适用场景数字），把它们写成前 2-3 条；
    所有同品类机型都一样的基础参数（如普通保温、常规安全防护）最多写 1 条；五条卖点放在一起必须能看出「这是这一台，不是随便哪台」。
@@ -526,8 +537,29 @@ PROMPT = """你是闲鱼家电卖家文案写手。产品：{pname}（型号 {mo
 {facts}"""
 
 
+def _kk(kind):
+    """kind 归一：l=聚光全新机 / s=样机 / x=第三种文案（2026-11-17 文案三列）。"""
+    return 's' if kind == 's' else ('x' if kind == 'x' else 'l')
+
+
+# 第三种文案（2026-11-17 用户令「文案三也是第三种文案」）：家庭贴心风，
+# 跟聚光款（参数直给）错开——追加到 PROMPT 尾部，铁律照旧。
+STYLE3_X = """
+
+【本单特殊要求——第三种文案（家庭贴心风）】
+这一单是同一台机器的第三套文案，写法必须跟「参数直给型」拉开距离：
+- 文风：像给家里老人孩子挑东西的贴心卖家——多讲全家人用着省心的生活场景（老人会不会用、一家几口够不够装、放厨房客厅方不方便），口语、温和、有温度；
+- 卖点：5-8 条，每条仍必须锚定【真实数据】里的真实参数（数字不许编），但角度要贴家庭日常，句式跟参数直给型完全不同，别一句一个参数值；
+- 标题三条仍守铁律（型号全码+成色词+服务词），但语序换一种排法，别跟常规版式一样。
+"""
+
+
 def _facts_text(data, model):
     lines = ["型号: " + model]
+    # 品类喂给 AI（2026-11-17：不喂就出「家用热水器/电器」这种瞎猜品类标题）
+    _cat = str(data.get('cat') or '').strip()
+    if _cat and _cat not in ('电器', '家电'):
+        lines.insert(1, "品类: " + _cat)
     if data.get('pname'):
         lines.append("产品名: " + data['pname'])
     if data.get('price'):
@@ -578,14 +610,17 @@ def _is_size_line(line):
     return False
 
 
-def _verify(ai, facts, nums_set, bans=()):
+def _verify(ai, facts, nums_set, bans=(), grounded=()):
     """防编造：titles/points 整行剔除。
     2026-11-14 加两道闸（用户令「谁看得懂啊」+「这种肯定不是卖点」）：
       · 参数直给卖点每条必须含数字，光有形容词的空话直接扔；
       · 品类禁写词（保证/绝对/隔夜还…）命中即扔，绝不承诺做不到的事。
     2026-11-14 再加两道（用户令「尺寸算什么卖点」+「怎么还有全新原封」）：
       · 尺寸/外形类整行扔（SIZE 判定）；
-      · 「全新原封/全新未拆封」等被除名的词命中即扔。"""
+      · 「全新原封/全新未拆封」等被除名的词命中即扔。
+    2026-11-17 补一条（用户令「蓝底都能写怎么到聚光就写不了」）：无数字的行如果
+      命中【真实参数值/参数名】（grounded，如「洗烘一体」「一级能效」）也算数——
+      防编造防的是凭空冒出来的，不是真参数不带数字。"""
     fl = _fact_floats(facts)
 
     def ok(line):
@@ -608,8 +643,9 @@ def _verify(ai, facts, nums_set, bans=()):
     def ok_pt(line):
         if not ok(line):
             return False
-        if not NUM_RE.search(line):      # 参数直给：没有数字=空话
-            return False
+        if not NUM_RE.search(line):      # 没数字：真参数命中可过，纯形容词空话照剔
+            if not any(g and g in line for g in grounded):
+                return False
         for b in bans:
             if b and b in line:
                 return False
@@ -643,6 +679,24 @@ def glm_copy(model, kind, data, log):
                  if kind != 's' else
                  '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新机/全新/全新原封」字样。')
     nums_set = set(NUM_RE.findall(norm_model(model)))
+    # 真参数词表（2026-11-17）：参数值/参数名里 ≥3 字的实词——无数字卖点命中即放行
+    # （「洗烘一体」「一级能效」是真参数不带数字，不该被当空话剔）。值为「暂无数据」
+    # 的参数整条不算（机器可能压根没有，AI 提了反而是编造）。
+    grounded = set()
+    for _g, _kv in (data.get('groups') or []):
+        if not isinstance(_kv, (list, tuple)):
+            continue
+        for _k2, _v2 in _kv:
+            _v2 = str(_v2 or '').strip()
+            if not _v2 or _v2 in ('暂无数据', '暂无', '无', '-', '/', '不支持'):
+                continue
+            _k2s = str(_k2 or '').strip()
+            if len(_k2s) >= 3:
+                grounded.add(_k2s)
+            for _tok in re.split(r'[，,、/；;\s]+', _v2):
+                _tok = _tok.strip()
+                if len(_tok) >= 3 and not NUM_RE.fullmatch(_tok):
+                    grounded.add(_tok)
     # 2026-10-13 用户反馈「小红书/闲鱼拉胯」整改：质量闸（剔空洞口号/一句话配文）
     # + 质量不够自动重试一次（两次取分高那次），AI 解析失败也不再炸整单
     best, best_score = None, -1
@@ -650,15 +704,18 @@ def glm_copy(model, kind, data, log):
         log("没拿到 GLM key（云端没配 / 没登录）：AI 裸写跳过，只用官网实抓 + 欣盛兜底")
     for attempt in range(2):
         try:
-            raw = _chat(PROMPT.format(model=model, pname=data.get('pname') or model, brand=brand,
-                                      no_params=no_params, kk_titles=kk_titles, facts=facts,
-                                      cat_block=cat_block))
+            _ptxt = PROMPT.format(model=model, pname=data.get('pname') or model, brand=brand,
+                                  no_params=no_params, kk_titles=kk_titles, facts=facts,
+                                  cat_block=cat_block)
+            if kind == 'x':
+                _ptxt += STYLE3_X
+            raw = _chat(_ptxt)
             m = re.search(r'\{.*\}', raw, re.S)
             ai = json.loads(m.group(0)) if m else {}
         except Exception as e:
             log("AI 第 %d 次生成失败：%s" % (attempt + 1, e))
             ai = {}
-        res = _verify(ai, facts, nums_set, bans)
+        res = _verify(ai, facts, nums_set, bans, grounded)
         # 价格尾巴兜底：AI 没听话写出 1649.0元 → 1649元（4.5kg 这类真小数不受影响）
         for _k in ('titles', 'points'):
             res[_k] = [re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', s) for s in res[_k]]
@@ -678,12 +735,76 @@ def glm_copy(model, kind, data, log):
 
 
 # ---------------------------------------------------------------- 聚光卖点（2026-11-11 用户令）
+def _resolve_model(model):
+    """别名纠偏（2026-11-17 HRF-H575SEDU1 实锤）：发布记录里的型号串打错/官网口径
+    不一致时，kitset 目录不存在 → 模糊匹配唯一近似目录名（≥0.88 且唯一才算）。
+    匹配不上原样返回，不猜。"""
+    try:
+        import kitset as _ks
+        if _ks.model_dir(model) and os.path.isdir(_ks.model_dir(model)):
+            return model
+        import difflib
+        root = _ks.model_dir("X")
+        root = os.path.dirname(root) if root else None
+        if not root or not os.path.isdir(root):
+            return model
+        names = [n for n in os.listdir(root)
+                 if os.path.isdir(os.path.join(root, n))]
+        hits = difflib.get_close_matches(model, names, n=2, cutoff=0.88)
+        if len(hits) == 1:
+            return hits[0]
+    except Exception:
+        pass
+    return model
+
+
+def _load_setjson_cfg(model):
+    """蓝底 set.json 的 cfg 快照（读不到返回 {}）——品类/品牌/尺寸数字的权威口径。"""
+    try:
+        import kitset as _ks
+        p = os.path.join(_ks.model_dir(_resolve_model(model)), "set.json")
+        if os.path.isfile(p):
+            return json.load(io.open(p, encoding="utf-8")).get("cfg") or {}
+    except Exception:
+        pass
+    return {}
+
+
+def _blue_params(model):
+    """蓝底 set.json 的真实参数表（cfg.params_rows / params），读不到返回 []。
+    2026-11-17 用户问「蓝底都能写怎么到聚光就写不了」：官网/欣盛这条文案链没抓到
+    参数（欣盛 groups 空），AI 没料可写 → 质量闸把仅剩的卖点剔到 1 条。蓝底抓取链
+    明明抓到了参数（params_rows 8 条），同一台机器直接拿来喂文案 + 垫质量闸。"""
+    try:
+        import kitset as _ks
+        p = os.path.join(_ks.model_dir(_resolve_model(model)), "set.json")
+        if os.path.isfile(p):
+            j = json.load(io.open(p, encoding="utf-8"))
+            cfg = j.get("cfg") or {}
+            rows = cfg.get("params_rows") or []
+            out = []
+            for r0 in rows:
+                if isinstance(r0, (list, tuple)) and len(r0) >= 2:
+                    k2, v2 = str(r0[0]).strip(), str(r0[1]).strip()
+                    if k2 and v2 and v2 not in ("暂无数据", "暂无", "无", "-"):
+                        out.append((k2, v2))
+            if not out:
+                for k2, v2 in (cfg.get("params") or {}).items():
+                    v2 = str(v2).strip()
+                    if v2 and v2 not in ("暂无数据", "暂无", "无", "-"):
+                        out.append((str(k2).strip(), v2))
+            return out
+    except Exception:
+        pass
+    return []
+
+
 def _blue_points(model):
     """蓝底文案已用的卖点一话一行（kitset set.json 的 points），读不到返回 []。
     聚光卖点要跟蓝底「尽量不要写的一样」，先把蓝底那份拿来做撞车比对。"""
     try:
         import kitset as _ks
-        p = os.path.join(_ks.model_dir(model), "set.json")
+        p = os.path.join(_ks.model_dir(_resolve_model(model)), "set.json")
         if os.path.isfile(p):
             j = json.load(io.open(p, encoding="utf-8"))
             return [str(x).strip() for x in (j.get("points") or []) if str(x).strip()]
@@ -875,7 +996,7 @@ def make_featured(mdir, price, log):
 def generate(model, kind='l', force=0, log=None):
     log = log or (lambda s: None)
     nm = _safe_dir(norm_model(model) or model)
-    kk = 's' if kind == 's' else 'l'
+    kk = _kk(kind)
     cache = os.path.join(copy_root(), "%s_%s_v4.json" % (nm, kk))   # v4：官网+欣盛双源全图（旧缓存不读）
     if not force and os.path.isfile(cache):
         try:
@@ -910,6 +1031,28 @@ def generate(model, kind='l', force=0, log=None):
         xs = None
     elif xs and not str(data.get('price') or '').strip() and str(xs.get('price') or '').strip():
         data['price'] = xs['price']   # 官网没挂价 → 欣盛价兜底
+    # 蓝底参数直给（2026-11-17 用户令「不是抓不到时才兜底，直接把蓝底 set.json 的
+    # 真实参数给聚光，不要我去抓了」）：聚光文案的参数源固定为蓝底 set.json 快照——
+    # 有就直接用（覆盖官网/欣盛抓来的），抓取链只补价格/图，不再决定参数有没有。
+    # 质量闸口径跟蓝底一致：真参数（含不带数字的参数词）都算数，不凭空加严。
+    _bp = _blue_params(model)
+    if _bp:
+        data['groups'] = [("参数", _bp)]
+        if log:
+            log("聚光文案参数直接用蓝底 set.json 的 %d 条真实参数（不依赖抓取链）" % len(_bp))
+    # 品类补强（2026-11-17 HRF-H57SSEDU1 实锤「家用热水器/电器」）：info.json 的 cat
+    # 常是「电器」废词，蓝底 set.json 的 cfg.cat 是抓取链认过的正经品类——直接喂文案，
+    # 标题品类词跟蓝底口径一致。
+    try:
+        _cfg = (_load_setjson_cfg(model) or {})
+        _cat = (_cfg.get('cat') or '').strip()
+        if _cat and _cat != '电器' and (data.get('cat') or '') in ('', '电器', '家电'):
+            data['cat'] = _cat
+            data['pname'] = data.get('pname') or ((_cfg.get('brand') or '') + _cat)
+            if log:
+                log("品类补强：文案品类用蓝底口径「%s」" % _cat)
+    except Exception:
+        pass
     # 价格统一整数显示：抓来的 "1649.0" 直接进标题会带小数尾巴（2026-10-12 实锤）
     _pr = str(data.get('price') or '').strip()
     try:
@@ -1022,7 +1165,7 @@ _AD_LIMIT = re.compile(r'最好|最佳|最强|最优|第一|顶级|国家级|世
 
 def _cache_path(model, kind):
     nm = _safe_dir(norm_model(model) or model)
-    return os.path.join(copy_root(), "%s_%s_v4.json" % (nm, 's' if kind == 's' else 'l'))
+    return os.path.join(copy_root(), "%s_%s_v4.json" % (nm, _kk(kind)))
 
 
 def _load_cache(model, kind):
@@ -1051,7 +1194,7 @@ def _facts_of(model, kind):
 def polish(model, kind, target, text, log=None, mode='polish'):
     """AI 润色：target='titles'（重写三选一）| 'desc'（润色描述正文）。带防编造校验。"""
     log = log or (lambda s: None)
-    kk = 's' if kind == 's' else 'l'
+    kk = _kk(kind)
     facts = _facts_of(model, kk)
     nums_set = set(NUM_RE.findall(norm_model(model)))
     fl = [float(x) for x in NUM_RE.findall(facts)]
@@ -1113,7 +1256,7 @@ def polish(model, kind, target, text, log=None, mode='polish'):
 def qa_copy(model, kind, text, log=None):
     """AI 自检：对标题+卖点+描述整体挑毛病，另附广告法极限词本地硬扫。"""
     log = log or (lambda s: None)
-    kk = 's' if kind == 's' else 'l'
+    kk = _kk(kind)
     facts = _facts_of(model, kk)
     kk_rule = ('这是正品全新机——文案里必须用「全新机」，绝不许出现「展示样机/样机」字样' if kk != 's'
                else '这是展示样机——文案里必须用「展示样机」，绝不许出现「全新机/全新」字样')
@@ -1150,6 +1293,10 @@ def enrich(model, kind, force, style="", log=None):
     Mac WKWebView fetch ~60s 超时对策：生成走 jobman 后台线程，本函数可被线程调用。"""
     log = log or (lambda s: None)
     res = generate(model, kind, force, log=log)
+    if _kk(kind) == 'x':
+        # 第三种文案（2026-11-17 文案三列）：不走 peiwen 覆盖——标题/描述必须跟
+        # 聚光款错开，让 AI 按家庭贴心风直出；括号剥离 generate 里已兜过。
+        return res
     _info = None
     try:
         import pubwork as _pw
@@ -1162,6 +1309,25 @@ def enrich(model, kind, force, style="", log=None):
                 log("peiwen 抓取链未命中（%s），用内置算法" % _we)
                 _info = None
         if _info and (_info.get("props") or []):
+            # 2026-11-17 用户令「质量闸跟蓝底一样」：peiwen 信息里的「暂无数据/无/-」
+            # 脏行先清掉再喂标题/描述（HL732EH 实锤标题出「家用暂无数据」），
+            # 口径与 copywriter._blue_params 一致——真参数才算数。
+            _cp = [p for p in _info["props"]
+                   if isinstance(p, (list, tuple)) and len(p) == 2
+                   and str(p[0] or '').strip()
+                   and str(p[1]).strip() not in ("暂无数据", "暂无", "无", "-", "/", "不支持")]
+            if _cp:
+                _info["props"] = _cp
+            # 品类纠偏（2026-11-17 HRF-H57SSEDU1 实锤「571L风冷无霜电器」）：peiwen
+            # info 的 cat 常是「电器」废词且 title 只有裸型号认不回来，蓝底 set.json
+            # 的 cfg.cat 是权威口径，直接纠。
+            try:
+                _bc = (_load_setjson_cfg(model) or {}).get('cat')
+                if _bc and str(_bc).strip() not in ('', '电器', '家电') \
+                        and str(_info.get('cat') or '').strip() in ('', '电器', '家电'):
+                    _info['cat'] = str(_bc).strip()
+            except Exception:
+                pass
             _pts = [str(x).strip() for x in (res.get("points") or [])
                     if str(x).strip()][:6]
             res["points"] = [str(x).strip() for x in (res.get("points") or [])
@@ -1175,7 +1341,7 @@ def enrich(model, kind, force, style="", log=None):
         pass
     if style == "v2":
         try:
-            _kk2 = 's' if kind == 's' else 'l'
+            _kk2 = _kk(kind)
             if _info and (_info.get("props") or []):
                 res["titles"] = _pc.titles_v2(_info, _kk2)
                 _v2p = [str(x).strip() for x in (res.get("points") or [])

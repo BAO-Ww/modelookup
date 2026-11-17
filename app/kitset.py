@@ -576,8 +576,19 @@ def _v8_points(points, params_rows, n=6):
     for k, v in (params_rows or []):
         if len(out) >= n:
             break
+        # 2026-11-17 实锤卖点图补出「暂无数据/显示屏」卡：空值参数不进卖点池
+        if str(v).strip() in ("暂无数据", "暂无", "无", "-", "/", "不支持", "否"):
+            continue
         t = ("%s：%s" % (k, v)).strip()
         if v and t not in out:
+            # 2026-11-17 用户实锤「滚筒式，洗烘一体」「12kg」参数卡跟上面话术卡
+            # 重复：参数主词（kg/公斤归一）跟已有卖点主词互为包含就不补。
+            # 短值（是/支持/无）不做包含判定，免得「是」把什么都拦了。
+            _vk = str(v).replace("kg", "公斤").replace("KG", "公斤").replace("Kg", "公斤")
+            _vk = re.sub(r"\s+", "", _vk).lower()
+            if len(_vk) >= 3 and any(_vk in x or x in _vk for x in seen):
+                continue
+            seen.add(_vk)
             out.append(t)
     return out[:n]
 
@@ -2794,7 +2805,7 @@ def _cand_newer(mdir, picked, slack=5.0):
         pt = os.path.getmtime(picked)
     except Exception:
         return False
-    for sub in ("官网", "欣盛", "中关村", "其他", "AI背景"):
+    for sub in ("官网", "欣盛", "中关村", "其他"):
         d = os.path.join(mdir, sub)
         if not os.path.isdir(d):
             continue
@@ -2813,11 +2824,132 @@ def _cand_newer(mdir, picked, slack=5.0):
     return False
 
 
+def _manual_overrides(mdir, log):
+    """用户手工放进 官网/（或型号根目录）的图，优先级最高（2026-11-17 用户令
+    「我都上传了两张图了你怎么就是不用」——AI 选图/启发式把官网营销海报选成
+    product.png，用户手工纠正的图反而晾着）：
+    · 官网/主图.*  → 直接当机图（product.png），AI 选图、启发式统统不再跑；
+    · 官网/尺寸图.* / 官网/zol_数字.* → 当尺寸图（过 _clean_sizeimg 清洗 → sizeimg.jpg）。
+    每次套图生成/重新生成都先过这道（幂等，同图重写成本一次 resize，可忽略）；
+    用户删掉手工图就回到自动选图，不需要开关。"""
+    od = os.path.join(mdir, "官网")
+    dirs = [d for d in (mdir, od) if os.path.isdir(d)]
+    _exts = (".jpg", ".jpeg", ".png", ".webp")
+
+    def _find(pred):
+        for d in dirs:
+            for f in sorted(os.listdir(d)):
+                stem, ext = os.path.splitext(f)
+                if ext.lower() not in _exts or f.startswith("."):
+                    continue
+                if pred(stem):
+                    return os.path.join(d, f)
+        return None
+
+    # ① 机图：主图.* 优先
+    front = _find(lambda s: s == "主图" or s.startswith("主图_"))
+    if front:
+        picked = os.path.join(mdir, "product.png")
+        try:
+            _rescue_prod(Image.open(front), log).save(picked)
+            if log:
+                log("机图：用户手工放的 %s 优先（→ product.png，跳过 AI 选图）" % os.path.basename(front))
+        except Exception:
+            pass
+    # ② 尺寸图：尺寸图*/尺寸*/zol_数字 优先
+    size = _find(lambda s: s.startswith(("尺寸图", "尺寸")) or re.fullmatch(r"zol_\d+", s) is not None)
+    if size:
+        si = os.path.join(mdir, "sizeimg.jpg")
+        if _clean_sizeimg(size, si) and log:
+            log("尺寸图：用户手工放的 %s 优先（清洗 → sizeimg.jpg）" % os.path.basename(size))
+
+
+def _rescue_sizeimg_official(mdir, dims=None, log=None):
+    """官网编号图里对账补捞尺寸图（2026-11-17 LF4-519WDS9U1 实锤：官网\07.jpg 就是
+    正经尺寸线稿 833×1850×594，cfg.dims/size_pills 都有但 sizeimg 空着 —— 全量抓取
+    链当时 AI 预算烧完漏选，第 4 格永远退化手绘线稿）。本地线稿初筛（不花钱）→
+    AI 终审 → dims 已知时数字必须对得上；捞到即清洗落 sizeimg.jpg，一次落盘永久
+    生效。全没捞到记负缓存，两天内不重复烧 AI。返回落盘路径或 None。"""
+    si = os.path.join(mdir, "sizeimg.jpg")
+    if os.path.isfile(si):
+        return si
+    od = os.path.join(mdir, "官网")
+    if not os.path.isdir(od):
+        return None
+    if _neg_get(mdir, "sizeimg_rescue", ttl_days=2):
+        return None
+    cands = []
+    for fn in sorted(os.listdir(od)):
+        stem, ext = os.path.splitext(fn)
+        if ext.lower() not in (".jpg", ".jpeg", ".png", ".webp") or fn.startswith("."):
+            continue
+        p = os.path.join(od, fn)
+        try:
+            im = Image.open(p)
+            im.load()
+        except Exception:
+            continue
+        if max(im.size) < 300:
+            continue
+        try:
+            if _looks_like_sizeimg(im):
+                cands.append((fn, im))
+        except Exception:
+            pass
+        if len(cands) >= 4:
+            break
+    for fn, im in cands:
+        try:
+            ai = _ai_is_sizeimg(im, log=log)
+        except Exception:
+            ai = None
+        if ai is False:
+            continue          # AI 明确否决：换下一个（AI 不可用 None = 信本地初筛）
+        tmp = si + ".rescue.jpg"    # 2026-11-17 坑：PIL 按扩展名定格式，.tmp 直接 ValueError
+        try:
+            _flat_white(im).save(tmp, "JPEG", quality=92)
+        except Exception:
+            continue
+        ok = False
+        if dims and all(dims or []):
+            try:
+                got = _ai_read_size_nums(tmp, log)
+                ok = bool(got and all(got) and len(got) == 3) and all(
+                    abs(float(a) - float(b)) / max(float(b), 1.0) < 0.06
+                    for a, b in zip(got, dims))
+            except Exception:
+                ok = False
+        else:
+            try:
+                ok = bool(_nums_gate(tmp, log, "rescue"))
+            except Exception:
+                ok = False
+        if not ok:
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+            continue
+        try:
+            os.replace(tmp, si)
+        except Exception:
+            continue
+        if log:
+            log("尺寸图：官网 %s 补捞成功（线稿初筛+AI 终审%s）" % (
+                fn, "，数字与参数对得上" if dims else ""))
+        return si
+    _neg_set(mdir, "sizeimg_rescue")
+    if log:
+        log("尺寸图：官网编号图里没捞到线稿（已记负缓存，两天内不再试）")
+    return None
+
+
 def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=None):
     """机图：①软件图库（payload imgs / 欣盛 ximg，与卡片同源）②抓取链候选做
     「边框同色+泛洪抠底」选抠出主体最大且落地的。官网尺寸线框图顺带识别存
     sizeimg.jpg 给 img4。横幅/场景图/拼图/悬浮创意图自动淘汰。"""
     os.makedirs(mdir, exist_ok=True)
+    _manual_overrides(mdir, log)          # 用户手工图优先（2026-11-17），覆写后重新判定
     picked = os.path.join(mdir, "product.png")
     sizeimg = os.path.join(mdir, "sizeimg.jpg")
     have_size = os.path.isfile(sizeimg)
@@ -3540,8 +3672,18 @@ def _hard_points(info, pd, sp):
         def _nk(x):
             t = re.split(r"[，,]", str(x))[0].strip()
             t = t.replace("公斤", "kg").replace("KG", "kg").replace("ＫＧ", "kg")
+            # 2026-11-17 用户实锤「12公斤大容量 / 12kg 容量」双占两行：大容量归一成容量
+            t = t.replace("大容量", "容量").replace("大水量", "水量")
+            # 2026-11-17 实锤「运行噪音 52dB / 52分贝低噪」双占两行：分贝归一 +
+            # 剥掉「运行噪音/噪音/噪声」前缀，让 52db 是 52db低噪 的前缀 → 判重命中
+            t = t.replace("分贝", "db").replace("dB", "db").replace("DB", "db")
+            t = re.sub(r"^(运行)?噪[音声]", "", t)
             return re.sub(r"\s+", "", t).lower()
-        if any(_nk(x) == _nk(s) for x in out):
+        _ks = _nk(s)
+        # 2026-11-17 用户实锤「一级能效，洗一次电费不到一度 / 一级能效省电，开着也不
+        # 心疼电费」双占两行：首段同头（一个键是另一个的前缀）也算换皮重复
+        if any(_nk(x) == _ks or _nk(x).startswith(_ks) or _ks.startswith(_nk(x))
+               for x in out):
             return
         out.append(s)
 
@@ -3738,8 +3880,13 @@ def _short_feats(pd, info):
             add(vs.replace("1", "一").replace("2", "二").replace("3", "三") + ("级能效" if "级" not in vs else ""))
         if "噪音" in ks or "噪声" in ks:
             n = re.sub(r"[^0-9.]", "", vs)
-            if n:
-                add(n + "分贝静音")
+            # 2026-11-17 用户实锤「70分贝静音」自相矛盾：分贝大了就不叫静音，
+            # >56dB 的噪音值（脱水噪音这类）不进卖点行
+            try:
+                if n and float(n) <= 56:
+                    add(n + "分贝静音")
+            except ValueError:
+                pass
         if "电机" in ks and "变频" in vs:
             add("变频")
         if "变频" in ks and vs in ("变频", "是", "支持"):
@@ -3945,6 +4092,9 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None):
         if os.path.isfile(_zs):
             if _clean_sizeimg(_zs, _si) and log:
                 log("尺寸图：官网没有，用中关村拼接图顶上（已清洗掉源图自带标题/说明）")
+        if not os.path.isfile(_si):
+            # 官网编号图里补捞尺寸线稿（2026-11-17 LF4-519WDS9U1 实锤）
+            _rescue_sizeimg_official(mdir, dims, log)
     cfg = {
         "brand": brand, "brand_en": brand_en, "model": model, "cat": cat, "cap": cap,
         "series": (brand + cat) or brand,
@@ -4049,12 +4199,8 @@ def ensure_data(model, log=None):
                                 glob.glob(os.path.join(sd, "*.jpg"))):
                     if os.path.isfile(p) and _link_or_copy(p, os.path.join(kd, "官网", os.path.basename(p))):
                         n += 1
-            # ③ AI 背景（聚光 src_dir=官网\，BG_DIR 跟 src_dir）
-            bg = os.path.join(pd, "AI背景")
-            if os.path.isdir(bg):
-                for p in glob.glob(os.path.join(bg, "*")):
-                    if os.path.isfile(p) and _link_or_copy(p, os.path.join(kd, "官网", "AI背景", os.path.basename(p))):
-                        n += 1
+            # ③ AI 背景不入伙（2026-11-17 用户令「AI背景全部型号都不要」：那是聚光
+            #    内部工作缓存，拷进 官网\ 只会污染目录，已存量全删，这里不再拷）
             # ④ 旧聚光成品一次性入伙（迁移存量，不重跑；2026-10-31 起文件夹叫「聚光」）
             for _spnm in (SPOT_SUB, "AI6张_聚光"):
                 sp = os.path.join(pd, _spnm)
@@ -4263,6 +4409,9 @@ def _rerender_cached(model, mdir, old, log):
     抓取产物（product.png / sizeimg.jpg / 官网图）都在盘上，只重跑渲染 + AI 复检，
     不走网络。set.json 或 product.png 缺料时调用方回退完整抓取链。"""
     cfg = old.get("cfg") or {}
+    # 用户手工图优先（2026-11-17）：官网/主图.* → product.png，官网/尺寸图*/zol_数字 →
+    # sizeimg.jpg。重新生成走快照不重新抓，没有这道用户放的图永远晾着。
+    _manual_overrides(mdir, log)
     # 重新生成也要补尺寸图：旧快照里 sizeimg 常是 None（当时官网没抓到），后来
     # 中关村归档拼出了 zol_size.jpg —— 这里对账补上，否则第 4 张永远手绘线稿
     # （2026-11-16 XQGL120-L732EH 实锤）。
@@ -4273,6 +4422,10 @@ def _rerender_cached(model, mdir, old, log):
             if os.path.isfile(_zs):
                 if _clean_sizeimg(_zs, _si) and log:
                     log("尺寸图：官网没有，用中关村拼接图顶上（已清洗掉源图自带标题/说明）")
+            if not os.path.isfile(_si):
+                # 官网编号图里补捞（2026-11-17 LF4-519WDS9U1：07.jpg 明明是尺寸
+                # 线稿却漏选，dims 都有了 sizeimg 还是空，第 4 格永远手绘）
+                _rescue_sizeimg_official(mdir, cfg.get("dims"), log)
         if os.path.isfile(_si):
             cfg["sizeimg"] = _si   # 末尾 res["cfg"]=cfg 会随 set.json 落盘回写
     # 尺寸数字补账：旧快照 dims/size_pills 是空的 → img_2 只能写「以实物为准」、

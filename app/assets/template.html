@@ -5986,31 +5986,48 @@ function openBaoView(k){
     +   '<span style="flex:1"></span>'
     +   '<button id="bao_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
     + '</div>'
-    + '<div style="flex:1;overflow:hidden;padding:12px 16px;display:flex"><div style="max-width:1440px;margin:0 auto;width:100%;display:flex;gap:10px;align-items:stretch;min-height:0">'
-    +   '<div style="flex:0 0 auto;width:max-content;display:flex;flex-direction:column;gap:10px;min-height:0">'
-    +     baoCard('k', '蓝底套图', '1080 × 1080 · 无价格', '#1d4ed8', '#eef2ff', '#c7d2fe')
-    +     baoCard('s', '暗角聚光', '1080 × 1080 · 深色聚光', '#b45309', '#fff7e6', '#fcd34d')
-    +   '</div>'
-    +   '<div style="flex:1;min-width:420px;display:flex;gap:10px;min-height:0">'
-    +     /* 2026-11-14 用户令「对半分一半蓝底文案一半聚光文案」：文案栏改左右两半
-               同屏，不再用页签切换——左边蓝底、右边聚光，各自独立滚动。
-               坑：注释不能夹在两个加号中间——第二个加号会变成一元加，把后面的
-               字符串转成 NaN（本坑 2026-11-14 实锤，布局被拆散就是它）。 */
+    + '<div style="flex:1;overflow:hidden;padding:12px 16px;display:flex"><div style="max-width:1760px;margin:0 auto;width:100%;display:flex;gap:10px;align-items:stretch;min-height:0">'
+    +   /* 2026-11-17 用户令：三列（第三列直接复制科科一份）；「打开文件夹/重新生成」
+           按钮从图卡头挪到栏头，「蓝底套图/暗角聚光」卡头字样删掉。
+           坑：注释不能夹在两个加号中间——会变一元加把字符串转成 NaN（11-14 实锤）。 */
       '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
-      +     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
-      +       '<b style="font-size:13px;color:#1d4ed8">蓝底文案</b>'
-      +       '<span style="font-size:11px;color:#9a9ea6">标题三选一 · 卖点 · 售后</span>'
+      +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
+      +       '<b style="font-size:13px;color:#1d4ed8">科科文案</b>'
+      +       '<span style="flex:1"></span>'
+      +       '<button data-baocancel="k" style="border:1px solid #f0b9b3;background:#fff;color:#d92d20;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer;display:none">取消</button>'
+      +       '<button data-baoopen="k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+      +       '<button data-baogen="k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
+      +       '<button id="mjd_k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">样机</button>'
+      +       '<button id="cp4_k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制图片</button>'
       +     '</div>'
-      +     '<div id="bao_cpy_k" style="flex:1;min-height:0;overflow:auto"></div>'
+      +     '<div id="bao_cpy_k" style="flex:0 1 auto;min-height:0;overflow:auto;cursor:copy"></div>'
+      +     baoCard('k')
       +   '</div>'
       +   '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
-      +     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
-      +       '<b style="font-size:13px;color:#6d28d9">聚光文案</b>'
-      +       '<span style="font-size:11px;color:#9a9ea6">标题三选一 · 卖点 · 售后</span>'
+      +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
+      +       '<b style="font-size:13px;color:#6d28d9">东星斑文案</b>'
+      +       '<span style="flex:1"></span>'
+      +       '<button data-baocancel="s" style="border:1px solid #f0b9b3;background:#fff;color:#d92d20;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer;display:none">取消</button>'
+      +       '<button data-baoopen="s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+      +       '<button data-baogen="s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
+      +       '<button id="mjd_s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">样机</button>'
+      +       '<button id="cp4_s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制图片</button>'
       +     '</div>'
-      +     '<div id="bao_cpy_s" style="flex:1;min-height:0;overflow:auto"></div>'
+      +     '<div id="bao_cpy_s" style="flex:0 1 auto;min-height:0;overflow:auto;cursor:copy"></div>'
+      +     baoCard('s')
       +   '</div>'
-    +   '</div>'
+      +   '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
+      +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
+      +       '<b style="font-size:13px;color:#1d4ed8">文案三</b>'
+      +       '<span style="flex:1"></span>'
+      +       '<button id="baogen3" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
+      +       '<button id="mjd_k2" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">样机</button>'
+      +       '<button id="cp4_k2" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制图片</button>'
+      +     '</div>'
+      +     '<div id="bao_cpy_k2" style="flex:0 1 auto;min-height:0;overflow:auto;cursor:copy"></div>'
+      +     baoCard('k2')
+      +   '</div>'
+    + '</div>'
     + '</div></div>';
   document.body.appendChild(wrap);
   /* 2026-11-04 修「关窗重开不显示」：轮询/重试句柄全收 TIMERS，关窗统一清——
@@ -6021,16 +6038,13 @@ function openBaoView(k){
     TIMERS.forEach(function(id){ clearTimeout(id); clearInterval(id); });
     wrap.remove();
   });
-  function baoCard(t, title, sub, c, bg, bd){
-    return '<div id="bao_card_' + t + '" style="flex:1;min-height:0;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px;display:flex;flex-direction:column;text-align:left">'
-      +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
-      +     '<div style="font-weight:700;font-size:13px">' + title + ' <span style="font-weight:400;font-size:11.5px;color:#8a929e">' + sub + ' · 点图看大图</span></div>'
-      +     '<span style="flex:1"></span>'
-      +     '<button data-baocancel="' + t + '" style="border:1px solid #f0b9b3;background:#fff;color:#d92d20;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer;display:none">取消</button>'
-      +     '<button data-baoopen="' + t + '" style="border:1px solid ' + bd + ';background:' + bg + ';color:' + c + ';border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
-      +     '<button data-baogen="' + t + '" style="border:1px solid ' + bd + ';background:' + bg + ';color:' + c + ';border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
+  /* 2026-11-17 用户令：卡头删、按钮挪栏头；图片也包一个胶囊；图片组贴列底对齐
+     （三列文案长短不一时，图组下缘对齐），与文案胶囊之间留 12px 间隔。 */
+  function baoCard(t){
+    return '<div id="bao_card_' + t + '" style="flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;margin-top:12px">'
+      +   '<div id="bao_cap_' + t + '" style="box-sizing:border-box;border:1px solid #e3e8f0;background:#fbfcfe;border-radius:14px;padding:10px">'
+      +     '<div style="display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="bao_grid_' + t + '"></div>'
       +   '</div>'
-      +   '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="bao_grid_' + t + '"></div>'
       + '</div>';
   }
   /* 取消按钮显隐 + 点击（2026-11-14 用户令「我连取消的按键都没有」）：
@@ -6085,10 +6099,58 @@ function openBaoView(k){
     z.addEventListener('click', function(){ z.remove(); });
     document.body.appendChild(z);
   }
-  function cell(grid, src, badge, label, title, onclick){
+  /* 复制图片到剪贴板（2026-11-17 用户令「图片能不能也直接搞个复制按键」）：
+     同源图 → canvas 转 PNG → navigator.clipboard.write。 */
+  function copyImage(src, tone){
+    var im = new Image();
+    im.onload = function(){
+      try {
+        var c = document.createElement('canvas');
+        c.width = im.naturalWidth; c.height = im.naturalHeight;
+        c.getContext('2d').drawImage(im, 0, 0);
+        c.toBlob(function(bl){
+          navigator.clipboard.write([new ClipboardItem({'image/png': bl})]).then(function(){
+            msg(tone, '图片已复制');
+          }, function(){ msg(tone, '复制失败（剪贴板写入被拒）', true); });
+        }, 'image/png');
+      } catch(e){ msg(tone, '✗ ' + (e.message || e), true); }
+    };
+    im.onerror = function(){ msg(tone, '图片加载失败，复制没成', true); };
+    im.src = src + '?t=' + Date.now();
+  }
+  /* 四张图拼成一张 2×2 复制（2026-11-17 用户令「我要的是四张复制，不是单张」）：
+     取栏内 4 张图，最大宽高对齐铺进画布（蓝底/聚光都是 1080×1080，不会变形），
+     一次性进剪贴板 —— 闲鱼那边粘贴一次就是整张四宫格。 */
+  function copyImages4(gridId, tone){
+    var g = wrap.querySelector('#bao_grid_' + gridId);
+    var imgs = g ? Array.prototype.slice.call(g.querySelectorAll('img')) : [];
+    imgs = imgs.filter(function(im){ return im.complete && im.naturalWidth; });
+    if (imgs.length < 4){ msg(tone, '四张图还没齐，等生成完再复制', true); return; }
+    var cw = 0, ch = 0;
+    imgs.slice(0, 4).forEach(function(im){
+      cw = Math.max(cw, im.naturalWidth); ch = Math.max(ch, im.naturalHeight);
+    });
+    var GAP = 8;
+    var c = document.createElement('canvas');
+    c.width = cw * 2 + GAP; c.height = ch * 2 + GAP;
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    imgs.slice(0, 4).forEach(function(im, i){
+      ctx.drawImage(im, (i % 2) * (cw + GAP), Math.floor(i / 2) * (ch + GAP), cw, ch);
+    });
+    c.toBlob(function(bl){
+      navigator.clipboard.write([new ClipboardItem({'image/png': bl})]).then(function(){
+        msg(tone, '四张图已拼成一张复制');
+      }, function(){ msg(tone, '复制失败（剪贴板写入被拒）', true); });
+    }, 'image/png');
+  }
+  /* 2026-11-17 用户令：图片单击开大图、双击重出这张。单击延时 260ms 去抖，
+     双击先取消掉那次延时的 zoom 再走重出；无 regen 的格子单击照旧立刻开。
+     格子右上角「复制」钮 = 复制这张图到剪贴板（点击/双击都不冒泡）。 */
+  function cell(grid, src, badge, label, title, onclick, regen){
     var d = document.createElement('div');
     d.style.cssText = 'position:relative;width:100%;height:100%;background:#f7f8fa;border:1px solid #eceef2;border-radius:10px;overflow:hidden;cursor:zoom-in';
-    d.title = title + '（点开看大图）';
+    d.title = title + '（单击看大图' + (regen ? '，双击重出这张' : '') + '）';
     var b = document.createElement('div');
     b.textContent = badge;
     b.style.cssText = 'position:absolute;left:6px;top:6px;z-index:2;min-width:20px;height:20px;padding:0 5px;border-radius:6px;background:' + (grid === 's' ? '#b45309' : '#1d4ed8') + ';color:#fff;font-size:11.5px;font-weight:700;line-height:20px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.25)';
@@ -6107,7 +6169,15 @@ function openBaoView(k){
     cap.textContent = label;
     cap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:3px 0;background:linear-gradient(transparent,rgba(0,0,0,.55));color:#fff;font-size:10.5px;text-align:center;letter-spacing:.5px';
     d.appendChild(cap);
-    d.addEventListener('click', function(){ onclick(); });
+    d.addEventListener('click', function(){
+      if (!regen){ onclick(); return; }
+      if (d._zt) return;   /* 已挂起一次单击，等双击判定 */
+      d._zt = setTimeout(function(){ d._zt = null; onclick(); }, 260);
+    });
+    if (regen) d.addEventListener('dblclick', function(){
+      if (d._zt){ clearTimeout(d._zt); d._zt = null; }
+      regen();
+    });
     return d;
   }
   /* 卡片宽度贴住缩略图（2026-11-04 用户令「要婷窗那种布局」）：
@@ -6117,54 +6187,97 @@ function openBaoView(k){
      四个格子全叠在一起互相盖住，画面上只剩第 2、4 张。改成由这里直接给出像素列宽/行高，
      Chromium 与 WebKit 结果完全一致。 */
   function fitGrid(){
-    var tones = ['k', 's'], cell = 0;
-    for (var i = 0; i < 2; i++){
-      var card0 = document.getElementById('bao_card_' + tones[i]);
-      if (!card0) return;
-      var hd0 = card0.children[0];
-      var availH0 = card0.clientHeight - hd0.offsetHeight - 8 - 26; /* 标题行+间距+内边距24+边框2 */
+    /* 2026-11-17 三列版式：k/k2/s 三个网格取同一格宽；图片包胶囊后，
+       高度扣减 = 胶囊外壳 22（padding20+边框2），宽度扣减 = 列内边距 28 + 胶囊 22。 */
+    var tones = ['k', 'k2', 's'], cell = 0, card0 = null;
+    for (var i = 0; i < tones.length; i++){
+      var c0 = document.getElementById('bao_card_' + tones[i]);
+      if (!c0) continue;
+      if (!card0) card0 = c0;
+      var availH0 = c0.clientHeight - 22;
       if (availH0 < 100) return;
-      var c0 = Math.floor((availH0 - 6) / 2);
-      if (!cell || c0 < cell) cell = c0;    /* 两张卡取小的，宽度才对得齐 */
+      var cc0 = Math.floor((availH0 - 6) / 2);
+      if (!cell || cc0 < cell) cell = cc0; /* 三个网格取小的，宽度才对得齐 */
     }
-    /* 窗口窄（Mac 小屏）时给右边文案栏留够位置，别把左栏撑爆 */
-    var maxByWidth = Math.floor(((wrap.clientWidth - 40) * 0.56 - 6) / 2);
+    if (!card0) return;
+    var maxByWidth = Math.floor((card0.parentElement.clientWidth - 28 - 22 - 6) / 2);
     if (cell > maxByWidth) cell = maxByWidth;
     if (cell < 60) cell = 60;
     var w = cell * 2 + 6;
     tones.forEach(function(t){
       var card = document.getElementById('bao_card_' + t);
+      var cap = document.getElementById('bao_cap_' + t);
       var g = wrap.querySelector('#bao_grid_' + t);
-      if (!card || !g) return;
+      if (!card || !cap || !g) return;
       g.style.gridTemplateColumns = 'repeat(2,' + cell + 'px)';
       g.style.gridTemplateRows = 'repeat(2,' + cell + 'px)';
       g.style.width = w + 'px';
-      g.style.margin = '0 auto';
-      card.style.width = (w + 26) + 'px';
+      cap.style.width = (w + 22) + 'px';
+      card.style.width = Math.min(w + 22, card.parentElement.clientWidth) + 'px';
+      card.style.marginLeft = 'auto'; card.style.marginRight = 'auto';  /* 卡比列窄时居中 */
     });
   }
   function refit(){ fitGrid(); requestAnimationFrame(fitGrid); }  /* 卡宽变了标题行可能换行，再校一次 */
   window.addEventListener('resize', refit);
+  /* 蓝底单张重出（2026-11-17 宝套图双击）：/api/kitone 后台 jobman，轮询完重画 */
+  function regenKOne(nn){
+    msg('k', '第' + nn + '张重出中…');
+    fetch('/api/kitone?model=' + encodeURIComponent(k) + '&n=' + nn)
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j || !j.ok){ msg('k', (j && j.msg) || '重出失败', true); return; }
+        T(pollJob(j.key || ('kitone:' + k + ':' + nn), function(res){
+          if (!res || !res.ok){ msg('k', '✗ ' + ((res && res.msg) || '重出失败'), true); return; }
+          msg('k', '第' + nn + '张已重出'); showK();
+        }, function(err){ msg('k', '✗ ' + (err.message || err), true); }));
+      })
+      .catch(function(e){ msg('k', '✗ ' + (e.message || e), true); });
+  }
   function showK(){
-    var g = wrap.querySelector('#bao_grid_k'); if (!g) return;
-    g.innerHTML = '';
-    for (var n = 1; n <= 4; n++){
-      (function(nn){
-        g.appendChild(cell('k', kImg(nn), nn, KLAB[nn], '蓝底 · ' + KLAB[nn], function(){ zoom(kImg(nn), '蓝底 · ' + KLAB[nn]); }));
-      })(n);
-    }
+    /* 2026-11-17 三列版式：第三列（文案三）是科科的复制——蓝底网格渲染到 k/k2 两份 */
+    ['k', 'k2'].forEach(function(tid){
+      var g = wrap.querySelector('#bao_grid_' + tid); if (!g) return;
+      g.innerHTML = '';
+      for (var n = 1; n <= 4; n++){
+        (function(nn){
+          g.appendChild(cell('k', kImg(nn), nn, KLAB[nn], '蓝底 · ' + KLAB[nn],
+            function(){ zoom(kImg(nn), '蓝底 · ' + KLAB[nn]); },
+            function(){ regenKOne(nn); }));
+        })(n);
+      }
+    });
     refit();
+  }
+  /* 聚光单张重出（2026-11-17 双击）：/api/pubgen style=spot only=槽位号（文件名前缀数字），
+     走 pubwork 串行槽 + pollPub 轮询，完成重画（src 带 ?t= 自动破缓存） */
+  function regenSOne(f){
+    var sn = parseInt(String(f), 10) || 0;
+    if (!sn){ msg('s', '这张不认槽位号，不支持单张重出', true); return; }
+    msg('s', f + ' 重出中…');
+    fetch('/api/pubgen', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model: k, style: 'spot', only: sn})})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j || !j.ok){ msg('s', (j && j.msg) || '重出失败', true); return; }
+        pollPub(function(jb){
+          if (!jb.ok){ msg('s', '✗ 重出失败' + (jb && jb.err ? ('（' + jb.err + '）') : ''), true); return; }
+          msg('s', '已重出'); showS();
+        });
+      })
+      .catch(function(e){ msg('s', '✗ ' + (e.message || e), true); });
   }
   function showS(){
     var g = wrap.querySelector('#bao_grid_s'); if (!g) return;
     g.innerHTML = '';
     if (!SFILES.length){
-      g.innerHTML = '<div style="grid-column:1/-1;color:#b4b9c2;font-size:12px;padding:18px 0">还没生成——点右上「重新生成」出一套</div>';
+      g.innerHTML = '<div style="grid-column:1/-1;color:#b4b9c2;font-size:12px;padding:18px 0">还没生成——点栏头「重新生成」出一套</div>';
       return;
     }
     SFILES.forEach(function(f, i){
       var lb = SLAB[String(f).replace(/\.(jpg|jpeg|png)$/i, '')] || f;
-      g.appendChild(cell('s', sImg(f), i + 1, lb, '聚光 · ' + lb, function(){ zoom(sImg(f), '聚光 · ' + lb); }));
+      g.appendChild(cell('s', sImg(f), i + 1, lb, '聚光 · ' + lb,
+        function(){ zoom(sImg(f), '聚光 · ' + lb); },
+        function(){ regenSOne(f); }));
     });
     refit();
   }
@@ -6336,141 +6449,143 @@ function openBaoView(k){
      功能，互不影响；聚光栏改成跟蓝底同款版面，读 /api/copy 的参数直给文案
      （标题三选一 + 卖点一话一行 + 售后点选多版），分段式描述不再进聚光窗 ---------- */
   var KB = null, sMounted = false;
-  function renderKCopy(D){
-    var box = wrap.querySelector('#bao_cpy_k');
-    if (!box) return;
+  /* 样机模式（2026-11-17 用户令）：栏头「样机」钮点亮后，该列文案里「全新机」
+     全替换成「样机」，再点切回。三列各自独立记忆。
+     2026-11-17 补（用户实锤「有些没改到」）：蓝底标题写的是「新机」、聚光还有
+     「全新」，按 全新机→全新→新机 顺序全链替换，别漏。 */
+  var MJD = {k: false, k2: false, s: false};
+  function _mjrep(t, on){
+    if (!on) return String(t || '');
+    var s = String(t || '');
+    s = s.split('全新机').join('样机');
+    s = s.split('全新').join('样机');
+    s = s.split('新机').join('样机');
+    return s;
+  }
+  /* 蓝底口径文案画法：科科列用；文案三列走 renderK2Copy（第三种文案，kind=x） */
+  function _kpaint(bx, D, mj, done){
+    if (!bx) return;
     if (!D || !D.ok){
-      box.innerHTML = '<div style="color:#9a9ea6;font-size:12.5px;line-height:1.9">这台还没有蓝底文案——先出一次蓝底（右边「重新生成」），标题/卖点/售后就有了。</div>';
+      bx.innerHTML = '<div style="color:#9a9ea6;font-size:12.5px;line-height:1.9">这台还没有蓝底文案——先出一次蓝底（栏头「重新生成」），标题/卖点/售后就有了。</div>';
+      bx.ondblclick = null;
       return;
     }
-    var h = '';
-    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="font-size:12.5px">标题（三选一）</b>'
-      + '<button id="bao_copyall" style="border:none;background:#4f46e5;color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">一键复制全套</button></div>';
-    (D.titles || []).forEach(function(t, i){
-      h += '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px">'
-        + '<div style="flex:1;border:1px solid #e3e8f0;background:#fff;border-radius:8px;padding:7px 10px;line-height:1.55;font-size:12.5px"><b style="margin-right:8px;color:#4f46e5">' + ('ABC'[i] || '') + '</b>' + esc(t) + '</div>'
-        + '<button data-baotc="' + esc(t) + '" style="border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;border-radius:8px;padding:5px 11px;font-size:11.5px;flex:0 0 auto;cursor:pointer">复制</button></div>';
-    });
-    if (!(D.titles || []).length) h += '<div style="color:#b42318;font-size:12px;margin-bottom:8px">标题还没生成出来</div>';
-    /* ① 卖 点：一话一行（旧版区块，2026-11-11 改售后 chips 时误删 → 加回） */
-    h += '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">① 卖 点（一话一行）</div>'
-      + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc((D.points || []).join('\n') || '—') + '</div>';
-    /* 2026-11-11 用户令「售后搞多个版本，你先写我来挑好了再上传」：
-       set.json 的 aftersales 出几版就摆几版，点选高亮，一键复制全套用选中的那版。 */
-    var AFS = (D.aftersales && D.aftersales.length) ? D.aftersales : [D.aftersale || ''];
-    var AF_TAGS = ['互动版', '品质版', '安装版', '简洁版', '版本5'];
-    var afSel = 0;
-    h += '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">② 售 后（点一下挑一版）</div>'
-      + '<div id="bao_afchips" style="margin-bottom:6px">' + AFS.map(function(a, i){
-          return '<a href="javascript:void 0" data-afsel="' + i + '" style="display:inline-block;margin:0 6px 4px 0;padding:2px 10px;border-radius:99px;font-size:11.5px;font-weight:600;cursor:pointer;'
-            + (i === afSel ? 'background:#4f46e5;color:#fff;' : 'background:#eef1f6;color:#475467;') + '">' + (AF_TAGS[i] || ('版本' + (i + 1))) + '</a>';
-        }).join('') + '</div>'
-      + AFS.map(function(a, i){
-          return '<div data-afbody="' + i + '" style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33;'
-            + (i === afSel ? '' : 'display:none;') + 'border:1px solid ' + (i === afSel ? '#c7d2fe' : '#e3e8f0') + ';border-radius:8px;padding:7px 10px;margin-bottom:6px">' + esc(a || '—') + '</div>';
-        }).join('');
-    box.innerHTML = h;
-    box.querySelectorAll('[data-baotc]').forEach(function(el){
-      el.onclick = function(){
-        copySafe(el.getAttribute('data-baotc'), function(){
-          el.textContent = '已复制'; setTimeout(function(){ el.textContent = '复制'; }, 1200);
-        });
-      };
-    });
-    box.querySelectorAll('[data-afsel]').forEach(function(el){
-      el.onclick = function(){
-        afSel = +(el.getAttribute('data-afsel') || 0);
-        box.querySelectorAll('[data-afsel]').forEach(function(x){
-          var on = +(x.getAttribute('data-afsel') || 0) === afSel;
-          x.style.background = on ? '#4f46e5' : '#eef1f6';
-          x.style.color = on ? '#fff' : '#475467';
-        });
-        box.querySelectorAll('[data-afbody]').forEach(function(b2){
-          var on = +(b2.getAttribute('data-afbody') || 0) === afSel;
-          b2.style.display = on ? 'block' : 'none';
-          b2.style.borderColor = on ? '#c7d2fe' : '#e3e8f0';
-        });
-      };
-    });
-    var ca = box.querySelector('#bao_copyall');
-    if (ca) ca.onclick = function(){
-      copySafe((D.points || []).join('\n') + '\n\n' + (AFS[afSel] || ''), function(){
-        ca.textContent = '已复制全套'; setTimeout(function(){ ca.textContent = '一键复制全套'; }, 1500);
+    var KT = _mjrep((D.titles && D.titles.length) ? D.titles[0] : '', mj);
+    var PTS = _mjrep((D.points || []).join('\n') || '—', mj);
+    var KBR = String(D.brand || '').trim() || '海尔';
+    /* 售后三版定稿（2026-11-17 用户锁定）：科科=这版；东星斑/文案三各有各的措辞 */
+    var AF1 = _mjrep('全新机，官方全国联保。\n收货前记得验收，破损可拒收。\n想了解的随时找我聊。', mj);
+    bx.innerHTML = '<div style="border:1px solid #e3e8f0;background:#fbfcfe;border-radius:14px;padding:10px 12px">'
+      + (KT ? '<div style="line-height:1.55;font-size:12.5px;font-weight:600;color:#1c1e22">' + esc(KT) + '</div>'
+            : '<div style="color:#b42318;font-size:12px">标题还没生成出来</div>')
+      + '<div style="height:10px"></div>'
+      + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc(PTS) + '</div>'
+      + '<div style="height:10px"></div>'
+      + '<div style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33">' + esc(AF1) + '</div>'
+      + '</div>';
+    /* 双击文案胶囊 = 整套复制（2026-11-17 用户令「双击文案直接就复制」） */
+    bx.ondblclick = function(){
+      copySafe([KT, PTS === '—' ? '' : PTS, AF1].filter(Boolean).join('\n\n'), function(){
+        msg('k', (done || '整套文案已复制') + (mj ? '（样机版）' : ''));
       });
     };
+  }
+  function renderKCopy(D){ _kpaint(wrap.querySelector('#bao_cpy_k'), D, MJD.k); }
+  /* 文案三 = 第三种文案（2026-11-17 用户令「这个文案也是第三种文案」）：
+     kind=x 独立 AI 生成（家庭贴心风，后端追加风格块），跟科科/聚光都不互为镜像；
+     样机模式/双击复制照旧独立。 */
+  var KBX = null;
+  function renderK2Copy(D){
+    var bx = wrap.querySelector('#bao_cpy_k2');
+    if (!bx) return;
+    if (!D || !D.ok){
+      bx.innerHTML = '<div style="color:#9a9ea6;font-size:12.5px;line-height:1.9">第三种文案还没生成——点栏头「重新生成」出一套。</div>';
+      bx.ondblclick = null;
+      return;
+    }
+    var KBR3 = String((D.brand || (KB && KB.brand) || '') + '').trim() || '海尔';
+    var KT = _mjrep((D.titles && D.titles.length) ? D.titles[0] : '', MJD.k2);
+    var PTS = _mjrep((D.points || []).join('\n') || '—', MJD.k2);
+    var AF1 = _mjrep('全新正品，官方联保。\n签收前先开箱检查，破损的可以拒收。\n有啥想问的尽管来聊。', MJD.k2);
+    bx.innerHTML = '<div style="border:1px solid #d7e7dd;background:#f6fbf8;border-radius:14px;padding:10px 12px">'
+      + (KT ? '<div style="line-height:1.55;font-size:12.5px;font-weight:600;color:#1c1e22">' + esc(KT) + '</div>'
+            : '<div style="color:#b42318;font-size:12px">标题还没生成出来</div>')
+      + '<div style="height:10px"></div>'
+      + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc(PTS) + '</div>'
+      + '<div style="height:10px"></div>'
+      + '<div style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33">' + esc(AF1) + '</div>'
+      + '</div>';
+    bx.ondblclick = function(){
+      copySafe([KT, PTS === '—' ? '' : PTS, AF1].filter(Boolean).join('\n\n'), function(){
+        msg('k', '文案三整套已复制' + (MJD.k2 ? '（样机版）' : ''));
+      });
+    };
+  }
+  function loadXCopy(force){
+    var bx = wrap.querySelector('#bao_cpy_k2');
+    if (!bx) return;
+    bx.innerHTML = '<div style="color:#475569;padding:20px 2px;font-size:12.5px">正在生成第三种文案（家庭贴心风）…已 <b id="kx_secs">0</b> 秒（有缓存秒出）</div>';
+    /* kind=x 独立任务键/独立缓存，跟聚光（kind=l）互不干扰 */
+    fetch('/api/copy?model=' + encodeURIComponent(k) + '&kind=x' + (force ? '&force=1' : '') + '&bg=1')
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var m = (j && j.msg) || '';
+        if (!j || (!j.ok && m.indexOf('已在生成中') < 0)) throw new Error(m || '启动失败');
+        T(pollJob('copy:' + k + ':x', function(res){
+          if (!res || !res.ok) throw new Error((res && res.msg) || '生成失败');
+          KBX = res;
+          renderK2Copy(res);
+        }, function(err){
+          bx.innerHTML = '<div style="color:#b42318;font-size:12.5px;line-height:1.7">第三种文案没出来：' + esc(String(err.message || err)) + '<br>点栏头「重新生成」再试</div>';
+        }, function(sec){
+          var el = bx.querySelector('#kx_secs'); if (el) el.textContent = sec;
+        }));
+      })
+      .catch(function(e){
+        bx.innerHTML = '<div style="color:#b42318;font-size:12.5px;line-height:1.7">第三种文案没出来：' + esc(String(e.message || e)) + '<br>点栏头「重新生成」再试</div>';
+      });
   }
   function loadKCopy(){
     fetch('/api/kitset?model=' + encodeURIComponent(k) + '&read=1')
       .then(function(r){ return r.json(); })
-      .then(function(j){ KB = j; renderKCopy(j); })
+      .then(function(j){
+        KB = j;
+        renderKCopy(KB);
+        /* KB 后到：聚光栏已经用空卖点画过的话重画一遍（_scRes 里 points 空才补） */
+        if (_scRes && !(_scRes.points || []).length){
+          _scRes.points = (KB && KB.points) || [];
+          renderSCopy(_scRes);
+        }
+      })
       .catch(function(){ renderKCopy(null); });
   }
   /* ---------- 聚光文案（2026-11-14 方案 A）：同款版面，参数直给口径，不碰 Pro 页 ---------- */
   var SCPY = '#6d28d9', SCPY_BG = '#ede9fe', SCPY_BD = '#ddd6fe';
-  /* 聚光专属售后 4 版（2026-11-14 用户令「怎么蓝底跟聚光都是一样的呢」）：
-     不再读蓝底 set.json 的售后——聚光自己这套措辞，跟蓝底那四版完全不同款。 */
-  function scAfs(brand){
-    var b = (brand || '海尔').trim() || '海尔';
-    return [
-      '全新机，' + b + '旗舰店同款同源，全国联保。\n到货先验货再签收，有问题直接拒收退回。\n想了解的随时问我，看到就回。',
-      b + '原厂正品，全新未启动，联保生效。\n机器可查序列号，支持官方售后验证。\n放心拍，售后问题全程跟进。',
-      '全新机，' + b + '全国联保，可预约师傅上门安装。\n安装费按当地标准，买前可以先问清楚。\n同城可自提，外地发物流。',
-      '全新正品，' + b + '全国联保。\n验货满意再确认收货。'
-    ];
-  }
-  function renderSCopy(D, AFS){
+  var _scRes = null;   /* 最近一次聚光文案数据（KB 后到时用它重画，补卖点兜底） */
+  function renderSCopy(D){
     var box = wrap.querySelector('#bao_cpy_s');
     if (!box) return;
-    var afSel = 0;
     var h = '';
-    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="font-size:12.5px">标题（三选一）</b>'
-      + '<button id="sc_copyall" style="border:none;background:' + SCPY + ';color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">一键复制全套</button></div>';
-    (D.titles || []).forEach(function(t, i){
-      h += '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px">'
-        + '<div style="flex:1;border:1px solid #e3e8f0;background:#fff;border-radius:8px;padding:7px 10px;line-height:1.55;font-size:12.5px"><b style="margin-right:8px;color:' + SCPY + '">' + ('ABC'[i] || '') + '</b>' + esc(t) + '</div>'
-        + '<button data-scct="' + esc(t) + '" style="border:1px solid ' + SCPY_BD + ';background:' + SCPY_BG + ';color:' + SCPY + ';border-radius:8px;padding:5px 11px;font-size:11.5px;flex:0 0 auto;cursor:pointer">复制</button></div>';
-    });
-    if (!(D.titles || []).length) h += '<div style="color:#b42318;font-size:12px;margin-bottom:8px">标题还没生成出来</div>';
-    h += '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">① 卖 点（一话一行）</div>'
-      + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc((D.points || []).join('\n') || '—') + '</div>';
-    var AF_TAGS = ['互动版', '品质版', '安装版', '简洁版', '版本5'];
-    var AF = (AFS && AFS.length) ? AFS : scAfs(D.brand);
-    h += '<div style="font-size:10.5px;color:#9a9ea6;letter-spacing:.15em;margin:10px 0 4px">② 售 后（点一下挑一版）</div>'
-      + '<div style="margin-bottom:6px">' + AF.map(function(a, i){
-          return '<a href="javascript:void 0" data-scaf="' + i + '" style="display:inline-block;margin:0 6px 4px 0;padding:2px 10px;border-radius:99px;font-size:11.5px;font-weight:600;cursor:pointer;'
-            + (i === 0 ? 'background:' + SCPY + ';color:#fff;' : 'background:#eef1f6;color:#475467;') + '">' + (AF_TAGS[i] || ('版本' + (i + 1))) + '</a>';
-        }).join('') + '</div>'
-      + AF.map(function(a, i){
-          return '<div data-scafbody="' + i + '" style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33;'
-            + (i === 0 ? '' : 'display:none;') + 'border:1px solid ' + (i === 0 ? SCPY_BD : '#e3e8f0') + ';border-radius:8px;padding:7px 10px;margin-bottom:6px">' + esc(a || '—') + '</div>';
-        }).join('');
+    /* 2026-11-17 用户令：单胶囊版面，段落空行分隔；样机模式 + 双击整套复制 */
+    var ST = _mjrep((D.titles && D.titles.length) ? D.titles[0] : '', MJD.s);
+    /* 卖点兜底（2026-11-17）：文案缓存那次生成只出了一半（titles/points 双空），
+       栏里就永远是「—」——缓存没卖点时退回蓝底 set.json 那份（KB），别晾着 */
+    var SCPTS = (D.points && D.points.length) ? D.points : ((KB && KB.points) || []);
+    var SA = _mjrep('官方全新机全国联保。\n到货先当面验一下，有破损直接拒收就行。\n有想问的，私信我就行。', MJD.s);
+    h += '<div style="border:1px solid ' + SCPY_BD + ';background:#faf9ff;border-radius:14px;padding:10px 12px">'
+      + (ST ? '<div style="line-height:1.55;font-size:12.5px;font-weight:600;color:#1c1e22">' + esc(ST) + '</div>'
+            : '<div style="color:#b42318;font-size:12px">标题还没生成出来</div>')
+      + '<div style="height:10px"></div>'
+      + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc(_mjrep(SCPTS.join('\n') || '—', MJD.s)) + '</div>'
+      + '<div style="height:10px"></div>'
+      + '<div style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33">' + esc(SA) + '</div>'
+      + '</div>';
     box.innerHTML = h;
-    box.querySelectorAll('[data-scct]').forEach(function(el){
-      el.onclick = function(){
-        copySafe(el.getAttribute('data-scct'), function(){
-          el.textContent = '已复制'; setTimeout(function(){ el.textContent = '复制'; }, 1200);
-        });
-      };
-    });
-    box.querySelectorAll('[data-scaf]').forEach(function(el){
-      el.onclick = function(){
-        afSel = +(el.getAttribute('data-scaf') || 0);
-        box.querySelectorAll('[data-scaf]').forEach(function(x){
-          var on = +(x.getAttribute('data-scaf') || 0) === afSel;
-          x.style.background = on ? SCPY : '#eef1f6';
-          x.style.color = on ? '#fff' : '#475467';
-        });
-        box.querySelectorAll('[data-scafbody]').forEach(function(b2){
-          var on = +(b2.getAttribute('data-scafbody') || 0) === afSel;
-          b2.style.display = on ? 'block' : 'none';
-          b2.style.borderColor = on ? SCPY_BD : '#e3e8f0';
-        });
-      };
-    });
-    var ca = box.querySelector('#sc_copyall');
-    if (ca) ca.onclick = function(){
-      copySafe((D.points || []).join('\n') + '\n\n' + (AF[afSel] || ''), function(){
-        ca.textContent = '已复制全套'; setTimeout(function(){ ca.textContent = '一键复制全套'; }, 1500);
+    /* 双击文案胶囊 = 整套复制（2026-11-17 用户令） */
+    box.ondblclick = function(){
+      var PTS = _mjrep(SCPTS.join('\n') || '', MJD.s);
+      copySafe([ST, PTS, SA].filter(Boolean).join('\n\n'), function(){
+        msg('s', '整套文案已复制' + (MJD.s ? '（样机版）' : ''));
       });
     };
   }
@@ -6493,9 +6608,8 @@ function openBaoView(k){
         if (!j || (!j.ok && m.indexOf('已在生成中') < 0)) throw new Error(m || '启动失败');
         T(pollJob('copy:' + k + ':l', function(res){
           if (!res || !res.ok) throw new Error((res && res.msg) || '生成失败');
-          /* 2026-11-14 用户令「售后怎么蓝底跟聚光都是一样的呢」：聚光售后不再读
-             蓝底 set.json——固定用自己的四版（scAfs），两边措辞完全不同 */
-          renderSCopy(res, scAfs(res.brand || ''));
+          _scRes = res;
+          renderSCopy(res);
         }, function(err){
           paintErr(String(err.message || err));
         }, function(sec){
@@ -6524,6 +6638,38 @@ function openBaoView(k){
       }
     });
   });
+  /* 样机切换钮（2026-11-17 用户令）：点一下该列「全新机」全变「样机」，再点切回 */
+  [['mjd_k', 'k', '#1d4ed8', '#c7d2fe', '#eef2ff'],
+   ['mjd_s', 's', '#6d28d9', '#ddd6fe', '#f5f3ff'],
+   ['mjd_k2', 'k2', '#1d4ed8', '#c7d2fe', '#eef2ff']].forEach(function(p){
+    var b = wrap.querySelector('#' + p[0]);
+    if (!b) return;
+    b.onclick = function(){
+      MJD[p[1]] = !MJD[p[1]];
+      b.style.background = MJD[p[1]] ? p[2] : p[4];
+      b.style.color = MJD[p[1]] ? '#fff' : p[2];
+      b.style.borderColor = MJD[p[1]] ? p[2] : p[3];
+      b.textContent = MJD[p[1]] ? '样机中' : '样机';
+      if (p[1] === 's'){ if (_scRes) renderSCopy(_scRes); }
+      else if (p[1] === 'k2'){ if (KBX) renderK2Copy(KBX); }
+      else if (KB) renderKCopy(KB);
+    };
+  });
+  /* 复制图片钮（2026-11-17 用户令「我要的是四张复制，不是单张」）：
+     栏内四张拼成一张 2×2 进剪贴板；文案三的「重新生成」= 重出第三种文案。 */
+  [['cp4_k', 'k', '#1d4ed8', '#c7d2fe', '#eef2ff'],
+   ['cp4_s', 's', '#6d28d9', '#ddd6fe', '#f5f3ff'],
+   ['cp4_k2', 'k2', '#1d4ed8', '#c7d2fe', '#eef2ff']].forEach(function(p){
+    var b = wrap.querySelector('#' + p[0]);
+    if (!b) return;
+    b.onclick = function(){
+      b.textContent = '复制中…';
+      copyImages4(p[1], p[1] === 's' ? 's' : 'k');
+      setTimeout(function(){ b.textContent = '复制图片'; }, 1500);
+    };
+  });
+  var g3 = wrap.querySelector('#baogen3');
+  if (g3) g3.onclick = function(){ loadXCopy(true); };
   showK();
   loadKCopy();
   /* 聚光文案开窗就开写（2026-11-04 用户令「文案也要一起写了啊，不要我点了再写」）：
@@ -6531,6 +6677,7 @@ function openBaoView(k){
      页签点击只切显示。Pro 页本身独立存在，这里不挂它、也不改它 */
   sMounted = true;
   loadSCopy(false);
+  loadXCopy(false);   /* 文案三开窗自动出（2026-11-17 第三种文案） */
   loadLib(function(){
     /* 开窗自动补缺（跟婷窗同规矩）：蓝底缺→补蓝底，聚光缺→补聚光。
        2026-11-04 用户令「跑一个就够了」：两套都缺时聚光等蓝底抓完再跑，
