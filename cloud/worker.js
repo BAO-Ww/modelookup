@@ -783,7 +783,17 @@ async function route(request, env, path, ctx) {
   if (path === "/m" && request.method === "GET") {
     const html = await kvGetc(env, "mhtml");
     if (!html) return jerr("手机版还没上云", 404);
-    return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store, must-revalidate", ...CORS } });
+    /* 2026-11-18 白屏修复：no-store 导致 iPhone 独立模式每次冷启动都全量拉 95KB（国内到 CF 慢）→ 干白屏很久。
+       改为可缓存 1h + ETag（版本戳 MBUILD）：当天启动秒开；过期后条件请求 304 也只花一个往返；
+       页面真的换新版时 JS 会比对 MBUILD 亮「有新版，点我更新」，不会卡在旧页面。 */
+    const bm = html.match(/MBUILD = '([^']+)'/) || html.match(/MBUILD='([^']+)'/);
+    const etag = '"' + (bm ? bm[1] : "mb") + '"';
+    const inm = request.headers.get("If-None-Match") || "";
+    if (inm && inm.indexOf(etag) !== -1) {
+      return new Response(null, { status: 304, headers: { ETag: etag, ...CORS } });
+    }
+    return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "public, max-age=3600", ETag: etag, ...CORS } });
   }
 
   // ---------- 苹果主屏图标 /appicon（2026-11-18）：apple-touch-icon 用，180x180 PNG base64 内嵌 ----------

@@ -217,21 +217,10 @@ def build_mpayload(files_b64, log):
 
 
 def push_mhtml(log):
-    """手机版页面上云（2026-10-29 真APP化配套）：把仓库 mobile/app/www/index.html
-    传 /mhtml，网页版 /m 和 APK 永远同一套 UI（手机版重做：本地 SPA 不再跳网页）。
-    页面上传失败只告警，不拖死数据链路。"""
-    try:
-        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        p = os.path.join(root, "mobile", "app", "www", "index.html")
-        with io.open(p, encoding="utf-8") as f:
-            html = f.read()
-        j = worker_req("/mhtml", "POST", {"html": html}, timeout=120)
-        if j.get("ok"):
-            log("手机版页面上云 ✔（%d KB）—— /m 与 APK 同步换新" % (len(html) // 1024))
-        else:
-            log("⚠ 手机版页面上传被拒：%s" % j.get("msg"))
-    except Exception as e:
-        log("⚠ 手机版页面上传失败（不影响数据链路）：%r" % e)
+    """【已停用 2026-11-18 用户令「IOS跟APP要分开两个」】：
+    不再把仓库 mobile/app/www/index.html 传 /mhtml —— 那会把网页版 /m 每个数据班次
+    都盖回 APK 的旧页面（11-18 实锤的覆盖事故源头）。网页版 /m 由 POST /mhtml 单独维护，
+    APK 页面随发版打包（mobile/app/www/index.html），两者各走各的。"""
 
 
 def main():
@@ -295,7 +284,7 @@ def main():
     # 手机端 payload（2026-10-12）：每轮都构建上传，worker 内容去重省写额度；
     # 表没变也要走一遍——欣盛库/代码更新后手机端才能跟上
     build_mpayload(files, log)
-    push_mhtml(log)
+    # push_mhtml 已停用（2026-11-18 用户令「IOS跟APP要分开两个」）：/m 由 POST /mhtml 单独维护
 
 
 if __name__ == "__main__":

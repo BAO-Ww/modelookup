@@ -12,6 +12,10 @@
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { background:#e9edf3; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; height:100%; overscroll-behavior:none; }
+  /* 2026-11-18 底色双拼：就算橡皮筋漏了半像素，顶部露的是蓝头同色、底部露的是白底同色，不刺眼 */
+  @supports (height: 100dvh) {
+    html { background:linear-gradient(180deg,#2760d2 0,#2760d2 calc(env(safe-area-inset-top,47px) + 72px),#f2f4f8 calc(env(safe-area-inset-top,47px) + 73px),#f2f4f8 calc(100% - env(safe-area-inset-bottom,34px) - 60px),#ffffff calc(100% - env(safe-area-inset-bottom,34px)),#ffffff 100%); }
+  }
   /* 2026-11-18 原生 APP 式布局：body 钉死，#app 纵向 flex（内容区自己滚、顶/底栏普通元素钉死），
      彻底绕开 iPhone 独立模式对 position:fixed 的定位漂移（底栏悬空/顶栏滚走） */
   body { position:fixed; inset:0; display:flex; justify-content:center; overflow:hidden; }
@@ -153,7 +157,9 @@
 
   /* ===== 底部导航 ===== */
   /* 底栏改为普通 flex 元素压在 #app 最底（不再 fixed）——iPhone 独立模式下 fixed 会漂移悬空 */
-  #tabs { background:#fff; border-top:1px solid #e3e8f0; display:flex; flex:none; padding-bottom:env(safe-area-inset-bottom); }
+  /* 2026-11-18 底栏贴底 v2（用户令「贴底没有啊」）：安全区留白整个去掉，只留 4px。
+     代价：Home 指示条会压在标签字附近，用户已确认要贴底。 */
+  #tabs { background:#fff; border-top:1px solid #e3e8f0; display:flex; flex:none; padding-bottom:4px; }
   #tabs .t { flex:1; text-align:center; font-size:10.5px; color:#8a94a6; padding:7px 0 6px; position:relative; }
   #tabs .t .ic { font-size:19px; line-height:1.2; }
   #tabs .t.on { color:#2e6be6; font-weight:700; }
@@ -164,7 +170,10 @@
   #app { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
   .view { display:none; }
   /* 显示中的视图 = 滚动容器（flex:1 吃掉顶/底栏之间全部空间）；contain 禁掉 iOS 区内回弹 */
-  .view.on { display:block; flex:1 1 auto; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  .view.on { display:block; flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  /* 2026-11-18 滚动条隐藏（原生 APP 无滚动条）：#top 在 .view 里 sticky，轨道从顶栏开始，白条顶到搜索栏旁边很难看 */
+  .view.on::-webkit-scrollbar, #sheet .box::-webkit-scrollbar { display:none; width:0; height:0; }
+  .view.on, #sheet .box { scrollbar-width:none; }
   /* 子页蓝头吸附（2026-11-18 用户令「往上滑顶部栏不能没」） */
   .subhd { position:sticky; top:0; z-index:20; }
   .view.on { display:block; }
@@ -195,9 +204,23 @@
 
   #toast { position:fixed; left:50%; bottom:70px; transform:translateX(-50%) translateY(20px); background:rgba(28,39,51,.9); color:#fff; font-size:12.5px; padding:9px 18px; border-radius:18px; opacity:0; transition:.25s; z-index:99; pointer-events:none; }
   #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+  /* ===== 启动屏（2026-11-18）：HTML 一到就显示，网络慢不再干白屏；JS 就绪后移除 ===== */
+  #splash { position:fixed; inset:0; z-index:60; background:linear-gradient(180deg,#2e6be6,#2760d2); display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; font-family:inherit; }
+  #splash .lg { font-size:24px; font-weight:700; letter-spacing:3px; margin-bottom:22px; }
+  #splash .spin { width:34px; height:34px; border-radius:50%; border:3px solid rgba(255,255,255,.3); border-top-color:#fff; animation:sprot 0.9s linear infinite; margin-bottom:14px; }
+  #splash .sub { font-size:12px; color:rgba(255,255,255,.75); }
+  #splash .rty { display:none; margin-top:26px; font-size:13px; color:#ffd75e; text-decoration:underline; }
+  @keyframes sprot { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
+<div id="splash">
+  <div class="lg">型号查询</div>
+  <div class="spin"></div>
+  <div class="sub">正在进入，网络慢时稍等一下…</div>
+  <div class="rty" id="spRetry" onclick="location.reload()">等太久？点此重新加载</div>
+</div>
 <div id="phone">
 
   <!-- 登录页 -->
@@ -308,6 +331,7 @@
 
 <script>
 /* ============ 云端地址：worker 里部署时用自身域名，本地预览连正式云 ============ */
+var MBUILD = '20261118-9'; /* 页面版本戳：改 m.html 必须顺手 +1，配合「有新版」提示与 /m 的 ETag 缓存 */
 var API = (/^https?:/.test(location.protocol) && !/^(localhost|127\.0\.0\.1)/.test(location.host))
   ? location.origin : 'https://auth.tingjiabaobao.de5.net';
 
@@ -1511,7 +1535,9 @@ function wire(){
     switchTab(t.dataset.v);
   });
   document.getElementById('logout').onclick = function(){
-    localStorage.removeItem('m_token'); location.reload();
+    localStorage.removeItem('m_token');
+    try { sessionStorage.setItem('m_logged_out', '1'); } catch(e){} /* 本次会话不自动重连，方便换号 */
+    location.reload();
   };
   /* 我的页快捷入口 */
   document.getElementById('meActs').addEventListener('click', function(e){
@@ -1582,7 +1608,9 @@ function renderMe(){
 }
 
 /* ============ 启动 ============ */
+function killSplash(){ var s = document.getElementById('splash'); if (s) s.remove(); }
 function boot(){
+  killSplash();
   document.getElementById('login').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   document.getElementById('tabs').style.display = 'flex';
@@ -1731,6 +1759,7 @@ document.getElementById('lgo').onclick = function(){
   document.getElementById('lerr').textContent = '';
   api('/login', { method:'POST', body:{ u:u, p:p } }).then(function(j){
     localStorage.setItem('m_token', j.token);
+    try { localStorage.setItem('m_saved', btoa(u + ':' + p)); sessionStorage.removeItem('m_logged_out'); } catch(e){} /* 2026-11-18 记住密码：掉线自动登录 */
     AUTH = { token: j.token, u: j.u, role: j.role, perm: j.perm || {} };
     try { localStorage.setItem('m_auth', JSON.stringify({ u: j.u, role: j.role, perm: j.perm || {} })); } catch(e){}
     setOnline(true);
@@ -1740,8 +1769,80 @@ document.getElementById('lgo').onclick = function(){
 document.getElementById('lp').addEventListener('keydown', function(e){ if (e.key==='Enter') document.getElementById('lgo').click(); });
 
 tryToken().then(boot).catch(function(){
+  killSplash();
   document.getElementById('login').style.display = 'flex';
+  /* 2026-11-18 记住密码自动登录：有存档且不是刚点过「退出」→ 填好账号密码直接登 */
+  var saved = '';
+  try { saved = atob(localStorage.getItem('m_saved') || ''); } catch(e){}
+  if (saved.indexOf(':') > 0 && !sessionStorage.getItem('m_logged_out')) {
+    var ci = saved.indexOf(':');
+    document.getElementById('lu').value = saved.slice(0, ci);
+    document.getElementById('lp').value = saved.slice(ci + 1);
+    document.getElementById('lerr').textContent = '正在自动登录…';
+    document.getElementById('lgo').click();
+  }
 });
+/* 启动看门狗：8 秒还没进主界面/登录页 → 启动屏上亮出「重新加载」出口，绝不无限白屏 */
+setTimeout(function(){
+  if (document.getElementById('splash')){
+    var r = document.getElementById('spRetry');
+    if (r) r.style.display = 'block';
+  }
+}, 8000);
+/* 网页版新版检查（APK 走自己的 /appcheck）：开机后台拉最新 /m 比版本戳。
+   有新版**直接自动换新**（2026-11-18 用户令）。
+   v3 无白屏更新（2026-11-18）：版本检查的响应体就是最新页 HTML → 直接 document.write 原地替换，
+   不再二次跳转（旧法子跳转要再拉一整页，慢网络下白屏很久，用户实测「更了变白了」）。
+   同时后台 fetch /m {cache:'reload'} 把 /m 缓存条目刷掉，保证下次冷启动也是新版。 */
+function mHardUpdate(newHtml){
+  try { toast('检测到新版本，正在自动更新…'); } catch(e){}
+  try { sessionStorage.removeItem('m_logged_out'); } catch(e){}
+  try { fetch(API + '/m', { cache:'reload' }).catch(function(){}); } catch(e){}
+  if (newHtml){
+    setTimeout(function(){
+      document.open(); document.write(newHtml); document.close();
+    }, 400); /* 稍等 toast 露脸 */
+  } else {
+    location.replace(API + '/m?_r=' + Date.now()); /* 兜底：没带新 HTML 就走跳转 */
+  }
+}
+if (typeof window.Capacitor === 'undefined'){
+  fetch(API + '/m?_v=' + encodeURIComponent(MBUILD), { cache:'no-store' })
+    .then(function(r){ return r.text(); })
+    .then(function(t){
+      var m = t.match(/MBUILD = '([^']+)'/) || t.match(/MBUILD='([^']+)'/);
+      if (m && m[1] !== MBUILD){
+        var _u = document.getElementById('updapp');
+        if (_u){ _u.hidden = false; _u.textContent = '⟳ 有新版'; _u.onclick = function(){ mHardUpdate(); }; }
+        mHardUpdate(t); /* 不问，直接换 */
+      }
+    }).catch(function(){});
+}
+
+/* 2026-11-18 iPhone 独立模式手势锁（v2 边界锁）：两层拦截 ——
+   ①手势起点在内容滚动区之外（顶栏/筛选/底栏/弹层遮罩）→ 一律 preventDefault，整页纹丝不动；
+   ②起点在滚动区里 → 放行正常滚动，但滚到顶还下拉 / 滚到底还上拉 = 拦掉（防 iOS 橡皮筋把蓝头拽出白底，
+     overscroll-behavior 在 iOS 独立模式 + momentum 滚动下实测不可靠，必须 JS 兜底）。 */
+var _mLastY = 0;
+document.addEventListener('touchstart', function(e){
+  _mLastY = e.touches && e.touches[0] ? e.touches[0].clientY : 0;
+}, { passive:true });
+document.addEventListener('touchmove', function(e){
+  var el = e.target, view = null;
+  while (el && el !== document) {
+    if (el.classList) {
+      if (el.classList.contains('view') && el.classList.contains('on')) { view = el; break; }
+      if (el.classList.contains('box') && el.id !== 'login') { view = el; break; } /* 底部弹层/我的页卡片 */
+    }
+    el = el.parentNode;
+  }
+  if (!view){ e.preventDefault(); return; }
+  var y = e.touches && e.touches[0] ? e.touches[0].clientY : 0;
+  var dy = y - _mLastY; _mLastY = y;
+  var atTop = view.scrollTop <= 0;
+  var atBot = view.scrollTop + view.clientHeight >= view.scrollHeight - 1;
+  if ((atTop && dy > 0) || (atBot && dy < 0)) e.preventDefault(); /* 到边界还想再拽 → 拦 */
+}, { passive:false });
 </script>
 </body>
 </html>
