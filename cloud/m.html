@@ -3,15 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="型号查询">
+<link rel="apple-touch-icon" href="appicon">
 <title>型号查询</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body { background:#e9edf3; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
-  body { display:flex; justify-content:center; }
-  #phone { width:100%; max-width:430px; min-height:100vh; background:#f2f4f8; box-shadow:0 0 40px rgba(0,0,0,.18); position:relative; padding-bottom:58px; }
+  html,body { background:#e9edf3; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; height:100%; overscroll-behavior:none; }
+  /* 2026-11-18 原生 APP 式布局：body 钉死，#app 纵向 flex（内容区自己滚、顶/底栏普通元素钉死），
+     彻底绕开 iPhone 独立模式对 position:fixed 的定位漂移（底栏悬空/顶栏滚走） */
+  body { position:fixed; inset:0; display:flex; justify-content:center; overflow:hidden; }
+  #phone { width:100%; max-width:430px; height:100%; overflow:hidden; background:#f2f4f8; box-shadow:0 0 40px rgba(0,0,0,.18); position:relative; display:flex; flex-direction:column; }
 
   /* ===== 登录页 ===== */
-  #login { position:absolute; inset:0; z-index:50; background:linear-gradient(180deg,#2e6be6,#2760d2 55%,#f2f4f8); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:calc(20px + env(safe-area-inset-top)) 34px calc(20px + env(safe-area-inset-bottom)); }
+  #login { position:fixed; inset:0; z-index:50; background:linear-gradient(180deg,#2e6be6,#2760d2 55%,#f2f4f8); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:calc(20px + env(safe-area-inset-top)) 34px calc(20px + env(safe-area-inset-bottom)); }
   #login .lg { color:#fff; font-size:22px; font-weight:700; letter-spacing:2px; margin-bottom:6px; }
   #login .sub { color:rgba(255,255,255,.75); font-size:12px; margin-bottom:30px; }
   #login input { width:100%; border:none; outline:none; border-radius:10px; padding:12px 14px; font-size:15px; margin-bottom:12px; background:#fff; }
@@ -39,7 +46,7 @@
   #neterr { background:#fff7e0; color:#8a6d1a; font-size:12px; padding:8px 14px; display:none; }
 
   /* ===== 筛选 ===== */
-  #filters { position:sticky; top:73px; z-index:19; display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px 6px; background:#f2f4f8; }
+  #filters { position:sticky; top:calc(73px + env(safe-area-inset-top)); z-index:19; display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px 6px; background:#f2f4f8; }
   #filters .f { flex:0 0 auto; font-size:12px; padding:5px 12px; border-radius:14px; background:#fff; color:#445; border:1px solid #dfe4ec; }
   #filters .f.on { background:#2e6be6; color:#fff; border-color:#2e6be6; font-weight:600; }
   #filters .f.more.on { background:#1d4fb8; border-color:#1d4fb8; }
@@ -145,14 +152,21 @@
   #more { text-align:center; font-size:11px; color:#8a94a6; padding:0 0 10px; }
 
   /* ===== 底部导航 ===== */
-  #tabs { position:fixed; bottom:0; left:50%; transform:translateX(-50%); width:100%; max-width:430px; background:#fff; border-top:1px solid #e3e8f0; display:flex; z-index:30; padding-bottom:env(safe-area-inset-bottom); }
+  /* 底栏改为普通 flex 元素压在 #app 最底（不再 fixed）——iPhone 独立模式下 fixed 会漂移悬空 */
+  #tabs { background:#fff; border-top:1px solid #e3e8f0; display:flex; flex:none; padding-bottom:env(safe-area-inset-bottom); }
   #tabs .t { flex:1; text-align:center; font-size:10.5px; color:#8a94a6; padding:7px 0 6px; position:relative; }
   #tabs .t .ic { font-size:19px; line-height:1.2; }
   #tabs .t.on { color:#2e6be6; font-weight:700; }
   #tabs .t .bdg { position:absolute; top:4px; right:calc(50% - 22px); background:#e0342b; color:#fff; font-size:9px; border-radius:9px; padding:0 5px; min-width:16px; line-height:15px; }
 
   /* ===== 消息 / 我的 ===== */
+  /* #app 是 #phone 的 flex 子项；#tabs 是它的兄弟（在 app 外面）——高度分配必须由 #phone 统一排 */
+  #app { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
   .view { display:none; }
+  /* 显示中的视图 = 滚动容器（flex:1 吃掉顶/底栏之间全部空间）；contain 禁掉 iOS 区内回弹 */
+  .view.on { display:block; flex:1 1 auto; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  /* 子页蓝头吸附（2026-11-18 用户令「往上滑顶部栏不能没」） */
+  .subhd { position:sticky; top:0; z-index:20; }
   .view.on { display:block; }
   #view-msg .sec { margin:12px 12px 0; }
   #view-msg .sec h2 { font-size:13px; color:#333; margin-bottom:8px; }
@@ -226,14 +240,14 @@
       <div id="hint"><span id="hintL"></span><span id="hintR"></span></div>
 
       <div id="list"></div>
-      <div id="empty">没有匹配的商品</div>
+      <div id="empty">正在同步数据…（首次拉全量约十几秒，之后秒开）</div>
       <div id="more" hidden></div>
       <div id="foot">数据与电脑端同源（云端直读）</div>
     </div>
 
     <!-- ============ 已发布 ============ -->
     <div class="view" id="view-pub">
-      <div style="background:linear-gradient(180deg,#2e6be6,#2760d2);color:#fff;padding:12px 14px;font-size:15px;font-weight:700;display:flex;align-items:center"><span class="bk">‹</span>已发布</div>
+      <div class="subhd" style="background:linear-gradient(180deg,#2e6be6,#2760d2);color:#fff;padding:calc(12px + env(safe-area-inset-top)) 14px 12px;font-size:15px;font-weight:700;display:flex;align-items:center"><span class="bk">‹</span>已发布</div>
       <div id="pubHint" style="font-size:11px;color:#8a94a6;padding:8px 14px 0"></div>
       <div id="pubList" style="padding:2px 12px 20px"></div>
       <div id="pubCalm" style="display:none;padding:44px 20px;text-align:center;color:#9aa6b8;font-size:12.5px;line-height:1.9">还没有发布的型号<br>回首页在卡片上点「标记发布」</div>
@@ -241,7 +255,7 @@
 
     <!-- ============ 消息 ============ -->
     <div class="view" id="view-msg">
-      <div id="top2" style="background:linear-gradient(180deg,#2e6be6,#2760d2);color:#fff;padding:12px 14px;font-size:15px;font-weight:700;display:flex;align-items:center"><span class="bk">‹</span>消息</div>
+      <div id="top2" class="subhd" style="background:linear-gradient(180deg,#2e6be6,#2760d2);color:#fff;padding:calc(12px + env(safe-area-inset-top)) 14px 12px;font-size:15px;font-weight:700;display:flex;align-items:center"><span class="bk">‹</span>消息</div>
       <div class="sec" id="msgLost"><h2>⚠ 已发布 · 没库存 <a id="lostAll">全部列出</a></h2><div id="msgLostList"></div></div>
       <div class="sec" id="msgLoss"><h2>💰 亏钱哨兵 · 定价低于成本</h2><div id="msgLossList"></div></div>
       <div class="sec" id="msgAlert" style="display:none"><h2>🔔 用友告警</h2><div id="msgAlertList"></div></div>
@@ -250,7 +264,7 @@
 
     <!-- ============ 我的 ============ -->
     <div class="view" id="view-me">
-      <div style="background:linear-gradient(180deg,#2e6be6,#2760d2);color:#fff;padding:18px 16px 22px">
+      <div class="subhd" style="background:linear-gradient(180deg,#2e6be6,#2760d2);color:#fff;padding:calc(18px + env(safe-area-inset-top)) 16px 22px">
         <div style="font-size:17px;font-weight:700;display:flex;align-items:center"><span class="bk">‹</span><span id="meName">—</span></div>
       </div>
       <div class="box" id="meStats"></div>
@@ -303,6 +317,36 @@ var MP = window.__MP__ || null;  // 目录：{meta, rows, imgs}（本地预览�
 var STOCK = null;                // {ts, stock, sbc}
 var MARKED = {}, PRICES = {};    // 自己的发布记录 / 定价
 var MYIMGS = {};                 // 云端补图库（KV myimgs，登录后拉一次，同电脑端 MYIMGS）
+/* 本地数据缓存（2026-11-18 用户令「同步太慢/秒开」）：mpayload ~4MB、myimgs ~9MB 超 localStorage 上限，
+   走 IndexedDB。启动先吃缓存立刻渲染首屏，后台拉云端最新，拉到再静默换数据（同 APP 快照套路）。 */
+function idbOpen(){
+  return new Promise(function(res){
+    try {
+      var rq = indexedDB.open('mcache', 1);
+      rq.onupgradeneeded = function(){ rq.result.createObjectStore('kv'); };
+      rq.onsuccess = function(){ res(rq.result); };
+      rq.onerror = function(){ res(null); };
+    } catch(e){ res(null); }
+  });
+}
+function idbGet(key){
+  return idbOpen().then(function(db){
+    if (!db) return null;
+    return new Promise(function(res){
+      try {
+        var rq = db.transaction('kv').objectStore('kv').get(key);
+        rq.onsuccess = function(){ res(rq.result || null); };
+        rq.onerror = function(){ res(null); };
+      } catch(e){ res(null); }
+    });
+  });
+}
+function idbSet(key, val){
+  return idbOpen().then(function(db){
+    if (!db) return;
+    try { db.transaction('kv', 'readwrite').objectStore('kv').put(val, key); } catch(e){}
+  });
+}
 var ALL = [], cur = [], shown = 0, BATCH = 30;
 var fk = 'all', q = '', curBrand = '', curCat = '', curPtype = '', pminV = null, pmaxV = null;
 var fStock = false, fSend = false;   /* 开关型筛选（同电脑端顶栏，可叠加）：有货 / 发全国 */
@@ -539,14 +583,47 @@ function ptypeHas(it){
       || (isNum(it.spz)&&it.spz>0) || it.spz==='送'
       || isNum(it.mh) || isNum(it.m2);
 }
+/* 不可发布卡 = 电脑端 isBlankCard 原样移植（2026-10-23 用户定稿「有货有价才显示」，11-18 用户令「弄」）：
+   浏览列表只显示能卖的——
+   ① 新机有库存（非样机/非次品仓可用量 >0）且有 含税价 或 滞销价（或两个都有）；
+   ② 样机有库存（样机仓可用量 >0）且有 样机价。
+   其余一律浏览不显示：三无、样机仓有货但没样机价（CWBMGHU1 实锤）、全仓无货但有价。
+   · 只影响浏览（doSearch 空态隐藏），搜索路径不碰——「不显示 ≠ 搜不到」；
+   · 已发布的永远显示，取消发布后自然回到隐藏规则；
+   · 实时库存还没拉过时，退公布版可用量/现存量 + 有任一价就显示（老口径兜底，免得启动瞬间空列表）；
+   · 美的/容声/科沃斯 与豁免名单（HM夏货源）不走用友库存，永不隐藏 */
 function isBlankCard(it){
-  if (extStockFree(it) || MARKED[it.c]) return false;
-  var live = stockOf(it.mo, nameOf(it));
-  if (live && ((live.a||0)>0 || (live.q||0)>0)) return false;
+  if (it._md || extStockFree(it)) return false;
+  if (MARKED[it.c]) return false;
+  var pt = isNum(it.pt) && it.pt > 0,
+      lz = (isNum(it.lpz) && it.lpz > 0) || it.lpz === '送',
+      sj = (isNum(it.spz) && it.spz > 0) || it.spz === '送';
+  /* 实时库存还没拉过：退公布版可用量/现存量，有货或有价就显示（老口径兜底） */
   if (!(STOCK && STOCK.stock && Object.keys(STOCK.stock).length)){
-    if ((isNum(it.lav)?it.lav:0)>0 || (isNum(it.sav)?it.sav:0)>0) return false;
+    var _gp = isNum(it.lav) ? it.lav : 0, _sp = isNum(it.sav) ? it.sav : 0;
+    if (_gp > 0 || _sp > 0 || pt || lz || sj) return false;
+    return true;
   }
-  return !ptypeHas(it);
+  /* 用友实时库存（唯一准绳）：按仓拆可售量——
+     样机仓 → 只配样机价卖；次品仓 → 不可售；其余仓都按新机口径。没有 wt 明细时全仓可用量按新机 */
+  var live = stockOf(it.mo, nameOf(it), it.code);
+  var zQty = 0, sQty = 0;
+  if (live){
+    if (live.wt && Object.keys(live.wt).length){
+      for (var _wk in live.wt){
+        var _wv = Math.round(isNum(live.wt[_wk]) ? live.wt[_wk] : 0);
+        if (_wv <= 0) continue;
+        if (_wk === '样机仓') sQty += _wv;
+        else if (_wk === '次品仓') continue;
+        else zQty += _wv;
+      }
+    } else if (isNum(live.a) && live.a > 0){
+      zQty = Math.round(live.a);
+    }
+  }
+  if (zQty > 0 && (pt || lz)) return false;   // 新机有货有价（含税或滞销，或双价都有）
+  if (sQty > 0 && sj) return false;           // 样机有货有样机价
+  return true;                                // 其余（样机货没样机价 / 无货有价 / 三无）浏览全藏，搜索照常
 }
 
 /* ============ 权限 ============ */
@@ -658,13 +735,15 @@ function doSearch(){
       else if (qc && it._c.indexOf(qc)>0) sc=2;
       else if (it._h.indexOf(qn)>=0) sc=1;
       if (!sc) continue;
-    } else if (fk==='all' && !fStock && !fSend && !curBrand && !curCat && !curPtype && !fNo && !fLoss && pminV==null && pmaxV==null && isBlankCard(it)) continue;
+    } else if (!fNo && isBlankCard(it)) continue;   /* 2026-11-18 用户令「弄」：所有浏览态都藏不能卖的（有货有价才显示）；「没库存」开关开着=专门看没货的；搜索不受影响 */
     res.push(it);
   }
   if (qn) res.sort(function(a,b){ return a._c.length - b._c.length; });
   cur = res; shown = 0;
   listEl.innerHTML = '';
-  document.getElementById('empty').style.display = res.length?'none':'block';
+  var em = document.getElementById('empty');
+  em.textContent = (ALL && ALL.length) ? '没有匹配的商品' : '正在同步数据…（首次拉全量约十几秒，之后秒开）';
+  em.style.display = res.length?'none':'block';
   var extra = (curBrand?curBrand+' · ':'') + (curCat?curCat+' · ':'') + (curPtype?'类型·'+PTYPE_TXT[curPtype]+' · ':'')
     + (fk==='z'?'正品 · ':'') + (fk==='l'?'滞销 · ':'') + (fk==='s'?'样机 · ':'')
     + (fStock?'有货 · ':'') + (fSend?'发全国 · ':'')
@@ -677,11 +756,13 @@ function doSearch(){
 function showItems(items, label){
   cur = items; shown = 0;
   listEl.innerHTML = '';
-  document.getElementById('empty').style.display = items.length ? 'none' : 'block';
+  var em2 = document.getElementById('empty');
+  em2.textContent = (ALL && ALL.length) ? '没有匹配的商品' : '正在同步数据…（首次拉全量约十几秒，之后秒开）';
+  em2.style.display = items.length ? 'none' : 'block';
   hintL.textContent = label; hintR.textContent = '';
   renderBatch();
   switchTab('home');
-  window.scrollTo(0,0);
+  var _v = document.querySelector('.view.on'); if (_v) _v.scrollTop = 0;
 }
 var PTYPE_TXT = { tax:'含税', l:'滞销价', s:'样机价', tax_l_s:'含税+滞销+样机', tax_l:'含税+滞销', tax_s:'含税+样机', l_s:'滞销+样机' };
 
@@ -988,6 +1069,7 @@ function cardHTML(it){
   var btns = '';
   if (canPub){
     btns = '<div class="cardbtns">'
+      + '<button data-act="copymo">复制</button>'
       + (marked
         ? '<button data-act="unpub" class="warn">取消发布</button>'
         : '<button data-act="pub">标记发布</button>')
@@ -1005,7 +1087,7 @@ function cardHTML(it){
     +   '<div class="nm">' + esc(nameOf(it)) + '</div>'
     +   priceGrid(it)
     + '</div></div>'
-    + (pok('calc') || (AUTH && AUTH.role==='admin') ? calcHTML(it) : '')
+    /* 2026-11-18 用户令「不需要这个」：闲鱼定价格子整个去掉，卡片不再显示 calcHTML */
     + (rowWrap('汇总', pok('sum') ? sumPills(it) : '')
     +  rowWrap('库存', pok('live') ? livePills(it) : '')
     +  rowWrap('货源', pok('supplier') ? shipPills(it) : '')
@@ -1094,29 +1176,74 @@ function pubOff(it){
 }
 
 /* ============ 消息页 ============ */
+/* 发布记录条目（2026-11-18 用户令「按电脑的来」）：与电脑端 markXys 同构——
+   老格式（无 xys）合成一条「默认」退回顶层定价；新格式逐号逐条，各条自己的价 */
+function markXysM(c){
+  var m = MARKED[c]; if (!m) return [];
+  if (!m.xys){
+    if (m.k !== 'l' && m.k !== 's') return [];
+    return [{ xy: '默认', key: '默认', t: +m.t || 0, k: m.k === 's' ? 's' : 'l',
+              p: isNum(PRICES[c]) ? PRICES[c] : null }];
+  }
+  var out = [];
+  for (var key in m.xys){
+    var e = m.xys[key] || {}; if (!e || (e.k !== 'l' && e.k !== 's')) continue;
+    out.push({ xy: String(key).split('|')[0] || String(key), key: key,
+               t: +e.t || 0, k: e.k === 's' ? 's' : 'l',
+               p: (e.p != null && isFinite(+e.p)) ? +e.p : null,
+               xid: e.xid != null ? String(e.xid) : null });
+  }
+  out.sort(function(a,b){ return b.t - a.t; });
+  return out;
+}
+/* 单条发布记录核账 = 电脑端 recNet 一条不差（2026-10-16 连根修口径）：
+   成本 = 记录口径（样机记录优先样机清理价）；库奖励 bn.sb/lb；
+   运费 = 可发全国 且 发布记录没勾「只发本地」（nat!==0）才扣 100；
+   净挣 = 记录价 × (1−1.6%平台费) − 运费 − 成本 + 库奖励 */
+function recNetM(it, cs, bn, nat, rk, p){
+  var opts = it ? costOptions(it) : [];
+  var cost = null, cl = '';
+  if (rk === 's'){
+    for (var j = 0; j < opts.length; j++){
+      if (kindOfBasis(opts[j].l) === 's'){ cost = opts[j].v; cl = opts[j].l; break; }
+    }
+    if (cost == null && cs){
+      for (var j2 = 0; j2 < opts.length; j2++){ if (opts[j2].l === cs.l){ cost = opts[j2].v; cl = cs.l; break; } }
+    }
+  } else {
+    if (cs && kindOfBasis(cs.l) !== 's'){
+      for (var j3 = 0; j3 < opts.length; j3++){ if (opts[j3].l === cs.l){ cost = opts[j3].v; cl = cs.l; break; } }
+    }
+    if (cost == null){
+      for (var j4 = 0; j4 < opts.length; j4++){ if (kindOfBasis(opts[j4].l) !== 's'){ cost = opts[j4].v; cl = opts[j4].l; break; } }
+    }
+  }
+  if (cost == null && opts.length){ cost = opts[0].v; cl = opts[0].l; }
+  var bon = bn ? (rk === 's' ? (+bn.sb || 0) : (+bn.lb || 0)) : 0;
+  var _frk = rk === 's' ? 's' : (cs && kindOfBasis(cs.l) === 'l' ? 'l' : null);
+  var fr = (it && canNationwide(it, _frk) && nat !== 0) ? 100 : 0;
+  var net = (cost != null && isNum(p)) ? p * (1 - 0.016) - fr - cost + bon : null;
+  return { cost: cost, cl: cl, bon: bon, fr: fr, net: net, miss: (cost == null && !!cs) };
+}
 function lossList(){
   var out = [];
-  for (var i=0;i<ALL.length;i++){
+  if (!ALL) return out;
+  for (var i = 0; i < ALL.length; i++){
     var it = ALL[i], k = it.c;
-    if (!MARKED[k] || !isNum(PRICES[k])) continue;
-    var opts = costOptions(it);
-    var cs = COSTSEL[k], cost = null, lmiss = false;
-    if (opts.length){
-      var pick = opts[0];
-      if (cs && opts.length>1){
-        for (var j=0;j<opts.length;j++){
-          if (opts[j].l===cs.l && String(opts[j].v)===String(cs.v)){ pick = opts[j]; break; }
-        }
+    if (!MARKED[k]) continue;
+    var cs = MARKED[k].cs;
+    var _bn = MARKED[k].bn, _nat = MARKED[k].nat;
+    var xs = markXysM(k), missPushed = false;
+    for (var x = 0; x < xs.length; x++){
+      var p = xs[x].p, rk = xs[x].k;           // 这条记录自己的价与口径（正品l/样机s）
+      if (!isNum(p)) continue;
+      var r = recNetM(it, cs, _bn, _nat, rk, p);
+      if (r.net != null){
+        if (r.net < 0) out.push({ it: it, price: p, cost: r.cost, net: r.net });
+      } else if (r.miss && !missPushed){
+        out.push({ it: it, miss: true });
+        missPushed = true;
       }
-      cost = isNum(pick.v) ? pick.v : null;
-      if (cs && !cost) lmiss = true;
-    }
-    if (lmiss){ out.push({ it:it, miss:true }); continue; }
-    /* 净挣口径（2026-10-12 用户实锤 BC-285W 案）：跟卡片计算器同式——
-       定价 − 1.6%平台费 − (可发全国默认勾选−100) − 成本 < 0 = 亏钱 */
-    if (cost!=null){
-      var net = PRICES[k] * (1 - 0.016) - (canNationwide(it, kindOfBasis(cs && cs.l)) ? 100 : 0) - cost;
-      if (net < 0) out.push({ it:it, price:PRICES[k], cost:cost, net:net });
     }
   }
   return out;
@@ -1284,6 +1411,19 @@ function wire(){
     }
     var btn = e.target.closest('button');
     if (btn){
+      /* 复制纯型号（2026-11-18 用户令：手机端卡片补电脑端同款按钮） */
+      if (btn.dataset.act==='copymo'){
+        var _m = it.mo || it.c;
+        var _mdone = function(){
+          toast('已复制 ' + _m);
+          btn.textContent = '已复制';
+          setTimeout(function(){ btn.textContent = '复制'; }, 1200);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(_m).then(_mdone, function(){ _copyFallback(_m); _mdone(); });
+        } else { _copyFallback(_m); _mdone(); }
+        return;
+      }
       if (btn.dataset.act==='pub'){
         var box = card.querySelector('.calc');
         var cur1 = box ? parseFloat(box.querySelector('input').value) : NaN;
@@ -1381,10 +1521,13 @@ function wire(){
     else if (go === 'msg') switchTab('msg');
     else if (go === 'refresh'){ toast('正在刷新云端数据…'); loadAll(); }
   });
-  window.addEventListener('scroll', function(){
+  /* 滚动容器现在是 .view.on（不再是 window）——捕获阶段监听，触底加载下一批 */
+  document.addEventListener('scroll', function(e){
+    var v = document.querySelector('.view.on');
+    if (!v || e.target !== v) return;
     if (document.getElementById('more').hidden) return;
-    if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 400) renderBatch();
-  });
+    if (v.clientHeight + v.scrollTop >= v.scrollHeight - 400) renderBatch();
+  }, true);
 }
 function switchTab(v, noPush){
   Array.prototype.forEach.call(document.querySelectorAll('#tabs .t'), function(t){ t.classList.toggle('on', t.dataset.v===v); });
@@ -1395,7 +1538,7 @@ function switchTab(v, noPush){
   /* 手机返回键：每个子页压一条历史，返回键走 popstate 回退而不是退出 */
   if (!noPush && v!=='home') hPush({ m:1, t:v });
   else if (v==='home' && !noPush && _hDepth>0) hBack();   /* 直接点「首页」tab：把栈里残留的子页历史收掉 */
-  window.scrollTo(0,0);
+  var _v = document.querySelector('.view.on'); if (_v) _v.scrollTop = 0;
 }
 /* 历史栈深度：push 记数、pop 减数，程序关闭弹层时补一次 back，保证返回键不空转 */
 var _hDepth = 0;
@@ -1441,14 +1584,18 @@ function renderMe(){
 /* ============ 启动 ============ */
 function boot(){
   document.getElementById('login').style.display = 'none';
-  document.getElementById('app').style.display = 'block';
+  document.getElementById('app').style.display = 'flex';
   document.getElementById('tabs').style.display = 'flex';
   wire();
   loadAll();
 }
 function loadAll(){
   var jobs = [];
-  /* 云端补图库（~18MB）不阻塞首屏，到了就把占位补成真图 */
+  /* 云端补图库（~18MB）不阻塞首屏，到了就把占位补成真图。
+     2026-11-18 秒开：先吃 IDB 缓存的补图库立刻补图，后台拉最新，拉到存缓存再补一次 */
+  idbGet('myimgs').then(function(c){
+    if (c && typeof c === 'object' && Object.keys(c).length){ MYIMGS = c; refreshImgs(); }
+  });
   api('/myimgs').then(function(j){
     /* worker 端每条已是 {b:图, by:谁} 结构（2026-10-12 权限收口）——拆包取 b 当图用 */
     var o = j.imgs || {}, m2 = {};
@@ -1458,6 +1605,7 @@ function loadAll(){
       if (typeof u === 'string' && u.indexOf('data:image/') === 0) m2[k] = u;
     });
     MYIMGS = m2; refreshImgs();
+    idbSet('myimgs', m2);
   }).catch(function(){});
   if (MP){
     /* APP 本地快照秒开首屏；后台拉云端最新，有新就静默换数据（热更新，不用发版） */
@@ -1472,9 +1620,19 @@ function loadAll(){
     }).catch(function(){});
   }
   else {
+    /* 2026-11-18 秒开：先吃 IDB 缓存的目录立刻渲染首屏（不阻塞），后台拉云端最新，有新再静默换 */
+    idbGet('mp').then(function(c){
+      if (c && c.rows && c.rows.length && !MP){
+        MP = c; buildIndex(); doSearch(); renderMsgs(); renderPubView();
+        document.getElementById('tsData').textContent = '数据 ' + ((c.meta||{}).built||'') + '（缓存）';
+      }
+    });
     jobs.push(api('/mpayload').then(function(j){
-      MP = { meta: j.meta || {}, rows: j.rows || [], imgs: j.imgs || {} };
-      buildIndex();
+      var nj = { meta: j.meta || {}, rows: j.rows || [], imgs: j.imgs || {} };
+      MP = nj; buildIndex();
+      /* 2026-11-18 修「回到解放前」：不管有没有缓存，数据到了都必须渲染（原 if(hadCache) 把首次打开的人拦在空白列表） */
+      doSearch(); renderMsgs(); renderPubView();
+      idbSet('mp', nj);
     }).catch(function(e){
       if (!(e && e.msg)) wentOffline();      // fetch 层挂了 = 网络不通
       document.getElementById('neterr').style.display='block';
@@ -1492,10 +1650,18 @@ function loadAll(){
   }));
   jobs.push(api('/pub').then(function(j){
     MARKED = j.marks || {}; PRICES = j.prices || {};
+    idbSet('pub', { m: MARKED, p: PRICES });
+    renderMsgs(); renderPubView();          // 缓存版渲染过的话，云端到了按最新再刷一遍
   }).catch(function(e){
     MARKED={}; PRICES={};
     if (!(e && e.msg)) wentOffline();        // fetch 层挂了 = 网络不通（APP 离线只许查）
   }));
+  idbGet('pub').then(function(c){
+    if (c && c.m && !Object.keys(MARKED).length){
+      MARKED = c.m || {}; PRICES = c.p || {};
+      renderMsgs(); renderPubView();
+    }
+  });
   /* 手机 APP（Capacitor 壳）专属：手动检查更新（2026-10-13 用户要求加按键）。
      APK 壳里 window.Capacitor 一定存在，浏览器里没有 → 按键只对 APP 显示 */
   if (typeof window.Capacitor !== 'undefined'){
