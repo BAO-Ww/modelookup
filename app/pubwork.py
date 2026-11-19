@@ -769,6 +769,28 @@ def _backfill_empty_props(model, info, log):
     return info
 
 
+def _model_mismatch(info, model):
+    """2026-11-19 型号自报闸门（BCD-335WLDPGU1 串成 BCD-342WLLFDEDW9U1 实锤）：
+    页面参数表自己写的「型号」跟请求型号对不上 → 返回页面型号字符串（真值），
+    对得上/没报型号返回 None。pubwork 抓取后与 kitset 读缓存前都要过这道闸。"""
+    if not info:
+        return None
+    try:
+        from normalize import norm_model as _nmf    # pubwork 无顶层导入，函数内取（2026-11-19 实锤裸调 NameError 被 except 吞）
+        nm = _nmf(model)
+        if not nm:
+            return None
+        for k, v in (info.get("props") or []):
+            ks = str(k).strip().lstrip('：: ')
+            if ks in ('型号', '产品型号', '商品型号'):
+                v2 = str(v).strip().lstrip('：: ')
+                if v2 and _nmf(v2) != nm:
+                    return v2
+    except Exception:
+        return None
+    return None
+
+
 def work(model, prog=None):
     """抓素材：本地有就直接用；没有先看蓝底抓好的能不能复用（等最多 90s）；
     复用不上走 peiwen 抓取链（新爬虫→旧检索→兴达），存 素材/<型号>/"""
@@ -820,7 +842,12 @@ def work(model, prog=None):
         else:
             info = pei_core.fetch_product(site, url, d, log=log, progress=prog)
             if info:
-                info = pei_core.spider_enrich_info(info, site, url, prod, log=log)
+                _mm = _model_mismatch(info, model)
+                if _mm:
+                    log("官网页面型号对不上（页面标 %s ≠ 请求 %s），弃用走兜底" % (_mm, model))
+                    info = None
+                else:
+                    info = pei_core.spider_enrich_info(info, site, url, prod, log=log)
         if not info:
             # 2026-11-10 实锤（JSQ22-12LVS(12T)）：旧检索给了 URL 但页面 403/已下架，
             # 旧逻辑一有 URL 就跳过欣盛兜底，直接报「页面抓取失败」白死一回。
@@ -846,6 +873,17 @@ def work(model, prog=None):
         info["srcmap"] = _srcmap
     info["dir"] = d
     _enrich_specs(model, info, prog)      # 先补参数图（还会往根目录落兴达参数图）
+    # 2026-11-19 型号自报闸门第二道：首道闸时 props 可能还是 0（抓取页 JSON-LD 空），
+    # AI 参数图识别补完才知道页面标的是别的型号——BCD-335WLDPGU1 串成 342 实锤。
+    # 对不上 → 脏图脏参数一概不留（宁可不抓不抓错），抛错让上层走欣盛/中关村兜底。
+    _mm2 = _model_mismatch(info, model)
+    if _mm2:
+        log("页面/参数图标型号 %s ≠ 请求 %s，整包弃用（图和参数都不留）" % (_mm2, model))
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+        raise RuntimeError("官网页面型号对不上（页面标 %s），不抓错机器" % _mm2)
     _organize_sources(d, info)            # 再统一按来源归文件夹（参数图落「其他」）
     _save_info(info)
     return info

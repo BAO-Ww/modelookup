@@ -783,17 +783,11 @@ async function route(request, env, path, ctx) {
   if (path === "/m" && request.method === "GET") {
     const html = await kvGetc(env, "mhtml");
     if (!html) return jerr("手机版还没上云", 404);
-    /* 2026-11-18 白屏修复：no-store 导致 iPhone 独立模式每次冷启动都全量拉 95KB（国内到 CF 慢）→ 干白屏很久。
-       改为可缓存 1h + ETag（版本戳 MBUILD）：当天启动秒开；过期后条件请求 304 也只花一个往返；
-       页面真的换新版时 JS 会比对 MBUILD 亮「有新版，点我更新」，不会卡在旧页面。 */
-    const bm = html.match(/MBUILD = '([^']+)'/) || html.match(/MBUILD='([^']+)'/);
-    const etag = '"' + (bm ? bm[1] : "mb") + '"';
-    const inm = request.headers.get("If-None-Match") || "";
-    if (inm && inm.indexOf(etag) !== -1) {
-      return new Response(null, { status: 304, headers: { ETag: etag, ...CORS } });
-    }
+    /* 2026-11-18 16:05 终版：max-age=3600 + 客户端版本检测的组合在 iOS 独立模式打转
+       （缓存旧条目刷不掉 → 每次冷启动都「有新版」→ 更新白屏 → 下次又是旧页）。
+       回退 no-store 每次拿最新页，永远没有更新提示；打开稍慢由页面启动屏（蓝屏转圈）盖住。 */
     return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "public, max-age=3600", ETag: etag, ...CORS } });
+      "Cache-Control": "no-store, must-revalidate", ...CORS } });
   }
 
   // ---------- 苹果主屏图标 /appicon（2026-11-18）：apple-touch-icon 用，180x180 PNG base64 内嵌 ----------
@@ -1671,6 +1665,11 @@ async function route(request, env, path, ctx) {
     const b = await request.json().catch(() => ({}));
     if (!b || typeof b.html !== "string" || !b.html) return jerr("html 字段不对");
     if (b.html.length > 1000000) return jerr("html 太大（" + Math.round(b.html.length / 1024) + "KB）");
+    /* 2026-11-18 17:10 守卫：旧客户端（Mac 旧版软件定时任务等）还带着 2026-10-29 的 28KB 老 SPA
+       往这推，把新版 /m 盖回解放前。新页面必含 recNetM + MBUILD 版本戳 → 缺哪个一律拒收。
+       ⚠ 以后给 /mhtml 发版必须保留 recNetM 标记和 MBUILD = '20xxxxxx' 戳，否则会被自己拒收。 */
+    if (b.html.indexOf("recNetM") === -1 || !/MBUILD = '\d{8}/.test(b.html))
+      return jerr("页面版本过旧已拒收（防旧客户端盖回 /m，缺 recNetM/MBUILD 标记）", 400);
     await env.KV.put("mhtml", b.html);
     kvInval("mhtml");
     return J({ ok: true, kb: Math.round(b.html.length / 1024) });

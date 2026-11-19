@@ -427,6 +427,21 @@ def fetch_official(model, log, need_imgs=False):
         if nm not in norm_model(title + ' ' + pname):
             continue  # 防串页
         groups = parse_groups(html)
+        # 2026-11-19 型号自报闸门（BCD-335WLDPGU1 实锤）：串页详情页 title/pname 可能都过不了
+        # 严检但参数表里白纸黑字写着别的型号（页面标 BCD-342WLLFDEDW9U1 ≠ 请求 BCD-335WLDPGU1），
+        # 参数/卖点/图全是别家机器的。页面自己报的「型号」跟请求对不上 → 整页弃用换下一候选。
+        _pagem = ''
+        for _g, _kv in groups:
+            for _k, _v in (_kv or []):
+                _ks = str(_k).strip().lstrip('：: ')
+                if _ks in ('型号', '产品型号', '商品型号') and str(_v).strip():
+                    _pagem = str(_v).strip().lstrip('：: ')
+                    break
+            if _pagem:
+                break
+        if _pagem and norm_model(_pagem) != nm:
+            log("官网[%s]型号对不上（页面标 %s ≠ %s），弃用换下一个" % (s['name'], _pagem[:30], model))
+            continue
         log("官网[%s]命中：%s / 参数 %d 组" % (s['name'], pname[:30], len(groups)))
         return {'source': '官网', 'brand': s['name'], 'pname': pname, 'price': price or '',
                 'url': url, 'groups': [[g, kv] for g, kv in groups],

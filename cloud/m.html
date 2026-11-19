@@ -11,15 +11,27 @@
 <title>型号查询</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body { background:#e9edf3; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; height:100%; overscroll-behavior:none; }
-  /* 2026-11-18 底色双拼：就算橡皮筋漏了半像素，顶部露的是蓝头同色、底部露的是白底同色，不刺眼 */
+  /* 2026-11-19 防 iOS 聚焦放大（scale 1.143 实锤）：字号<16px 的输入框聚焦时 iOS 强制 zoom 整页，统一 16px */
+  input, textarea, select { font-size:16px !important; }
+  html,body { font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; height:100%; overscroll-behavior:none; }
+  html { background:#2760d2; } /* 加载中/登录 = 纯蓝；进主界面后 html.booted 切白 */
+  body { background:#2760d2; } /* 2026-11-19 关键修复：iOS 漏缝露的是 body 底色不是 html！之前 body 是灰 #e9edf3，底部带子就是它。加载中跟启动屏同蓝；booted 后切白（见下） */
+  /* 2026-11-19 底部带子根治（16 Pro Max 实测 iOS 独立模式 body 底部没铺满，#phone 下方露 html 底色）：
+     ① #phone 用 100dvh 强制到动态视口全高 ② booted 底色改纯白——就算 iOS 再漏缝，漏出来是白的，
+     跟白色底栏连成一片肉眼不可见（三段渐变作废）。加载中/登录仍是整条纯蓝。 */
   @supports (height: 100dvh) {
-    html { background:linear-gradient(180deg,#2760d2 0,#2760d2 calc(env(safe-area-inset-top,47px) + 72px),#f2f4f8 calc(env(safe-area-inset-top,47px) + 73px),#f2f4f8 calc(100% - env(safe-area-inset-bottom,34px) - 60px),#ffffff calc(100% - env(safe-area-inset-bottom,34px)),#ffffff 100%); }
+    html.booted, html.booted body { background:#ffffff; } /* booted 后 body 也切白：缝隙露白=跟白色底栏连体不可见 */
+    #phone { height:100dvh; }
   }
   /* 2026-11-18 原生 APP 式布局：body 钉死，#app 纵向 flex（内容区自己滚、顶/底栏普通元素钉死），
      彻底绕开 iPhone 独立模式对 position:fixed 的定位漂移（底栏悬空/顶栏滚走） */
-  body { position:fixed; inset:0; display:flex; justify-content:center; overflow:hidden; }
-  #phone { width:100%; max-width:430px; height:100%; overflow:hidden; background:#f2f4f8; box-shadow:0 0 40px rgba(0,0,0,.18); position:relative; display:flex; flex-direction:column; }
+  body { position:fixed; inset:0; display:flex; justify-content:center; overflow:visible; } /* 2026-11-19 overflow 放开：#phone 用 100dvh 撑满视口，防 iOS 独立模式 body 偏矮把底栏裁掉（手势锁已防文档被拖动） */
+  #phone { width:100%; max-width:480px; height:100%; overflow:hidden; background:#f2f4f8; box-shadow:0 0 40px rgba(0,0,0,.18); position:relative; display:flex; flex-direction:column; }
+  /* 2026-11-18 17:20 适配 16 Pro Max（440pt>430 旧上限会左右露白）+ 电脑宽屏去手机条居中：全宽铺满 */
+  @media (min-width: 500px) {
+    #phone { max-width:none; box-shadow:none; }
+    body { background:#f2f4f8; }
+  }
 
   /* ===== 登录页 ===== */
   #login { position:fixed; inset:0; z-index:50; background:linear-gradient(180deg,#2e6be6,#2760d2 55%,#f2f4f8); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:calc(20px + env(safe-area-inset-top)) 34px calc(20px + env(safe-area-inset-bottom)); }
@@ -159,7 +171,10 @@
   /* 底栏改为普通 flex 元素压在 #app 最底（不再 fixed）——iPhone 独立模式下 fixed 会漂移悬空 */
   /* 2026-11-18 底栏贴底 v2（用户令「贴底没有啊」）：安全区留白整个去掉，只留 4px。
      代价：Home 指示条会压在标签字附近，用户已确认要贴底。 */
-  #tabs { background:#fff; border-top:1px solid #e3e8f0; display:flex; flex:none; padding-bottom:4px; }
+  /* 2026-11-19 底栏钉物理底（-18 实测）：这台 iOS 普通流内元素画不到 ICB 底（894）以下（-18 的 tabs 消失实锤），
+     但 position:fixed 元素能画到物理底边（诊断浮层 fixed bottom:0 贴底实锤）→ tabs 改 fixed。
+     #app 内容区加 padding-bottom 让位，最后一张卡不被底栏压住 */
+  #tabs { position:fixed; left:0; right:0; bottom:0; z-index:30; background:#fff; border-top:1px solid #e3e8f0; display:flex; padding-bottom:env(safe-area-inset-bottom,34px); transform:translateZ(0); }
   #tabs .t { flex:1; text-align:center; font-size:10.5px; color:#8a94a6; padding:7px 0 6px; position:relative; }
   #tabs .t .ic { font-size:19px; line-height:1.2; }
   #tabs .t.on { color:#2e6be6; font-weight:700; }
@@ -170,7 +185,7 @@
   #app { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
   .view { display:none; }
   /* 显示中的视图 = 滚动容器（flex:1 吃掉顶/底栏之间全部空间）；contain 禁掉 iOS 区内回弹 */
-  .view.on { display:block; flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  .view.on { display:block; flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; padding-bottom:calc(64px + env(safe-area-inset-bottom,34px)); } /* 2026-11-19 tabs 改 fixed 后内容让位 */
   /* 2026-11-18 滚动条隐藏（原生 APP 无滚动条）：#top 在 .view 里 sticky，轨道从顶栏开始，白条顶到搜索栏旁边很难看 */
   .view.on::-webkit-scrollbar, #sheet .box::-webkit-scrollbar { display:none; width:0; height:0; }
   .view.on, #sheet .box { scrollbar-width:none; }
@@ -202,6 +217,8 @@
   #view-me .box .row b { color:#1c2733; }
   #view-me .out { display:block; width:calc(100% - 24px); margin:6px 12px 20px; border:none; border-radius:12px; padding:12px; background:#fff; color:#c02626; font-weight:700; font-size:14px; box-shadow:0 1px 4px rgba(30,50,90,.07); }
 
+  /* 2026-11-19 手机端诊断浮层：APP 里连点顶部蓝条 5 下显示真实视口数值（排查底栏悬空用，可随时删） */
+  #dbgover { position:fixed; left:0; right:0; bottom:0; z-index:9999; display:none; background:rgba(0,0,0,.9); color:#7dffa8; font:11.5px/1.55 ui-monospace,Menlo,Consolas,monospace; padding:10px 12px ; white-space:pre-wrap; }
   #toast { position:fixed; left:50%; bottom:70px; transform:translateX(-50%) translateY(20px); background:rgba(28,39,51,.9); color:#fff; font-size:12.5px; padding:9px 18px; border-radius:18px; opacity:0; transition:.25s; z-index:99; pointer-events:none; }
   #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
@@ -331,7 +348,7 @@
 
 <script>
 /* ============ 云端地址：worker 里部署时用自身域名，本地预览连正式云 ============ */
-var MBUILD = '20261118-9'; /* 页面版本戳：改 m.html 必须顺手 +1，配合「有新版」提示与 /m 的 ETag 缓存 */
+var MBUILD = '20261119-21'; /* 页面版本戳：改 m.html 必须顺手 +1，配合「有新版」提示与 /m 的 ETag 缓存 */
 var API = (/^https?:/.test(location.protocol) && !/^(localhost|127\.0\.0\.1)/.test(location.host))
   ? location.origin : 'https://auth.tingjiabaobao.de5.net';
 
@@ -1611,6 +1628,7 @@ function renderMe(){
 function killSplash(){ var s = document.getElementById('splash'); if (s) s.remove(); }
 function boot(){
   killSplash();
+  document.documentElement.classList.add('booted'); /* 底色切三段：上蓝/中灰/下白（漏缝同色不可见） */
   document.getElementById('login').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   document.getElementById('tabs').style.display = 'flex';
@@ -1789,35 +1807,86 @@ setTimeout(function(){
     if (r) r.style.display = 'block';
   }
 }, 8000);
-/* 网页版新版检查（APK 走自己的 /appcheck）：开机后台拉最新 /m 比版本戳。
-   有新版**直接自动换新**（2026-11-18 用户令）。
-   v3 无白屏更新（2026-11-18）：版本检查的响应体就是最新页 HTML → 直接 document.write 原地替换，
-   不再二次跳转（旧法子跳转要再拉一整页，慢网络下白屏很久，用户实测「更了变白了」）。
-   同时后台 fetch /m {cache:'reload'} 把 /m 缓存条目刷掉，保证下次冷启动也是新版。 */
-function mHardUpdate(newHtml){
-  try { toast('检测到新版本，正在自动更新…'); } catch(e){}
-  try { sessionStorage.removeItem('m_logged_out'); } catch(e){}
-  try { fetch(API + '/m', { cache:'reload' }).catch(function(){}); } catch(e){}
-  if (newHtml){
-    setTimeout(function(){
-      document.open(); document.write(newHtml); document.close();
-    }, 400); /* 稍等 toast 露脸 */
-  } else {
-    location.replace(API + '/m?_r=' + Date.now()); /* 兜底：没带新 HTML 就走跳转 */
-  }
-}
-if (typeof window.Capacitor === 'undefined'){
-  fetch(API + '/m?_v=' + encodeURIComponent(MBUILD), { cache:'no-store' })
-    .then(function(r){ return r.text(); })
-    .then(function(t){
-      var m = t.match(/MBUILD = '([^']+)'/) || t.match(/MBUILD='([^']+)'/);
-      if (m && m[1] !== MBUILD){
-        var _u = document.getElementById('updapp');
-        if (_u){ _u.hidden = false; _u.textContent = '⟳ 有新版'; _u.onclick = function(){ mHardUpdate(); }; }
-        mHardUpdate(t); /* 不问，直接换 */
+/* 2026-11-18 16:05 更新机制整个拆除（终版）：max-age=3600 + 客户端版本检测在 iOS 独立模式
+   打转（HTTP 缓存旧条目刷不掉 → 每次冷启动都「有新版」→ document.write 更新白屏 → 下次又旧页）。
+   /m 已回 no-store（见 worker.js），每次打开都是最新页，不存在「有新版」这回事了。 */
+
+/* 2026-11-19 iOS 独立模式视口矮一截的怪癖（16 Pro Max 实测）：position:fixed inset:0 的 body 和
+   100dvh 都量不到屏幕物理底边且不自动纠正 → 底栏悬空、下面漏一条底色。CSS 救不了，JS 实测定高：
+   取 innerHeight / clientHeight / visualViewport.height 三者最大值直接写死 #phone 高度，
+   开机 + resize + 转屏 + 延迟 0.5s/1.5s 多次兜底（iOS 视口值会迟到）。 */
+(function(){
+  function _fitPhone(){
+    try {
+      var ch = document.documentElement.clientHeight || 0;
+      var h = Math.max(window.innerHeight || 0, ch,
+                       (window.visualViewport && window.visualViewport.height) || 0);
+      /* iOS 独立模式 ICB 矮一截（16 Pro Max 实测 clientH 894 vs screenH 956），且 env(safe-area-inset-top)
+         实测报 0（-17 的探针补齐没生效）→ 终版：只在 iPhone PWA（navigator.standalone）里直接
+         用 screen.height 补满。安卓 Capacitor / 电脑浏览器 standalone 为假，完全不碰。 */
+      var scr = (window.screen && window.screen.height) || 0;
+      if (window.navigator.standalone && scr > h) h = scr;
+      if (h > 0) document.getElementById('phone').style.height = h + 'px';
+      /* 2026-11-19 -19 实测：fixed 底栏锚在 ICB 底（894），距物理底差 gap=screenH-clientH=62。
+         -20 只下探 → 栏内「图标+文字」内容底边掉进 894 裁剪线以下，文字整排被切只剩图标（-21 实锤）。
+         -21 终版：下探 gap 的同时把 padding-bottom 也加 gap，图标+文字整体抬回裁剪线以上，
+         栏白底继续铺到物理底边；列表底部让位同步加大，防最后一张卡被加高的栏盖住。 */
+      if (window.navigator.standalone && scr > ch && ch > 0) {
+        var gap = scr - ch;
+        var tabs = document.getElementById('tabs');
+        tabs.style.bottom = -gap + 'px';
+        tabs.style.paddingBottom = (34 + gap) + 'px';
+        var vs = document.querySelectorAll('.view');
+        for (var i = 0; i < vs.length; i++) vs[i].style.paddingBottom = (64 + gap) + 'px';
       }
-    }).catch(function(){});
-}
+    } catch(e){}
+  }
+  window.addEventListener('resize', _fitPhone);
+  window.addEventListener('orientationchange', function(){ setTimeout(_fitPhone, 300); });
+  _fitPhone();
+  setTimeout(_fitPhone, 500);
+  setTimeout(_fitPhone, 1500);
+})();
+
+/* 2026-11-19 诊断浮层：APP 里快速连点顶部蓝条（空白处，别点输入框/按钮）5 下 → 底部显示真实视口数值。
+   等 iOS 数值拿到后按实测修正；确认修好后可整块删除。 */
+(function(){
+  var _n = 0, _t = 0;
+  var topEl = document.getElementById('top');
+  if (!topEl) return;
+  topEl.addEventListener('click', function(e){
+    var tag = (e.target && e.target.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'BUTTON') { _n = 0; return; }
+    var now = Date.now();
+    if (now - _t > 1500) _n = 0;
+    _t = now; _n++;
+    if (_n >= 5) { _n = 0; window.__dbgShow(); }
+  });
+  function _r(v){ return (v == null || isNaN(v)) ? '-' : Math.round(v); }
+  window.__dbgShow = function(){
+    var ph = document.getElementById('phone').getBoundingClientRect();
+    var probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;left:0;bottom:0;width:1px;height:env(safe-area-inset-bottom);pointer-events:none;';
+    document.body.appendChild(probe);
+    var sb = probe.getBoundingClientRect().height;
+    probe.parentNode.removeChild(probe);
+    var vv = window.visualViewport || {};
+    var el = document.getElementById('dbgover');
+    if (!el){ el = document.createElement('div'); el.id = 'dbgover'; document.body.appendChild(el); }
+    el.textContent = [
+      'MBUILD ' + MBUILD,
+      'innerH ' + _r(window.innerHeight) + '   clientH ' + _r(document.documentElement.clientHeight),
+      'vvH ' + _r(vv.height) + '   vvTop ' + _r(vv.offsetTop) + '   scale ' + (vv.scale || '-'),
+      'screenH ' + _r(screen.height) + '   dpr ' + (window.devicePixelRatio || '-'),
+      'phoneH ' + _r(ph.height) + '   phoneBottom ' + _r(ph.bottom),
+      'bodyH ' + _r(document.body.getBoundingClientRect().height),
+      'safeB ' + _r(sb) + '   standalone ' + (window.navigator.standalone ? 1 : 0)
+    ].join('\n');
+    el.style.display = 'block';
+    clearTimeout(window.__dbgT);
+    window.__dbgT = setTimeout(function(){ el.style.display = 'none'; }, 25000);
+  };
+})();
 
 /* 2026-11-18 iPhone 独立模式手势锁（v2 边界锁）：两层拦截 ——
    ①手势起点在内容滚动区之外（顶栏/筛选/底栏/弹层遮罩）→ 一律 preventDefault，整页纹丝不动；

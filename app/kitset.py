@@ -1559,6 +1559,13 @@ def _zol_data_once(model, brand, log):
     for page in pages:
         try:
             html2 = _http_text(page, "https://www.bing.com/")
+            # 2026-11-19 详情页型号闸（BCD-335WLDPGU1 实锤串型号）：必应 RSS 候选没过任何
+            # 校验，抓回来的详情页可能是别的机器。页 title 必须含请求型号前 8 位。
+            _pt = (re.search(r'<title>(.*?)</title>', html2 or '', re.S) or [None, ''])[1]
+            if (norm_model(model) or '')[:8] not in norm_model(_pt):
+                if log:
+                    log("中关村详情页型号对不上（%s），跳过" % _pt[:40])
+                continue
             _zol_imgs_in(html2, _sink)
             # 参数子页：ZOL 两种结构都要吃——
             #   旧版 <p title="…"><span>键：</span>值</p>；
@@ -1834,6 +1841,13 @@ def _gather_info(model, log):
         import pubwork
         # kitset 权威副本优先（2026-10-29 聚光独立体系）：蓝底上次抓的真参数在自己家
         info = load_kinfo(model) or pubwork.load_info(model)
+        # 2026-11-19 型号自报闸门：历史缓存可能存着串页脏数据（BCD-335WLDPGU1 缓存成
+        # BCD-342WLLFDEDW9U1 实锤），页面标型号对不上 → 弃缓存重抓，绝不拿别家机器出图
+        _mm = pubwork._model_mismatch(info, model)
+        if _mm:
+            if log:
+                log("缓存参数型号对不上（页面标 %s ≠ 请求 %s），弃缓存重抓" % (_mm, model))
+            info = None
         if not info or not (info.get("props") or []):
             info = pubwork.work(model, prog=lambda p, m: (log(m) if log else None))
     except Exception as e:
@@ -2847,11 +2861,13 @@ def _manual_overrides(mdir, log):
         return None
 
     # ① 机图：主图.* 优先
+    ok_prod = False
     front = _find(lambda s: s == "主图" or s.startswith("主图_"))
     if front:
         picked = os.path.join(mdir, "product.png")
         try:
             _rescue_prod(Image.open(front), log).save(picked)
+            ok_prod = True
             if log:
                 log("机图：用户手工放的 %s 优先（→ product.png，跳过 AI 选图）" % os.path.basename(front))
         except Exception:
@@ -2862,6 +2878,7 @@ def _manual_overrides(mdir, log):
         si = os.path.join(mdir, "sizeimg.jpg")
         if _clean_sizeimg(size, si) and log:
             log("尺寸图：用户手工放的 %s 优先（清洗 → sizeimg.jpg）" % os.path.basename(size))
+    return ok_prod
 
 
 def _rescue_sizeimg_official(mdir, dims=None, log=None):
@@ -2949,20 +2966,23 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
     「边框同色+泛洪抠底」选抠出主体最大且落地的。官网尺寸线框图顺带识别存
     sizeimg.jpg 给 img4。横幅/场景图/拼图/悬浮创意图自动淘汰。"""
     os.makedirs(mdir, exist_ok=True)
-    _manual_overrides(mdir, log)          # 用户手工图优先（2026-11-17），覆写后重新判定
+    _man_prod = _manual_overrides(mdir, log)   # 用户手工图优先（2026-11-17），覆写后重新判定
     picked = os.path.join(mdir, "product.png")
     sizeimg = os.path.join(mdir, "sizeimg.jpg")
     have_size = os.path.isfile(sizeimg)
     # 2026-11-14：主图不再无限续命——候选里有新图就重走 AI 选图+把关（_cand_newer）
     if os.path.isfile(picked) and have_size and not _cand_newer(mdir, picked):
         return picked
+    # 2026-11-19 修「手工主图被 AI/图库选图盖掉」（BCD-335WLDPGU1 实锤）：手工主图
+    # 落盘后 sizeimg 还没出时，流程会掉进 AI/软件图库选图把 product.png 覆写。
+    # 手工图一锤定音——机器图后续 AI/图库/启发式一律不再跑（尺寸图逻辑照常往下走）。
+    have_prod = bool(_man_prod)
     # ① AI 选图先行（2026-10-29 用户令「蓝底也跟聚光一样会选好的图」）：
     # 复用聚光/发布图同款视觉选图（pei_core.zhipu_pick_images，缓存 _ai_pick_v5.json
     # 与聚光共享——同一台机器两边不重复烧视觉额度），取 front（正面整机）抠底。
     # 顺序教训（CWB12-27BKU1 实锤）：原来「软件图库」排在 AI 前面，图库里的开门
     # 内部照直接当选，AI 根本轮不到——聚光用官网关门整机照、蓝底却拿开门图。
     # 现在 AI 先挑（有缓存零成本），挑不中/AI 不可用/候选不足 → 退图库，再退启发式。
-    have_prod = False
     if not have_prod:
         try:
             import pubwork as _pw
@@ -3983,7 +4003,7 @@ def _split_name(name, model):
     return line1, line2 + model
 
 
-def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None):
+def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
     model = (info.get("model") or "").strip()
     # 用户令（2026-10-21）：首图胶囊必须取自软件「货源名称」字段，不许自由发挥
     row = _payload_row(model)
@@ -4369,7 +4389,7 @@ def sync_blue4_size(model, info, log=None):
         if not (info and (info.get("props") or [])):
             return
         ai_dims = _ai_read_size_nums(si, log)
-        cfg = _build_cfg(info, mdir=kd, ai_dims=ai_dims)[0]   # 2026-11-11 修：_build_cfg 返回 5 元组，取 cfg（原来整包传给 _render_img4 必炸、被 except 吞成静默不重出）
+        cfg = _build_cfg(info, mdir=kd, ai_dims=ai_dims, log=log)[0]   # 2026-11-11 修：_build_cfg 返回 5 元组，取 cfg（原来整包传给 _render_img4 必炸、被 except 吞成静默不重出）
         _render_img4(cfg, b4, prod)
         log("官方尺寸图后到，蓝底参数图已自动重出（img_4 换官方图版）")
     except Exception as e:
@@ -4597,7 +4617,7 @@ def generate(model, force=0, log=None):
     log("组装套图数据…")
     _ai_dims = _ai_read_size_nums(os.path.join(mdir, "sizeimg.jpg"), log) if (
         mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg"))) else None
-    cfg, titles, points, aftersale, aftersales = _build_cfg(info, mdir=mdir, ai_dims=_ai_dims)
+    cfg, titles, points, aftersale, aftersales = _build_cfg(info, mdir=mdir, ai_dims=_ai_dims, log=log)
     log("渲染四张 1080×1080…")
 
     def _p(s):
