@@ -442,6 +442,10 @@ def fetch_official(model, log, need_imgs=False):
         if _pagem and norm_model(_pagem) != nm:
             log("官网[%s]型号对不上（页面标 %s ≠ %s），弃用换下一个" % (s['name'], _pagem[:30], model))
             continue
+        if not _pagem and ('leader.com.cn' in url or 'haier.com' in url or 'casarte.com' in url):
+            # 2026-11-20 补：官网通用页连「型号」行都没有（335WLLFDEDBXU1 实锤串 342 页），拒
+            log("官网[%s]页面没标型号（通用页嫌疑），弃用换下一个" % s['name'])
+            continue
         log("官网[%s]命中：%s / 参数 %d 组" % (s['name'], pname[:30], len(groups)))
         return {'source': '官网', 'brand': s['name'], 'pname': pname, 'price': price or '',
                 'url': url, 'groups': [[g, kv] for g, kv in groups],
@@ -536,7 +540,7 @@ PROMPT = """你是闲鱼家电卖家文案写手。产品：{pname}（型号 {mo
    {brand}三门冰箱 226L 风冷无霜 {model} 全新机 家用节能 全国联保
    {kk_titles}
 3) points：正好5-8条卖点（聚光用）。【真实数据】是你唯一的事实来源：每条必须锚定至少一个真实参数（数字或参数名/参数值），数字一个都不许编、参数表里没有的维度一个字都不许写，每条≤36字。
-   文风放开（2026-11-17 用户令「让AI自由发挥」）：像懂行的卖家向朋友推荐这台机器——句式每条不一样，可以有场景、有画面、有对比（「夜里洗衣服也不吵」「一周食材一次买齐」这种生活表达随便用），不要每条都是「参数值＋参数名，一句结果」一个模子；但也别堆形容词喊口号，每条都得落到这台机器的真实本事上。
+   写法（2026-11-20 用户令「把参数塞给你、全部按参数来写」，实锤「周末采购一周食材」）：每条卖点就是一条参数事实的行家表述——把【真实数据】参数表里的参数逐条写成卖点（参数名+参数值进句子），语序/措辞每条换着来、别一个模子；但只许写参数本身和它对应的机器事实，绝不许写生活场景、使用画面、心理感受和效果承诺（「周末采购一周食材」「装满不拥挤」「百搭又耐看」「摆哪都显质感」这类一句都不许出现）。
    依然禁止：编造【真实数据】里没有的数字或功能；把尺寸/外形/净重当卖点；极限词；括号标注参数名。
    差异化硬要求（2026-11-14 用户令「卖点全是大同小异的要AI干嘛」）：先从【真实数据】里找出这台机器跟同品类其他型号**最不一样**的
    2-3 个参数（容量档位、功率、能效等级、核心技术、特色功能、适用场景数字），把它们写成前 2-3 条；
@@ -561,10 +565,10 @@ def _kk(kind):
 # 跟聚光款（参数直给）错开——追加到 PROMPT 尾部，铁律照旧。
 STYLE3_X = """
 
-【本单特殊要求——第三种文案（家庭贴心风）】
+【本单特殊要求——第三种文案（卖家干货体）】
 这一单是同一台机器的第三套文案，写法必须跟「参数直给型」拉开距离：
-- 文风：像给家里老人孩子挑东西的贴心卖家——多讲全家人用着省心的生活场景（老人会不会用、一家几口够不够装、放厨房客厅方不方便），口语、温和、有温度；
-- 卖点：5-8 条，每条仍必须锚定【真实数据】里的真实参数（数字不许编），但角度要贴家庭日常，句式跟参数直给型完全不同，别一句一个参数值；
+- 写法：像懂行卖家给买家列的干货清单——每条=一个真实参数（参数名+参数值进句子），一条顶一条；挑参数的角度跟常规型错开（常规型先写主参数，这单先写差异化参数），措辞和语序完全不同；
+- 禁止：生活场景、使用画面、心理感受、效果承诺（「周末采购一周食材」「装满不拥挤」「百搭耐看」这类一句不许出现）；「我觉得/真省心/我家实测」这类第一人称感受一律不写；「看到就回/随时在线」这类回复时效承诺一律不写；
 - 标题三条仍守铁律（型号全码+成色词+服务词），但语序换一种排法，别跟常规版式一样。
 """
 
@@ -604,6 +608,12 @@ SIZE_WORD_RE = re.compile(
 SIZE_NUM_RE = re.compile(r"\d+(?:\.\d+)?\s*[*×xX]\s*\d+(?:\.\d+)?\s*[*×xX]\s*\d+(?:\.\d+)?")
 # 用户令「怎么文案里还会有全新原封」：这个词从词表里整体除名，标题/卖点出现即剔。
 NO_WORDS = ("全新原封", "全新未拆封", "全新未开封")
+# 2026-11-20 用户令「不要有这些什么鬼，全部按参数来写」（实锤「周末采购一周食材，冰箱
+# 轻松装满不拥挤」「百搭又耐看，摆哪都显质感」）：场景/生活画面/心理感受类套话一票剔除
+# ——prompt 已明令禁止，这里硬闸兜底，AI 不听话就整句毙。
+SCEN_WORDS = ("周末采购", "一周食材", "一次买齐", "买齐", "囤", "聚会", "装满", "不拥挤",
+              "百搭", "耐看", "显质感", "质感", "摆哪", "高级配色", "有档次", "有面子",
+              "口感", "更新鲜", "保鲜期延长", "幸福感", "仪式感", "拿得出手")
 
 _FACT_FLOATS = {}
 
@@ -625,7 +635,7 @@ def _is_size_line(line):
     return False
 
 
-def _verify(ai, facts, nums_set, bans=(), grounded=()):
+def _verify(ai, facts, nums_set, bans=(), grounded=(), model=''):
     """防编造：titles/points 整行剔除。
     2026-11-14 加两道闸（用户令「谁看得懂啊」+「这种肯定不是卖点」）：
       · 参数直给卖点每条必须含数字，光有形容词的空话直接扔；
@@ -635,14 +645,30 @@ def _verify(ai, facts, nums_set, bans=(), grounded=()):
       · 「全新原封/全新未拆封」等被除名的词命中即扔。
     2026-11-17 补一条（用户令「蓝底都能写怎么到聚光就写不了」）：无数字的行如果
       命中【真实参数值/参数名】（grounded，如「洗烘一体」「一级能效」）也算数——
-      防编造防的是凭空冒出来的，不是真参数不带数字。"""
+      防编造防的是凭空冒出来的，不是真参数不带数字。
+    2026-11-20 加型号闸（BCD-335WLLFDEDBX1 丢 U 实锤）：行里出现长得像型号的串
+      （大写字母数字+连字符）就必须跟真型号全码精确一致——AI 缩写/漏字母的串号
+      型号比不写还毒，差一个字符整行毙。数字闸拦不住它（335/1 都是「真数字」）。"""
     fl = _fact_floats(facts)
+    _true_models = {str(model or '').strip().upper()}
+    try:
+        _true_models.add(norm_model(model or '').upper())
+    except Exception:
+        pass
+    _true_models.discard('')
 
     def ok(line):
         if _is_size_line(line):
             return False
         for w in NO_WORDS:
             if w in line:
+                return False
+        for w in SCEN_WORDS:
+            if w in line:
+                return False
+        # 型号闸：像型号的串必须全码对上真型号
+        for _c in re.findall(r'[A-Z0-9]{2,}(?:-[A-Z0-9]+)+', str(line).upper()):
+            if _c not in _true_models:
                 return False
         for n in NUM_RE.findall(line):
             if n in facts or n in nums_set:
@@ -690,10 +716,24 @@ def glm_copy(model, kind, data, log):
         bans = _cc.ban_words("%s %s" % (data.get('pname') or '', model), _props)
     except Exception:
         cat_block, bans = "品类：未识别（只写参数表里真实存在的项）", ()
+    # 跨品类护栏（2026-11-20 实锤「开着空调也不心疼电费」出现在冰箱文案里）：
+    # 认出是冰箱就禁提别的大家电，AI 串台词一票剔除。
+    if '冰箱' in (str(data.get('cat') or '') + str(data.get('pname') or '')):
+        bans = tuple(bans) + ('空调', '洗衣机', '电视', '微波炉', '洗碗机')
     kk_titles = ('注意：这是正品全新机——标题里必须用「全新机」，绝不许出现「展示样机/样机/全新原封」字样。'
                  if kind != 's' else
                  '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新机/全新/全新原封」字样。')
     nums_set = set(NUM_RE.findall(norm_model(model)))
+    # 2026-11-20 三列撞车治理：其他列（含蓝底口径那份）已发出的句子列成禁复用清单，
+    # 直接喂给 AI——它看不见别列写了什么才是全列撞车的病根。
+    _kk2 = _kk(kind)
+    _others = _other_copy_lines(model, _kk2) + (_blue_points(model) or [])
+    _ban_block = ""
+    if _others:
+        _ban_block = ("\n\n【另一列已发出的文案——禁复用清单】下面这些句子已经用在别的列了，"
+                      "你不许再写意思相同或连续7字以上相同的句子（型号/品牌/容积这类硬指标数字除外），"
+                      "每条卖点必须换角度、换句式、换措辞重新写（仍只许写参数事实，不许编场景）：\n"
+                      + "\n".join("- " + o for o in _others[:30]))
     # 真参数词表（2026-11-17）：参数值/参数名里 ≥3 字的实词——无数字卖点命中即放行
     # （「洗烘一体」「一级能效」是真参数不带数字，不该被当空话剔）。值为「暂无数据」
     # 的参数整条不算（机器可能压根没有，AI 提了反而是编造）。
@@ -722,6 +762,8 @@ def glm_copy(model, kind, data, log):
             _ptxt = PROMPT.format(model=model, pname=data.get('pname') or model, brand=brand,
                                   no_params=no_params, kk_titles=kk_titles, facts=facts,
                                   cat_block=cat_block)
+            if _ban_block:
+                _ptxt += _ban_block
             if kind == 'x':
                 _ptxt += STYLE3_X
             raw = _chat(_ptxt)
@@ -730,17 +772,28 @@ def glm_copy(model, kind, data, log):
         except Exception as e:
             log("AI 第 %d 次生成失败：%s" % (attempt + 1, e))
             ai = {}
-        res = _verify(ai, facts, nums_set, bans, grounded)
+        res = _verify(ai, facts, nums_set, bans, grounded, model=model)
         # 价格尾巴兜底：AI 没听话写出 1649.0元 → 1649元（4.5kg 这类真小数不受影响）
         for _k in ('titles', 'points'):
             res[_k] = [re.sub(r'(\d)\.0+(?=[^\d]|$)', r'\1', s) for s in res[_k]]
         # 质量闸：卖点 8-40 字（参数直给不写长句，剔口水话）
         res['points'] = [p for p in res['points'] if 8 <= len(p) <= 40]
-        score = len(res['points']) + len(res['titles'])
+        # 2026-11-20 三列撞车：重复句重罚（一条 -3），两次生成取「跟其他列最不像」那次。
+        # 基线 +10：AI 哑火吐空档时（两次都解析失败/全被闸剔）得分恒为最低，
+        # 绝不许空档赢过带撞车罚分的实档（335 实锤：实档 -5 被空档 0 翻盘）。
+        if not res['points'] and not res['titles']:
+            score = -100
+            _nd = 0
+        else:
+            _nd = sum(1 for _l in (res['titles'] + res['points'])
+                      if _is_dup_line(_l, _others, model, brand)) if _others else 0
+            score = 10 + len(res['points']) + len(res['titles']) - 3 * _nd
         if score > best_score:
             best, best_score = res, score
-        if len(res['points']) >= 5:
+        if len(res['points']) >= 5 and (not _others or _nd <= 1):
             break
+        if _others and _nd:
+            log("第 %d 次生成跟其他列撞车 %d 条，重试换角度" % (attempt + 1, _nd))
         log("第 %d 次生成质量不够（卖点 %d/5，空话或无数字被剔）" % (attempt + 1, len(res['points'])))
     res = best or {'titles': [], 'points': [], 'xhs': []}
     dropped = ((3 - len(res['titles'])) + (8 - len(res['points'])))
@@ -881,6 +934,117 @@ def _dedupe_vs_blue(pts, blue, cap=5):
     if not out:
         out = list(pts or [])
     return out[:cap]
+
+
+# 2026-11-20 三列大同小异实锤（用户令「能不能改一改」）：科创列=蓝底口径、东里列=kind=l、
+# 文案三列=kind=x，三列各写各的 → 「400L大容量」「冷藏261L+冷冻139L」全列撞车。
+# 治法：① AI prompt 里喂「其他列已发出的句子」当禁复用清单；② 打分时重复句重罚，
+# 两次生成取「跟其他列最不像」的那次；③ generate() 末尾再硬过滤一遍换皮重复。
+
+def _lcs_len(a, b):
+    """最长公共连续子串长度（中文卖点换皮比对用）。"""
+    if not a or not b:
+        return 0
+    if len(a) > len(b):
+        a, b = b, a
+    prev = [0] * (len(b) + 1)
+    best = 0
+    for ca in a:
+        cur = [0] * (len(b) + 1)
+        for j, cb in enumerate(b):
+            if ca == cb:
+                cur[j + 1] = prev[j] + 1
+                if cur[j + 1] > best:
+                    best = cur[j + 1]
+        prev = cur
+    return best
+
+
+def _cmp_line(line, model, brand):
+    """比对键：剥掉型号全码/品牌词/标点空白，只留实义文字再比。"""
+    s = str(line or "")
+    for w in (norm_model(model) or "", str(brand or "").strip(), "品牌"):
+        if w and w in s:
+            s = s.replace(w, "")
+    return re.sub(r"[\s，,。；;：:、！!？?·\-—()（）/\+]+", "", s)
+
+
+def _is_dup_line(line, others, model, brand):
+    """换皮重复判定：剥掉型号/品牌后连续 7 字以上撞上其他列的句子即算。"""
+    a = _cmp_line(line, model, brand)
+    if len(a) < 8:
+        return False
+    for o in others:
+        b = _cmp_line(o, model, brand)
+        if b and _lcs_len(a, b) >= 7:
+            return True
+    return False
+
+
+def _other_copy_lines(model, kk):
+    """其他列已发出的句子清单（kind 缓存 l/s/x 互查，供禁复用/硬过滤）。"""
+    nm = _safe_dir(norm_model(model) or model)
+    out = []
+    for k2 in ("l", "s", "x"):
+        if k2 == kk:
+            continue
+        f = os.path.join(copy_root(), "%s_%s_v4.json" % (nm, k2))
+        if not os.path.isfile(f):
+            continue
+        try:
+            d = json.load(io.open(f, encoding="utf-8"))
+        except Exception:
+            continue
+        for key in ("titles", "points"):
+            for t in (d.get(key) or []):
+                if isinstance(t, str) and t.strip():
+                    out.append(t.strip())
+    return out
+
+
+def _load_kind_cache(model, k):
+    """读指定列的文案缓存（读不到/坏了返回 {}），供文案三「按参数、改排版」复用。"""
+    nm = _safe_dir(norm_model(model) or model)
+    f = os.path.join(copy_root(), "%s_%s_v4.json" % (nm, k))
+    if not os.path.isfile(f):
+        return {}
+    try:
+        return json.load(io.open(f, encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+# 2026-11-20 用户令「文案就是不肯给我改是吧」实锤：x/l 列卖点「700mm超薄机身」
+# 同开头整词撞车（规格词就那几个，AI 禁了还写）。撞车的开头规格句自动「换装」：
+# 数字挪进句中换种说法（400L大容量，… → 容量一次给到400L，…），换完不再撞才收。
+_REWORD_OPENERS = (
+    ("大容量", "容量一次给到"),
+    ("超薄机身", "机身厚度压到"),
+    ("窄机身", "机身宽度只有"),
+    ("合适高度", "高度正好卡在"),
+    ("高级配色", "颜色用的是"),
+    ("配色", "颜色用的是"),
+)
+
+
+def _reword_opener(line):
+    s = str(line)
+    m = re.match(r"^(\d+(?:\.\d+)?)(L|升|mm|分贝|W|kg|KG)([^，,]*)[，,]\s*(.+)$", s)
+    if m:
+        num, unit, desc, rest = m.group(1), m.group(2), m.group(3).strip(), m.group(4).strip()
+        for k, v in _REWORD_OPENERS:
+            if k in desc:
+                return "%s%s%s，%s" % (v, num, unit, rest)
+    m = re.match(r"^([一-龥]{2,4})(?:高级)?配色[，,]\s*(.+)$", s)
+    if m:
+        return "颜色用的是%s，%s" % (m.group(1), m.group(2))
+    m = re.match(r"^([12一二]级)能效([^，,]*)[，,]\s*(.+)$", s)
+    if m:
+        return "能效%s%s，%s" % (m.group(1), m.group(2).strip(), m.group(3))
+    m = re.match(r"^运行噪音\s*(\d+(?:\.\d+)?)\s*分贝[^，,]*[，,]\s*(.+)$", s)
+    if m:
+        return "噪音控制在%s分贝，%s" % (m.group(1), m.group(2))
+    return s
 
 
 # ---------------------------------------------------------------- 描述拼装
@@ -1066,6 +1230,14 @@ def generate(model, kind='l', force=0, log=None):
             data['pname'] = data.get('pname') or ((_cfg.get('brand') or '') + _cat)
             if log:
                 log("品类补强：文案品类用蓝底口径「%s」" % _cat)
+        # 品牌补强（2026-11-20 kind=l 缓存标题出现占位词「品牌」实锤）：leader 这类
+        # 官网抓不到品牌的机器，标题里绝不让「品牌」两个字占位——用蓝底 cfg.brand 兜底。
+        if not str(data.get('brand') or '').strip():
+            _bd = (_cfg.get('brand') or '').strip()
+            if _bd:
+                data['brand'] = _bd
+                if log:
+                    log("品牌补强：文案品牌用蓝底口径「%s」" % _bd)
     except Exception:
         pass
     # 价格统一整数显示：抓来的 "1649.0" 直接进标题会带小数尾巴（2026-10-12 实锤）
@@ -1075,7 +1247,32 @@ def generate(model, kind='l', force=0, log=None):
         data['price'] = str(int(_f)) if _f == int(_f) else str(round(_f, 2))
     except ValueError:
         pass
-    ai = glm_copy(model, kk, data, log)
+    # 2026-11-20 用户令「全部按参数来弄，改排版即可」：文案三（kind=x）不再单独让
+    # AI 另写一套（参数就那几条，写出来还是大同小异），直接复用聚光（kind=l）同一份
+    # 参数事实做排版级变换——开头换装 + 分句轮换（A，B，C→B，C，A）+ 顺序轮换，
+    # 标题倒序重排。事实同一份、措辞和排版必异。
+    ai = None
+    _x_layout = False
+    if kk == 'x':
+        _lsrc = _load_kind_cache(model, 'l')
+        if _lsrc and (_lsrc.get('points') or _lsrc.get('titles')):
+
+            def _layout(p):
+                q = _reword_opener(p)
+                parts = [x.strip() for x in re.split(r"[，,]", q) if x.strip()]
+                if len(parts) >= 3:
+                    q = "，".join(parts[1:] + parts[:1])
+                return q
+
+            _px = [_layout(p) for p in (_lsrc.get('points') or [])]
+            if len(_px) >= 3:
+                _px = _px[2:] + _px[:2]
+            ai = {'titles': list(_lsrc.get('titles') or [])[::-1], 'points': _px}
+            _x_layout = True
+            if log:
+                log("文案三按用户令「按参数、改排版」：复用聚光参数事实，换装+分句轮换+顺序轮换")
+    if ai is None:
+        ai = glm_copy(model, kk, data, log)
     mdir = os.path.join(copy_root(), nm)
     # 图片合并：官网图在前、欣盛图在后，URL 去重后全部落盘
     pairs, _seen = [], set()
@@ -1102,7 +1299,31 @@ def generate(model, kind='l', force=0, log=None):
     # 2026-11-14 用户令「640*420*390mm 横式壁挂节省空间算什么卖点」：尺寸/外形类
     # 兜底再扫一遍（AI 闸在 _verify，这条兜官网 sellpoints 直通的漏网）。
     _pts0 = _dedupe_vs_blue(pts, _blue_points(model), cap=5)
-    pts = [p for p in _pts0 if not _is_size_line(p) and not any(w in p for w in NO_WORDS)]
+    pts = [p for p in _pts0 if not _is_size_line(p)
+           and not any(w in p for w in NO_WORDS) and not any(w in p for w in SCEN_WORDS)]
+    # 2026-11-20 三列撞车治理：AI 写完再硬过滤一遍——跟其他列/蓝底连续 7 字撞车的
+    # 换皮句整条扔；剔完不足 3 条就回退（条数优先，撞车靠 prompt 禁复用清单压）。
+    _oth2 = _other_copy_lines(model, kk) + (_blue_points(model) or [])
+    if _oth2 and not _x_layout:
+        _bd0 = str(data.get('brand') or '')
+        _kept, _rw = [], 0
+        for _p in pts:
+            if _is_dup_line(_p, _oth2, model, _bd0):
+                _p2 = _reword_opener(_p)
+                if not _is_dup_line(_p2, _oth2, model, _bd0):
+                    _kept.append(_p2)
+                    _rw += 1
+                # 换装后还撞 → 整条扔
+                continue
+            _kept.append(_p)
+        if _rw and log:
+            log("撞车卖点开头换装 %d 条（同开头规格句换说法）" % _rw)
+        if len(_kept) >= 3:
+            if len(_kept) < len(pts) and log:
+                log("跟其他列撞车的卖点剔掉 %d 条（连续7字换皮比对）" % (len(pts) - len(_kept)))
+            pts = _kept
+        elif log:
+            log("撞车卖点剔完只剩 %d 条，保留原序 %d 条（禁复用清单兜底）" % (len(_kept), len(pts)))
     res = {"ok": True, "cached": False, "model": model, "kind": kk,
            "source": data['source'], "source_url": data['url'],
            "pname": data['pname'], "price": data['price'],

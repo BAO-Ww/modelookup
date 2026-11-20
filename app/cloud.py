@@ -503,13 +503,41 @@ def kit_local_images():
     return out
 
 
+def kitset_root_for_sync():
+    """kit_sync_cloud 用的型号根目录（与 kit_local_images 同源）"""
+    import kitset as _ks
+    return _ks.kit_root()
+
+
 def kit_sync_cloud(log):
     """官网图云同步（2026-11-10 任务25，挂在「全部更新」末尾）：
     本机清单 → POST /kitexists 批量探测（500 键一批）→ 只传缺的。
-    管理号机器才推（/kitup 校验 admin/addimg）；返回 (n_push, err|None)。"""
+    管理号机器才推（/kitup 校验 admin/addimg）；返回 (n_push, err|None)。
+    2026-11-20 补型号闸（335WLLFDEDBXU1/400WLLTDEDS9U1 实锤）：抓错页的脏图会跟着
+    上云污染全端——只传 info.json 存在且过 pubwork._model_mismatch 的型号；
+    没有 info.json（图来自 R2 直拉/手工放）的不传，云端本来就有的不缺。"""
     rels = kit_local_images()
     if not rels:
         return 0, "本机没有官网图"
+    try:
+        import pubwork as _pw2, json as _json2
+        _root = kitset_root_for_sync()
+        _bad = set()
+        for _m in os.listdir(_root):
+            _ij = os.path.join(_root, _m, "info.json")
+            if os.path.isfile(_ij):
+                try:
+                    _inf = _json2.load(io.open(_ij, encoding="utf-8"))
+                except Exception:
+                    _bad.add(_m); continue
+                if _pw2._model_mismatch(_inf, _m):
+                    _bad.add(_m)
+            else:
+                _bad.add(_m)   # 没 info.json = 来源无法自证，宁缺勿错
+        if _bad:
+            rels = [r for r in rels if r.split("/", 1)[0] not in _bad]
+    except Exception:
+        pass
     missing = []
     for i in range(0, len(rels), 500):
         j, err = cloud_req("/kitexists", "POST", {"keys": rels[i:i + 500]}, timeout=120)

@@ -6506,7 +6506,7 @@ function openBaoView(k){
   }
   function renderKCopy(D){ _kpaint(wrap.querySelector('#bao_cpy_k'), D, MJD.k); }
   /* 文案三 = 第三种文案（2026-11-17 用户令「这个文案也是第三种文案」）：
-     kind=x 独立 AI 生成（家庭贴心风，后端追加风格块），跟科科/聚光都不互为镜像；
+     kind=x 独立 AI 生成（卖家干货体，后端追加风格块），跟科科/聚光都不互为镜像；
      样机模式/双击复制照旧独立。 */
   var KBX = null;
   function renderK2Copy(D){
@@ -6540,7 +6540,7 @@ function openBaoView(k){
   function loadXCopy(force){
     var bx = wrap.querySelector('#bao_cpy_k2');
     if (!bx) return;
-    bx.innerHTML = '<div style="color:#475569;padding:20px 2px;font-size:12.5px">正在生成第三种文案（家庭贴心风）…已 <b id="kx_secs">0</b> 秒（有缓存秒出）</div>';
+    bx.innerHTML = '<div style="color:#475569;padding:20px 2px;font-size:12.5px">正在生成第三种文案…已 <b id="kx_secs">0</b> 秒（有缓存秒出）</div>';
     /* kind=x 独立任务键/独立缓存，跟聚光（kind=l）互不干扰 */
     fetch('/api/copy?model=' + encodeURIComponent(k) + '&kind=x' + (force ? '&force=1' : '') + '&bg=1')
       .then(function(r){ return r.json(); })

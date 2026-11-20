@@ -1095,6 +1095,27 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
                 ai_dims = kitset._ai_read_size_nums(_si, lambda s: None)
             except Exception:
                 ai_dims = None
+        # 2026-11-20 leader 335/400 实锤（手工录入机型）：壳页/外源图捞来的「尺寸图」
+        # 是别家型号的图（335 图印 600*1800*650、400 银色串图 AI 读 620*1800*620）。
+        # 手工录入机型没有官网抓取链，kitset 里出现的 sizeimg 必然来自壳页/ZOL
+        # 外源——一律不可信，弃图（负面标记不再重猎），手绘线框印手工核对的
+        # 官方数字（kitset info.json 的 外形尺寸，经 props 传进 _build_cfg）。
+        _hand_official = False
+        try:
+            _kij = os.path.join(kdir, "info.json")
+            if os.path.isfile(_kij):
+                with open(_kij, encoding="utf-8") as _f:
+                    _hand_official = "手工录入" in str(json.load(_f).get("source") or "")
+        except Exception:
+            _hand_official = False
+        if _hand_official and os.path.isfile(_si):
+            try:
+                os.remove(_si)
+                kitset._neg_set(kdir, "sizeimg_official")
+                kitset._neg_set(kdir, "sizeimg_zol")
+            except Exception:
+                pass
+            ai_dims = None
         # 尺寸补漏（2026-10-29 用户令）：没官方尺寸图/AI 没读出数字时，
         # 让 kitset 去中关村补外形尺寸参数再组 cfg（蓝底/聚光同一来源）
         if not ai_dims:
@@ -1155,18 +1176,21 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
         return save(_hint_pill(cv), dst)
     if dims:
         # 暗底手绘线框：正视图+宽高金色标注，深度一句话（几何同蓝底、线条改浅色）
+        # 2026-11-20 用户实锤「尺寸数字看不见了」：标注字原来用 TX1(#fff 暗底白字)，
+        # 聚光换纸感白底后白字直接隐形——浅底一律换深墨色，字号 26→30。
         Wd, Hd, Dd = dims
+        _dim_ink = INK_TXT if _SPOT_LIGHT else TX1
 
         def _dl(x1, y1, x2, y2, label, vert=False):
             dr.line([x1, y1, x2, y2], fill=_gold + (220,), width=2)
             if vert:
                 dr.line([x1 - 8, y1, x1 + 8, y1], fill=_gold + (220,), width=2)
                 dr.line([x2 - 8, y2, x2 + 8, y2], fill=_gold + (220,), width=2)
-                T(dr, (x1 + 18, (y1 + y2) // 2), label, 26, TX1, "lm")
+                T(dr, (x1 + 18, (y1 + y2) // 2), label, 30, _dim_ink, "lm")
             else:
                 dr.line([x1, y1 - 8, x1, y1 + 8], fill=_gold + (220,), width=2)
                 dr.line([x2, y2 - 8, x2, y2 + 8], fill=_gold + (220,), width=2)
-                T(dr, ((x1 + x2) // 2, y1 - 20), label, 26, TX1, "mb")
+                T(dr, ((x1 + x2) // 2, y1 - 24), label, 30, _dim_ink, "mb")
 
         # 2026-11-04 用户实锤（HP-35）：有机图却画通用矩形，观感太糙——
         # 优先拿机图描浅色线稿当正视图，宽高标注跟着线稿实际边界走

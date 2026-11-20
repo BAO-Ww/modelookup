@@ -837,18 +837,18 @@ def sellpoints(info, exclude=None):
     if size:
         m = re.match(r"(\d{3})", size)
         if m and int(m.group(1)) < 600:
-            add("%smm超薄机身，嵌入式安装更省空间" % m.group(1))
+            add("%smm超薄机身" % m.group(1))
     # 容量/容积：冰箱讲分储、热水器讲水量、洗衣机讲一次洗多少
     vol = num_of("总容积", "额定容量", "洗涤容量", "容积", "容量", "额定升数", "出水量")
     if vol:
         if "热水器" in cat:
-            add(vol + "升容量，一家三口洗澡管够")
+            add(vol + "升容量")
         elif "洗衣机" in cat or "干衣机" in cat:
-            add(vol + "kg 容量，床品四件套一次洗完")
+            add(vol + "kg 洗涤容量")
         elif "洗碗机" in cat:
-            add(vol + "套容量，锅碗瓢盆一起洗")
+            add(vol + "套容量")
         else:
-            add(vol + "升容量，冷藏冷冻分开存")
+            add(vol + "升总容积，冷藏冷冻分储")
     # 加热/动力类（2026-11-14 用户令「加热快怎么个快法要写明白」：按容量算整胆时间）
     heat = num_of("加热功率", "额定功率", "输入功率")
     if heat and "热水器" in cat:
@@ -865,78 +865,79 @@ def sellpoints(info, exclude=None):
             # 整胆 20→75℃（ΔT=55）：t = 1.163*L*ΔT/P 小时，向下取到 0.5 小时，只说算得出的
             _t = 1.163 * _L * 55.0 / _P
             _t = max(0.5, int(_t * 2) / 2.0)
-            add("%sW 加热，一胆水约 %s 小时就够洗" % (heat, ("%g" % _t)))
+            add("%sW 加热，整胆水约 %s 小时烧热" % (heat, ("%g" % _t)))
         else:
-            add(heat + "W 加热，烧水快、等得少")
+            add(heat + "W 加热功率")
     elif heat and ("烤箱" in cat or "微波" in cat):
-        add(heat + "W 功率，热得比一般机器快")
+        add(heat + "W 功率")
     pizz = find("匹数", "制冷量")
+    inv_kw = has_kw("变频")
     if "空调" in cat and pizz:
-        add(str(pizz) + "，客厅房间都压得住")
+        add(str(pizz) + "，变频恒温" if inv_kw else str(pizz))
     # 冰箱/冷柜特有
     ee = find("能效等级", "能效")
     if ee:
         # 2026-11-14 用户令「省电要有依据」：把等级摆前面，不跟别家比
-        add(str(ee).strip() + "能效，开着也不心疼电费")
+        add(str(ee).strip() + "能效，节能省电")
     noise = find("噪声", "噪音", "声功率")
     if noise:
         _nz = str(noise).strip()
         if not re.search(r"dB|分贝", _nz):
             _nz += " 分贝"
-        add("运行噪音 " + _nz + "，夜里也不吵")
+        add("运行噪音 " + _nz)
     cool = find("制冷方式")
     if cool and "风冷" in str(cool):
         add("风冷无霜，不用手动除霜")
     comp = find("压缩机", "定变频", "电机类型")
     if comp and "变频" in str(comp):
         if "洗衣机" in cat:
-            add("变频电机，洗得安静还省电")
+            add("变频电机")
         elif "空调" in cat:
-            add("变频恒温，凉得快也不费电")
+            add("变频恒温")
         else:
-            add("变频压缩机，温度稳、噪音低")
+            add("变频压缩机，控温稳定")
     # 洗衣机特有
     if "洗衣机" in cat:
         if has_kw("烘干", "洗烘"):
-            add("洗烘一体，阴雨天也不愁晾不干")
+            add("洗烘一体")
         if has_kw("除菌", "杀菌", "除螨"):
-            add("带除菌洗，贴身衣物更安心")
+            add("带除菌洗")
         if has_kw("直驱"):
-            add("直驱电机，动力稳、噪音低")
+            add("直驱电机")
     # 空调特有
     if "空调" in cat:
         if has_kw("自清洁", "清洁"):
-            add("自清洁内机，吹出来的风更干净")
+            add("自清洁内机")
         if has_kw("新风"):
-            add("带新风，关窗也有新鲜空气")
+            add("带新风功能")
     # 热水器特有
     if "热水器" in cat:
         if has_kw("防电墙", "安全防", "防干烧", "超温"):
-            add("防电墙 + 防干烧，老人孩子用着放心")
+            add("防电墙+防干烧，多重安全防护")
         if has_kw("保温", "发泡", "聚氨酯"):
-            add("保温层整体发泡，水温降得慢，不用反复烧")
+            add("保温层整体发泡，保温持久")
         if has_kw("零冷水", "即热"):
-            add("即开即热，不用放冷水干等")
+            add("即开即热")
         ht = num_of("最高温度", "出水温度")
         if ht:
-            add("最高 " + ht + "℃，热水够用")
+            add("最高水温 " + ht + "℃")
     # 油烟机特有
     if "油烟机" in cat:
         air = num_of("排风量", "风量", "排风")
         if air:
-            add(air + " 立方米大风量，爆炒不呛鼻")
+            add(air + " 立方米大风量")
     # 燃气灶/集成灶
     if "燃气灶" in cat or "集成灶" in cat:
         hs = num_of("热负荷", "额定热负荷", "火力")
         if hs:
-            add(hs + "kW 火力，爆炒够猛")
+            add(hs + "kW 热负荷")
         if has_kw("熄火保护"):
-            add("带熄火保护，汤汁溢了自动断气")
+            add("带熄火保护，溢锅自动断气")
     # 净水器
     if "净水器" in cat:
         fl_ = num_of("通量", "额定净水量", "净水量")
         if fl_:
-            add(fl_ + " 通量，接一杯水不用等")
+            add(fl_ + " 通量")
         if has_kw("除菌", "超滤", "过滤"):
             add("多级过滤，除菌除余氯")
     # 电视特有

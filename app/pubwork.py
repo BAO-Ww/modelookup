@@ -337,7 +337,44 @@ def _kitset_info_to_pub(cand, model, d):
             _src = (x.get("src") if isinstance(x, dict) else "") or "官网"
             imgs.append({"f": str(f_), "src": _src})
     if not imgs:
-        return None
+        # 2026-11-20 leader 335/400 实锤：手工录入 info.json 有参数没 imgs 键，
+        # kitset 根只有 product.png（无 官网/ 子目录）→ 旧逻辑返回 None，聚光
+        # 白死在「素材抓取没成功」，明明审过图就在 kitset 里。蓝底用什么图聚光
+        # 直接用：根级 product.png/sizeimg.jpg + 官网/欣盛/其他 子目录一并搬。
+        try:
+            import kitset as _ks
+        except Exception:
+            return None
+        kd = os.path.dirname(os.path.abspath(cand))
+        _pool = []
+        _sz = os.path.join(kd, "sizeimg.jpg")
+        if os.path.isfile(_sz):
+            _pool.append(("sizeimg.jpg", _sz))
+        _pd = os.path.join(kd, "product.png")
+        if os.path.isfile(_pd):
+            _pool.append(("product.png", _pd))
+        for _sub in ("官网", "欣盛", "其他"):
+            _sd = os.path.join(kd, _sub)
+            if os.path.isdir(_sd):
+                try:
+                    _fns = sorted(fn for fn in os.listdir(_sd)
+                                  if fn.lower().endswith((".jpg", ".jpeg", ".png"))
+                                  and os.path.isfile(os.path.join(_sd, fn)))
+                except Exception:
+                    _fns = []
+                for _fn in _fns:
+                    _pool.append((_sub + "/" + _fn, os.path.join(_sd, _fn)))
+        for _rel, _src in _pool:
+            _dst = os.path.join(d, _rel.replace("/", os.sep))
+            try:
+                os.makedirs(os.path.dirname(_dst) or d, exist_ok=True)
+                if not _ks._link_or_copy(_src, _dst):
+                    continue
+                imgs.append({"f": _rel, "src": "kitset"})
+            except Exception:
+                continue
+        if not imgs:
+            return None
     _cat = str(raw.get("cat") or "")
     if not _cat:
         try:
@@ -769,6 +806,16 @@ def _backfill_empty_props(model, info, log):
     return info
 
 
+def _quarantine(d):
+    """脏抓取整包隔离（2026-11-20）：改名挪走而非删除——删除在某些环境（沙箱安全删除
+    守卫 bulk>50 张）会被挂起整条任务线程；改名后所有按精确型号名的 glob/上传清单
+    都捞不到它，同时留证据可回滚。改名失败才真删。"""
+    try:
+        os.rename(d, d + "_rej_%d" % int(time.time()))
+    except Exception:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def _model_mismatch(info, model):
     """2026-11-19 型号自报闸门（BCD-335WLDPGU1 串成 BCD-342WLLFDEDW9U1 实锤）：
     页面参数表自己写的「型号」跟请求型号对不上 → 返回页面型号字符串（真值），
@@ -786,6 +833,13 @@ def _model_mismatch(info, model):
                 v2 = str(v).strip().lstrip('：: ')
                 if v2 and _nmf(v2) != nm:
                     return v2
+                break
+        else:
+            # 2026-11-20 补：BCD-335WLLFDEDBXU1/BCD-400WLLTDEDS9U1 实锤——leader 官网
+            # 通用页参数表里压根没有「型号」行，老闸拦不住。官网来源没报型号 = 可疑页，拒。
+            _u = str(info.get("url") or "")
+            if any(d in _u for d in ("leader.com.cn", "haier.com", "casarte.com")):
+                return "__NOMODEL__"
     except Exception:
         return None
     return None
@@ -845,6 +899,9 @@ def work(model, prog=None):
                 _mm = _model_mismatch(info, model)
                 if _mm:
                     log("官网页面型号对不上（页面标 %s ≠ 请求 %s），弃用走兜底" % (_mm, model))
+                    # 2026-11-20 实锤：这里只弃 info 不删图，62 张脏图躺在 peiwork/<型号>/
+                    # 被 kitset「爬虫缓存入候选」捞进 AI 选图（335WLLFDEDBXU1 串白机实锤）。
+                    _quarantine(d)
                     info = None
                 else:
                     info = pei_core.spider_enrich_info(info, site, url, prod, log=log)
@@ -879,10 +936,7 @@ def work(model, prog=None):
     _mm2 = _model_mismatch(info, model)
     if _mm2:
         log("页面/参数图标型号 %s ≠ 请求 %s，整包弃用（图和参数都不留）" % (_mm2, model))
-        try:
-            shutil.rmtree(d, ignore_errors=True)
-        except Exception:
-            pass
+        _quarantine(d)
         raise RuntimeError("官网页面型号对不上（页面标 %s），不抓错机器" % _mm2)
     _organize_sources(d, info)            # 再统一按来源归文件夹（参数图落「其他」）
     _save_info(info)

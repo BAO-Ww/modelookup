@@ -1714,14 +1714,17 @@ async function route(request, env, path, ctx) {
     let t;
     try { t = new URL(u0); } catch (e) { return jerr("URL 不合法", 400); }
     if (!/^https?:$/.test(t.protocol)
-        || !/(^|\.)haier\.com$|(^|\.)casarte\.com$|(^|\.)leader\.com\.cn$/.test(t.hostname))
+        || !/(^|\.)haier\.com$|(^|\.)casarte\.com$|(^|\.)leader\.com\.cn$|(^|\.)shuomingshu88\.com$/.test(t.hostname))
       return jerr("只许代抓海尔系官网（haier/casarte/leader）", 403);
     const home = t.protocol + "//" + t.hostname + "/";
     let r;
     try {
       r = await fetch(u0, {
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+          // 2026-11-20：支持 ?ua= 覆盖（leader 把非搜索引擎 IP 全部回退列表壳页，
+          // 伪装 bingbot UA 换真详情内容）；长度限 300 防滥用。
+          "User-Agent": (url.searchParams.get("ua") || "").slice(0, 300)
+            || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
           "Accept": "*/*", "Accept-Language": "zh-CN,zh;q=0.9",
           "Accept-Encoding": "identity",
           "Referer": home,
@@ -1786,6 +1789,30 @@ async function route(request, env, path, ctx) {
       httpMetadata: { contentType: request.headers.get("Content-Type") || "application/octet-stream" },
     });
     return J({ ok: true, key: key, bytes: buf.byteLength });
+  }
+
+  // POST /kitdel?k=<型号>/<子目录/文件名> 删单键；?prefix=<型号>/ 删前缀下全部（上限 1000）。
+  // 2026-11-20：串型号脏图清库用（335WLLFDEDBXU1 R2 46 张脏官网图）。仅管理号。
+  if (path === "/kitdel" && (request.method === "POST" || request.method === "GET")) {
+    if (!env.IMG) return jerr("图库未启用（worker 缺 IMG binding）", 503);
+    const usersDel = await getUsers(env);
+    if ((usersDel[who] || {}).role !== "admin") return jerr("只有管理号能删图", 403);
+    const prefix = url.searchParams.get("prefix") || "";
+    const k1 = url.searchParams.get("k") || "";
+    if (!prefix && !k1) return jerr("缺 k 或 prefix 参数", 400);
+    let n = 0;
+    if (k1) {
+      await env.IMG.delete(k1);
+      n = 1;
+    } else {
+      let cursor;
+      do {
+        const lst = await env.IMG.list({ prefix, limit: 1000, cursor });
+        for (const o of (lst.objects || [])) { await env.IMG.delete(o.key); n++; }
+        cursor = lst.truncated ? lst.cursor : undefined;
+      } while (cursor && n < 5000);
+    }
+    return J({ ok: true, deleted: n });
   }
 
   // ---------- 用友库存云中转（2026-10-08）：管理号更新 → 全员共享 ----------

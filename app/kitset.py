@@ -407,8 +407,10 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
         _spaced(d, (60, 88), cfg.get("brand_en", "HAIER"), _font(F_LIGHT, 30), INK, tracking=14)
     # logo 下面加型号（2026-11-13 用户令）；系列字与胶囊重复，主图只放型号。
     # 左侧品牌蓝小竖条提设计感
+    # 2026-11-20 用户实锤（BCD-400WLLTDEDS9U1「压到字了」）：型号行 26px 定宽会
+    # 被机图左缘压掉尾字（页眉防压闸只认 280 品牌安全区，型号行加长后超了）。
+    # 型号字移到机图尺寸定完再画，按「机图左缘-16px」余量自动缩字号（最低 16）。
     d.rectangle([60, 128, 64, 156], fill=_accent)
-    d.text((74, 142), cfg.get("model") or "", font=_font(F_BOLD, 26), fill=INK, anchor="lm")
     d.rectangle([60, 186, 108, 189], fill=_accent)
     th = cfg.get("img1_h", 860)
     # 电视等 16:9 横图实际渲染高远小于 th，按 th 定位会沉底/偏移——用实际高定位（2026-10-22）
@@ -434,6 +436,17 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
             h_act = 520.0 / _ar
     except Exception:
         pass
+    # 型号行（移到机图尺寸定完后画，2026-11-20 防机图压尾字）
+    try:
+        _mstr = cfg.get("model") or ""
+        if _mstr:
+            _mw_budget = max(120.0, (540 - (h_act * _pw / float(_ph)) / 2) - 74 - 16)
+            _msize = 26
+            while _msize > 16 and d.textlength(_mstr, font=_font(F_BOLD, _msize)) > _mw_budget:
+                _msize -= 2
+            d.text((74, 142), _mstr, font=_font(F_BOLD, _msize), fill=INK, anchor="lm")
+    except Exception:
+        d.text((74, 142), cfg.get("model") or "", font=_font(F_BOLD, 26), fill=INK, anchor="lm")
     # 2026-11-03 旧令「胶囊必超机图」已作废（2026-11-04 用户令：方块贴字、可以小，
     # 机器要露出来）——不再按机图宽反推最小宽和字号。
     d.ellipse([540 - 280, bottom - 28, 540 + 280, bottom + 2], fill=(238, 240, 243))
@@ -3692,6 +3705,9 @@ def _hard_points(info, pd, sp):
         def _nk(x):
             t = re.split(r"[，,]", str(x))[0].strip()
             t = t.replace("公斤", "kg").replace("KG", "kg").replace("ＫＧ", "kg")
+            # 2026-11-20 实锤「400L总容积」vs「400升总容积」「一级能效」vs「1级能效」
+            # 换皮双占两行：升→L、一级→1级 也归一
+            t = t.replace("升", "L").replace("一级", "1级")
             # 2026-11-17 用户实锤「12公斤大容量 / 12kg 容量」双占两行：大容量归一成容量
             t = t.replace("大容量", "容量").replace("大水量", "水量")
             # 2026-11-17 实锤「运行噪音 52dB / 52分贝低噪」双占两行：分贝归一 +
@@ -3709,84 +3725,89 @@ def _hard_points(info, pd, sp):
 
     def _eff_line(pre=""):
         if eff1:
-            add((pre + "一级能效变频电机，省电安静噪音低") if inv else (pre + "一级能效，洗一次电费不到一度"))
+            add((pre + "一级能效变频电机，省电低噪") if inv else (pre + "一级能效，节能省电"))
         elif inv:
             add(pre + "变频电机，省电安静噪音低")
 
     if "洗衣机" in cat or "波轮" in tt or "滚筒" in tt:
         if "双动力" in alltext:
-            add("双动力双电机，内外桶反向旋洗，洗净比高还防缠绕")
+            add("双动力双电机，内外桶反向旋洗")
         if "直驱" in alltext:
-            add("直驱变频电机，动力强噪音小，衣服磨损更小")
+            add("直驱变频电机，动力强噪音小")
         if "洗烘" in alltext:
-            add("洗烘一体，洗完直接穿，阴雨天不用愁")
+            add("洗烘一体，洗完直接穿")
         if cap_kg:
-            add("%s公斤大容量，床单被罩四件套一次洗完" % cap_kg)
+            add("%s公斤洗涤容量" % cap_kg)
         _eff_line()
         if wide and wide <= 600:
-            add("%dmm超薄机身，小阳台小空间也放得下" % wide)
+            add("%dmm超薄机身" % wide)
     elif "冰箱" in cat or "冷柜" in tt or "冰柜" in tt:
         if "风冷" in alltext:
-            add("风冷无霜，不用除霜不冻手")
+            add("风冷无霜，不用手动除霜")
         if cap_l:
-            add("%s升大容量，一周食材一次装下" % cap_l)
+            _lc = num(str(pd.get("冷藏室容积(L)", "") or pd.get("冷藏室容积", "")))
+            _fz = num(str(pd.get("冷冻室容积(L)", "") or pd.get("冷冻室容积", "")))
+            if _lc and _fz:
+                add("%sL总容积，冷藏%sL+冷冻%sL" % (cap_l, _lc, _fz))
+            else:
+                add("%sL总容积" % cap_l)
         if "十字" in alltext:
-            add("十字对开门，生熟分储不串味")
+            add("十字对开门，分区储存")
         elif "多门" in alltext:
-            add("多门分储，食材各归各位")
+            add("多门分储，分区存放")
         elif "对开" in alltext:
-            add("对开门大格局，食材一目了然")
+            add("对开门设计，分区分储")
         if "净味" in alltext or "除菌" in alltext or "杀菌" in alltext:
-            add("净味除菌，食材更保鲜不串味")
+            add("净味除菌")
         if eff1:
-            add("一级能效变频压缩机，恒温保鲜更安静" if inv else "一级能效，一天电费不到一度")
+            add("一级能效变频压缩机" if inv else "一级能效，节能省电")
         elif inv:
-            add("变频压缩机，恒温保鲜更安静")
+            add("变频压缩机，控温稳定")
     elif "洗碗机" in cat or "洗碗" in tt:
         if cap_set:
-            add("%s套大容量，锅碗瓢盆一次洗完" % cap_set)
+            add("%s套洗涤容量" % cap_set)
         if "开门速干" in alltext or "干燥方式" in str(pd):
-            add("智能开门速干，洗完即干不闷味")
+            add("智能开门速干")
         if "消毒" in alltext or "除菌" in alltext or "杀菌" in alltext:
-            add("高温除菌消毒，比手洗洗得更干净")
+            add("高温除菌消毒")
         if "嵌" in alltext:
-            add("嵌入式安装，橱柜里一点不占地")
+            add("嵌入式安装")
     elif "电视" in cat or "电视" in tt:
         n = num(str(pd.get("屏幕尺寸", "")) or (re.search(r"(\d{2,3})寸", tt).group(1) if re.search(r"(\d{2,3})寸", tt) else None))
         if n:
-            add("%s寸大屏，客厅观影够沉浸" % n)
+            add("%s寸大屏" % n)
         if "4K" in alltext.upper():
-            add("4K超高清，画面细节清清楚楚")
+            add("4K超高清")
         _eff_line()
         if "语音" in alltext:
-            add("语音遥控，动嘴就能换台")
+            add("语音遥控")
     elif "空调" in cat or "空调" in tt:
         n = num(str(pd.get("匹数", "")))
         if n:
-            add("%s匹，客厅卧室都带得动" % n)
+            add("%s匹%s" % (n, "变频空调" if inv else "空调"))
         if "自清洁" in alltext:
-            add("自清洁内机，吹出来的风更干净")
+            add("自清洁内机")
         _eff_line()
     elif "净水" in cat or "净水" in tt:
         if "RO" in alltext.upper() or "反渗透" in alltext:
-            add("RO反渗透，滤完直接喝")
+            add("RO反渗透过滤")
         n = num(str(pd.get("通量", "")))
         if n:
-            add("%sG大通量，接水不用等" % n)
+            add("%sG大通量" % n)
         # 2026-11-04 用户令「卖点才一个」：前置过滤器/超滤这类没 RO 没通量的，
         # 从官网 props 里抠硬货（HP-35 实锤整条链只剩一行尺寸）
         if "前置" in alltext or "管道" in alltext:
-            add("前置过滤，全屋用水第一道关")
+            add("前置过滤，全屋用水先过滤")
         if "不锈钢" in alltext and ("滤" in alltext):
-            add("不锈钢滤网滤芯，耐腐蚀用得久")
+            add("不锈钢滤网滤芯")
         if "反冲洗" in alltext or "冲洗" in alltext:
-            add("可冲洗滤芯，冲一冲接着用不换芯")
+            add("滤芯可反复冲洗")
         _pv = str(pd.get("进水压力", "") or pd.get("进水压力(Mpa)", ""))
         if re.search(r"\d", _pv):
-            add("%sMPa 宽水压适配，水压不稳也能装" % _pv.replace("MPa", "").replace("Mpa", "").strip())
+            add("%sMPa宽水压适配" % _pv.replace("MPa", "").replace("Mpa", "").strip())
         _dm = re.search(r"(\d{2,3}[*×x]\d{2,3}[*×x]\d{2,3})", str(pd.get("外形尺寸", "")) or alltext)
         if _dm:
-            add("%smm 小巧机身，装哪儿都不占地" % _dm.group(1))
+            add("%smm小巧机身" % _dm.group(1))
     elif "油烟机" in tt or "烟机" in tt or "爆炒风量" in str(pd) or "排风量" in str(pd):
         n = None
         for k, v in pd.items():
@@ -3797,47 +3818,47 @@ def _hard_points(info, pd, sp):
                     n = m.group(1)
                     break
         if n:
-            add("%sm³大风量，爆炒油烟不过脸" % n)
+            add("%sm³大风量" % n)
         n2 = num(str(pd.get("半消声室噪声(dB(A))", "")) or str(pd.get("半消声室噪音", "")))
         if n2:
-            add("%s分贝低噪，静音不扰眠" % n2)
+            add("%s分贝低噪" % n2)
         if eff1:
-            add("一级能效，天天做饭电费不心疼")
+            add("一级能效，节能省电")
         nums_dim = re.findall(r"(\d{3,4})", str(pd.get("外形尺寸(深*宽*高)mm", "")) or str(pd.get("外形尺寸", "")))
         if nums_dim and int(nums_dim[0]) <= 400:
-            add("%smm超薄机身，不碰头更省空间" % nums_dim[0])
+            add("%smm超薄机身" % nums_dim[0])
         elif len(nums_dim) >= 2 and int(nums_dim[1]) >= 800:
-            add("%smm宽拢烟腔，大锅爆炒也罩得住" % nums_dim[1])
+            add("%smm宽拢烟腔" % nums_dim[1])
     elif "燃气" in tt or "热水产率" in str(pd) or "气源" in str(pd):
         n = num(str(pd.get("热水产率(L/min)", "")))
         if not n:
             m = re.search(r"(\d{2})升", tt)
             n = m.group(1) if m else None
         if n:
-            add("%s升大水量，全家接力洗不等热水" % n)
+            add("%sL/min热水产率" % n)
         if "CO" in alltext.upper() and "防护" in alltext:
-            add("CO安全防护，用得暖更用得安心")
+            add("CO安全防护")
         elif "熄火" in alltext or "防干烧" in alltext or "双气" in alltext:
             add("多重安全防护，熄火断气自动保护")
         if "宽频" in alltext and "水温" in alltext:
-            add("宽频调温，夏天不烫冬天够暖")
+            add("宽频调温，水温稳定")
         if "抑菌" in tt:
-            add("高温抑菌，洗澡水更干净")
+            add("高温抑菌")
     elif "热水器" in cat or "热水器" in tt:
         n = num(str(pd.get("容积", "")))
         if not n:
             m = re.search(r"(\d{2})升", tt)
             n = m.group(1) if m else None
         if n:
-            add("%s升大水量，一家三口洗澡够用" % n)
+            add("%s升容量" % n)
         if "三层胆" in alltext or "金刚" in alltext:
-            add("金刚三层胆，内胆结实不漏水")
+            add("金刚三层胆内胆")
         if "速热" in alltext:
-            add("储热速热二合一，随用随热不用等")
+            add("储热速热二合一")
         if "保温" in alltext:
-            add("360°全方位保温，热水放到晚上还是烫的")
+            add("360°全方位保温")
         elif "抑菌" in tt:
-            add("高温抑菌内胆，洗澡水更干净")
+            add("高温抑菌内胆")
         if "防干烧" in alltext or "超温" in alltext:
             add("多重安全防护，防干烧防超温")
     # 模板没凑满：官网卖点里挑硬行补（含数字或带解释的），虚话一概不要
@@ -3848,7 +3869,7 @@ def _hard_points(info, pd, sp):
     if len(out) < 6:
         for s_ in (sp or []):
             s_ = str(s_).strip()
-            if not s_ or re.search(r"安装省心|师傅上门|日常好打理|省时省力|用料扎实|细节经得起|官方正品|验货|开箱|[23]级能效", s_):
+            if not s_ or re.search(r"安装省心|师傅上门|日常好打理|省时省力|用料扎实|细节经得起|官方正品|验货|开箱|[23]级能效|心疼|一周|一次洗完|一次装下|一次买齐|一次买|不冻手|不吵|不愁|不串味|不占地|不拥挤|不心疼|够用|接力洗|带得动|罩得住|不过脸|扰眠|一目了然|各归各位|还是烫的|不等热水|更干净|更保鲜|更安心|也不用等|不用等|够沉浸|更省空间|更省心|随用随热不用等", s_):
                 continue
             if re.search(r"\d", s_) or "，" in s_ or len(s_) >= 8:
                 add(s_)
@@ -3857,7 +3878,7 @@ def _hard_points(info, pd, sp):
     if len(out) < 5:
         _effv = str(pd.get("能效等级") or pd.get("能效效率等级") or "").strip()
         if _effv and re.search(r"1级|一级", _effv):
-            add("一级能效，长期用省电费")
+            add("一级能效，节能省电")
         _nz = None
         for k, v in pd.items():
             if "噪" in str(k):
@@ -3866,11 +3887,11 @@ def _hard_points(info, pd, sp):
                     _nz = _n
                     break
         if _nz:
-            add("%s分贝低噪，晚上洗晚上看都不吵" % _nz)
+            add("%s分贝低噪" % _nz)
         if "除菌" in alltext or "杀菌" in alltext or "消毒" in alltext:
-            add("除菌洗护，小孩贴身衣物也放心")
+            add("除菌洗护")
         if "预约" in alltext:
-            add("支持预约，睡前放进去早起晾")
+            add("支持预约功能")
         if "智能" in alltext or "wifi" in alltext.lower() or "物联" in alltext:
             add("智能互联，手机远程操控")
     return out
@@ -4464,6 +4485,30 @@ def _rerender_cached(model, mdir, old, log):
             pass
     titles = old.get("titles") or []
     points = old.get("points") or []
+    # 2026-11-20 用户令「不要有这些什么鬼，全部按参数来写」：重渲染必须按最新话术
+    # 模板从参数快照重算卖点——旧快照里的场景套话行（一周食材一次装下/夜里也不吵…）
+    # 不许再带出去。纯本地重算（_hard_points + pei_core.sellpoints 都只吃参数），
+    # 不走网络，不违背「重新生成别重新抓」。算崩了沿用快照，绝不让重渲染炸掉。
+    try:
+        _rows = cfg.get("params_rows") or []
+        if isinstance(_rows, dict):
+            _pairs = [(str(k), str(v)) for k, v in _rows.items()]
+        else:
+            _pairs = [(str(r[0]), str(r[1])) for r in _rows
+                      if isinstance(r, (list, tuple)) and len(r) >= 2]
+        _info = {"cat": cfg.get("cat") or "",
+                 "title": ((cfg.get("series") or "") + " " + (cfg.get("model") or model)).strip(),
+                 "props": _pairs}
+        _pd = pei_core.prop_dict(_pairs)
+        _sp = [str(x).strip() for x in (pei_core.sellpoints(_info) or []) if str(x).strip()]
+        _hard = _hard_points(_info, _pd, _sp)
+        if len(_hard) >= 3:
+            points = [s.replace("dB(A)", "分贝").replace("dB", "分贝") for s in _hard]
+            if log:
+                log("文案区卖点按最新模板重算 %d 条（旧套话行不再复用）" % len(points))
+    except Exception as _e:
+        if log:
+            log("卖点重算失败，沿用快照：%r" % (_e,))
     aftersale = old.get("aftersale") or ""
     aftersales = old.get("aftersales") or ([aftersale] if aftersale else [])
     prod = os.path.join(mdir, "product.png")
