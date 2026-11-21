@@ -128,6 +128,46 @@ def stock_load():
                     STATE["stock_at"] = d["ts"]      # 侧栏一打开就显示上次的库存时间
         except Exception:
             pass
+    stock_enrich_org()
+
+
+# ---------------------------------------------------------------- 皓群组织对照表（2026-11-21 停补丁）
+# 皓群货盘的价格跟「组织」走（组织=广州皓群电器有限公司的仓才算皓群的货），前端 whs 条目
+# 要有 "o" 字段。CI 云端库存还没带组织（推版后才有）→ 云端每 30 分钟一轮同步会把本地
+# 带组织的快照整个覆盖回去。这层按仓名→组织对照表给没 o 的条目补齐：
+# 表在 wp()/wh_org.json {"仓名": "组织"}（用友现存量 248 仓逐仓名多数票生成）；
+# CI 推版后云端自带 o，这层自动闲置；表缺失/坏掉就跳过，零影响。
+
+_WH_ORG = [None]          # 缓存（None=还没读过）
+
+
+def _wh_org_map():
+    if _WH_ORG[0] is None:
+        m = {}
+        try:
+            with io.open(wp("wh_org.json"), encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                m = {str(k): str(v) for k, v in d.items() if v}
+        except Exception:
+            pass
+        _WH_ORG[0] = m
+    return _WH_ORG[0]
+
+
+def stock_enrich_org():
+    """给内存 STOCK（stock 型号桶 + sbc 编码桶）里没有 o 的 whs 条目按仓名补组织。"""
+    m = _wh_org_map()
+    if not m:
+        return
+    with STOCK_LOCK:
+        for bucket in (STOCK.get("stock") or {}, STOCK.get("sbc") or {}):
+            for v in bucket.values():
+                for e in (v.get("whs") or []):
+                    if isinstance(e, dict) and not e.get("o"):
+                        o = m.get(str(e.get("w") or ""))
+                        if o:
+                            e["o"] = o
 
 
 def stock_save():

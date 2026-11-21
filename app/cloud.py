@@ -251,6 +251,26 @@ def yy_alert_poll():
             state.LOG.append("🔔 用友告警：%s" % msg)
 
 
+# ---------------- 定死发全国名单（2026-11-21 管理号令：全局共享，子用户机器也能拉到） ----------------
+def natf_pull(log=None):
+    """拉全局定死发全国名单（任何登录账号都能拉）。失败返回 None，不拦主流程。"""
+    try:
+        j, err = cloud_req("/natf", "GET", timeout=30)
+        if err or not j or not j.get("ok"):
+            return None
+        return j.get("natf") or {}
+    except Exception:
+        return None
+
+
+def natf_push(model, on, log=None):
+    """管理号写一条（worker 端校验 admin）。返回 (natf|None, err)。"""
+    j, err = cloud_req("/natf", "POST", {"c": model, "on": bool(on)}, timeout=30)
+    if err or not j or not j.get("ok"):
+        return None, err or (j or {}).get("msg") or "推送失败"
+    return j.get("natf") or {}, None
+
+
 def stock_push_cloud(log):
     """管理号拉完用友 → 整包上传云端，全员共享。失败只记日志，不影响本机。"""
     with state.STOCK_LOCK:
@@ -313,6 +333,9 @@ def stock_pull_cloud(log, force=True):
     with state.STOCK_LOCK:
         state.STOCK = {"ts": j.get("ts"), "rows": j.get("rows") or 0, "stock": j["stock"],
                        "sbc": j.get("sbc") or None, "mo2meta": j.get("mo2meta") or None}
+    # 2026-11-21 停补丁：云端库存还没带组织字段，按本地仓名→组织对照表补 o
+    # （皓群货盘的价格跟组织走；CI 推版后云端自带 o，这层自动闲置）
+    state.stock_enrich_org()
     state.stock_save()
     ts = j.get("ts") or ""
     log("云端库存同步完成：%s 行（%s）" % (j.get("rows") or 0, ts))

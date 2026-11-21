@@ -311,6 +311,9 @@ class ApiPostMixin:
                 elif act == "link":
                     r = extras.set_link(d.get("m"), d.get("xid"), d.get("url"),
                                         d.get("price"), d.get("xy"))
+                elif act == "natforce":
+                    # 2026-11-21 管理号令：发往不读表定死「全国 · 100运费」（开关）
+                    r = extras.set_natforce(d.get("m"), bool(d.get("on")))
                 elif act == "water":
                     r = extras.set_water(**{k: d[k] for k in ("on", "text", "pos", "size",
                                                               "color", "alpha") if k in d})

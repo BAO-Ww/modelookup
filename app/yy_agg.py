@@ -279,7 +279,12 @@ def yy_finish(recs, log):
         wt = str(r0.get(YY_K_WHTYPE) or "").strip() or "其他仓"
         a["wt"][wt] = round(a["wt"].get(wt, 0.0) + av, 2)
         wname = str(r0.get(YY_K_WH) or "").strip() or "未知仓"
-        k2 = (wname, wt)
+        # 2026-11-21 用户令：皓群货盘的价格跟「组织」走（组织=广州皓群电器有限公司的仓才算
+        # 皓群的货）——组织名随仓一起进 whs 明细（键带 org，条目落 "o" 字段）。
+        # 实锤：皓群主仓「广州统仓统配ZP仓」仓名不含皓群；「东莞海粤皓群ZP仓」挂海粤组织。
+        # ⚠ 手抄镜像：.github/scripts/yy_cloud_pull.py 的 aggregate 必须同步同款。
+        org = str(r0.get("org_name") or "").strip()
+        k2 = (wname, wt, org)
         a["whs"][k2] = round(a["whs"].get(k2, 0.0) + av, 2)
         # 编码维度并行聚一份（同一行既进型号桶也进编码桶；productsku_cCode=YS物料编码同源）
         code = norm_model(r0.get("productsku_cCode"))
@@ -302,13 +307,15 @@ def yy_finish(recs, log):
             if _sn and not _sn.startswith("#") and not m2.get("n"):
                 m2["n"] = _sn
 
-    # whs: {(仓名, 类型): 数量} → 排序列表 [{w, t, n}]（数量多的在前）
+    # whs: {(仓名, 类型, 组织): 数量} → 排序列表 [{w, t, n, o}]（数量多的在前）
     for a in agg.values():
-        lst = [{"w": k[0], "t": k[1], "n": v} for k, v in a["whs"].items()]
+        lst = [{"w": k[0], "t": k[1], "n": v, "o": (k[2] if len(k) > 2 else "")}
+               for k, v in a["whs"].items()]
         lst.sort(key=lambda x: (-x["n"], x["w"]))
         a["whs"] = lst
     for a in agg_code.values():
-        lst = [{"w": k[0], "t": k[1], "n": v} for k, v in a["whs"].items()]
+        lst = [{"w": k[0], "t": k[1], "n": v, "o": (k[2] if len(k) > 2 else "")}
+               for k, v in a["whs"].items()]
         lst.sort(key=lambda x: (-x["n"], x["w"]))
         a["whs"] = lst
 

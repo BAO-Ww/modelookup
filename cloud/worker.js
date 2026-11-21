@@ -1706,6 +1706,24 @@ async function route(request, env, path, ctx) {
     return J({ ok: true, n: n });
   }
 
+  // ---------- 定死发全国名单（2026-11-21 管理号令：全局共享，子用户机器也能拉到） ----------
+  // GET  /natf   Header: X-Token → {ok, natf:{卡片键:1}}   全员可读（子用户要跟着显示）
+  // POST /natf   {c, on}   Header: X-Token → 仅管理号可写；存 D1 store 键 natf_global
+  if (path === "/natf" && request.method === "GET") {
+    return J({ ok: true, natf: await d1Get(env, "natf_global", {}) });
+  }
+  if (path === "/natf" && request.method === "POST") {
+    if (!who || !usersGate[who] || usersGate[who].role !== "admin")
+      return jerr("只有管理号能改定死发全国名单", 403);
+    const b = await request.json().catch(() => ({}));
+    const c = safeKey(b.c, 100);
+    if (!c) return jerr("型号不能为空");
+    const natf = await d1Get(env, "natf_global", {});
+    if (b.on === false) delete natf[c]; else natf[c] = 1;
+    await d1Put(env, "natf_global", natf);
+    return J({ ok: true, natf: natf });
+  }
+
   // ---------- 官网代抓中转（2026-11-11：统帅站 leader.com.cn 挂 WAF，本机非浏览器 TLS 指纹全 403） ----------
   // GET /osfetch?u=<完整URL>  Header: X-Token  → 用 Cloudflare 出口代抓，原样透传响应。
   // 防滥用三锁：只 GET、只放行海尔系官网域名（haier/casarte/leader）、必须持有效登录令牌。

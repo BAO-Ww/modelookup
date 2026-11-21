@@ -164,7 +164,7 @@ def merge_records(allrecs):
     # （BCD-540/550 实测），价格奖励一模一样，留两格就是卡上两个「·隆阳 ¥6,599」；
     # 保留先到的（清理明细在前，数量更准）。隆阳 vs 皓群 hp 不同 ⇒ 哪怕同价也各占一格。
     for r in rows.values():
-        for _kk, _sk in (("_lsrcs", "lsrcs"), ("_ssrcs", "ssrcs")):
+        for _kk, _sk, _hk in (("_lsrcs", "lsrcs", "lhp"), ("_ssrcs", "ssrcs", "shp")):
             _list = r.pop(_kk, None)
             if not _list:
                 continue
@@ -177,6 +177,11 @@ def merge_records(allrecs):
                 _keep.append(_s)
             if len(_keep) > 1:
                 r[_sk] = _keep
+            else:
+                # 单货源也要标货盘（2026-11-21 用户令「这些都没有注明是皓群货盘的价格」）：
+                # 货盘名挂主字段旁（lhp/shp），前端单格显示「滞销清理价·皓群货盘」、
+                # 货源行也认它（不再一律冒充隆阳电器）；皓群货盘的价格格子跟「皓群」仓库存挂钩。
+                r[_hk] = _keep[0].get("hp") or ""
 
     # ---- 第二批：价格表
     #   精准归卡（2026-10-10 两轮定稿）：

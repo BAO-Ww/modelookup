@@ -36,6 +36,7 @@ def _blank():
     return {"alias": {}, "tags": {}, "hist": {}, "pq": {}, "sq": {},
             "copies": {}, "links": {}, "water": {"on": False, "text": "", "pos": "br",
                                                  "size": 0.032, "color": "#ffffff", "alpha": 0.55},
+            "natforce": {},
             "chg": [], "quota": {"d": "", "n": 0}}
 
 
@@ -84,13 +85,70 @@ def log(kind, model, text):
 
 # ---------------------------------------------------------------- 读取（前端一次拿全）
 def get_all():
+    _natf_sync_from_cloud()          # 2026-11-21：定死发全国名单开机跟着云端对一次
     d = _load()
     return {"ok": True,
             "alias": d["alias"], "tags": d["tags"], "hist": d["hist"],
             "links": d["links"], "water": d["water"],
+            "natforce": d["natforce"],
             "copies": {k: len(v or []) for k, v in (d["copies"] or {}).items()},
             "chg": (d["chg"] or [])[:300], "quota": d["quota"],
             "pq_n": len(d["pq"] or {}), "sq_n": len(d["sq"] or {})}
+
+
+# ---------------------------------------------------------------- 发往定死（2026-11-21 管理号令）
+# 管理号在卡片上点一下：这台机器发往不读表，直接定死「全国 · 100运费」。
+# 本地 extras.json 存一份（键=卡片键 it.c）+ 云端 D1 natf_global 存一份（全局共享：
+# 子用户的机器开机拉一次合并进本地，管理号点按钮当场推云端）。失败一律静默不拦主流程。
+_NATF_PULL_T = [0]
+
+
+def _natf_sync_from_cloud(force=False):
+    """云端名单合并进本地（每次 /api/ex 读全量时顺带做，10 分钟防抖）。"""
+    if not force and time.time() - _NATF_PULL_T[0] < 600:
+        return
+    _NATF_PULL_T[0] = time.time()
+    try:
+        import cloud
+        natf = cloud.natf_pull()
+        if not natf:
+            return
+        with _LOCK:
+            d = _load()
+            merged = {str(k): 1 for k in natf}
+            merged.update({str(k): 1 for k in d["natforce"]})   # 本地没推上去的暂留
+            if merged != d["natforce"]:
+                d["natforce"] = merged
+                _save()
+    except Exception:
+        pass
+
+
+def set_natforce(model, on):
+    model = str(model or "").strip()
+    if not model:
+        return {"ok": False, "msg": "缺型号"}
+    with _LOCK:
+        d = _load()
+        if on:
+            d["natforce"][model] = 1
+        else:
+            d["natforce"].pop(model, None)
+        _save()
+    log("misc", model, "发往定死全国：" + ("开" if on else "关"))
+    # 云端同步：管理号机器推，所有子用户机器开机/刷新时拉。失败不拦本地（本地先生效）。
+    try:
+        import cloud
+        natf, _err = cloud.natf_push(model, on)
+        if natf is not None:
+            with _LOCK:
+                d2 = _load()
+                d2["natforce"] = {str(k): 1 for k in natf}
+                _save()
+    except Exception:
+        pass
+    with _LOCK:
+        return {"ok": True, "natforce": dict(_load()["natforce"])}
 
 
 # ---------------------------------------------------------------- 别名 / 标签
