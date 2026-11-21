@@ -21,7 +21,7 @@ from collections import Counter
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
-from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch
+from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch, _hzy_params, _xs_img_params
 from normalize import norm_model
 from renderlock import serialized
 import paths
@@ -843,10 +843,25 @@ def _render_img4(cfg, out, prod=None, safe=False):
         return
     if cfg.get("dims"):
         W, H, D = cfg["dims"]
-        fh = cfg.get("draw_fh", 460); fw = max(60, int(W / H * fh))
-        fx, fy = 240, 300
-        d.rounded_rectangle([fx, fy, fx + fw, fy + fh], radius=10, outline=INK, width=2)
-        d.line([fx + 14, fy + fh - 44, fx + fw - 14, fy + fh - 44], fill=GRAY, width=1)
+        # 2026-11-21 用户「尺寸图是什么鬼」实锤改：空线框换成真机线稿当正视图
+        # （产品照片描线，无机图才退空框），宽/高尺寸线照标，俯视图压扁放底部，
+        # 嵌入式机型把「最小开孔」一并印上（装橱柜的人最关心这个）。
+        sk = None
+        try:
+            sk = _sketch_rgba(prod, color=(28, 30, 34)) if prod else None
+        except Exception:
+            sk = None
+        fh = 380
+        fw = max(60, min(620, int(W / H * fh)))
+        fx, fy = 540 - fw // 2, 240
+        if sk is not None:
+            sc5 = min(float(fw) / sk.width, float(fh) / sk.height)
+            sk5 = sk.resize((max(1, int(sk.width * sc5)), max(1, int(sk.height * sc5))), Image.LANCZOS)
+            C.paste(sk5, (540 - sk5.width // 2, fy + max(0, (fh - sk5.height) // 2)), sk5)
+        else:
+            d.rounded_rectangle([fx, fy, fx + fw, fy + fh], radius=10, outline=INK, width=2)
+            d.line([fx + 14, fy + fh - 44, fx + fw - 14, fy + fh - 44], fill=GRAY, width=1)
+
         def dim_line(x1, y1, x2, y2, label, vertical=False):
             d.line([x1, y1, x2, y2], fill=GRAY, width=2)
             if vertical:
@@ -857,23 +872,24 @@ def _render_img4(cfg, out, prod=None, safe=False):
                 d.line([x1, y1 - 8, x1, y1 + 8], fill=GRAY, width=2)
                 d.line([x2, y2 - 8, x2, y2 + 8], fill=GRAY, width=2)
                 d.text(((x1 + x2) // 2, y1 - 18), label, font=_font(F_REG, 26), fill=INK, anchor="mb")
-        dim_line(fx, fy - 44, fx + fw, fy - 44, str(W))
-        dim_line(fx + fw + 40, fy, fx + fw + 40, fy + fh, str(H), vertical=True)
-        d.text((fx + fw // 2, fy + fh + 40), "正视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
-        if fx + fw + 40 + 240 + 60 > 1020:
-            pw = min(fw, 560); px, py = fx, fy + fh + 170
-            ph = max(10, int(D / W * pw))
-            d.rounded_rectangle([px, py, px + pw, py + ph], radius=8, outline=INK, width=2)
-            dim_line(px, py - 44, px + pw, py - 44, str(W))
-            dim_line(px + pw + 40, py, px + pw + 40, py + ph, str(D), vertical=True)
-            d.text((px + pw // 2, py + ph + 14), "俯视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
-        else:
-            pw = 240; ph = int(D / W * pw)
-            px, py = 680, 330
-            d.rounded_rectangle([px, py, px + pw, py + ph], radius=8, outline=INK, width=2)
-            dim_line(px, py - 44, px + pw, py - 44, str(W))
-            dim_line(px + pw + 40, py, px + pw + 40, py + ph, str(D), vertical=True)
-            d.text((px + pw // 2, py + ph + 40), "俯视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
+
+        dim_line(fx, fy - 40, fx + fw, fy - 40, str(W))
+        dim_line(fx + fw + 36, fy, fx + fw + 36, fy + fh, str(H), vertical=True)
+        d.text((540, fy + fh + 14), "正视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
+        # 俯视图（宽×深）：先限高再反推宽，冰箱这类高机不撑爆版面
+        ph2 = min(150, max(24, int(D / W * 300)))
+        pw2 = max(60, min(620, int(ph2 * W / D)))
+        px2, py2 = 540 - pw2 // 2, fy + fh + 112
+        d.rounded_rectangle([px2, py2, px2 + pw2, py2 + ph2], radius=8, outline=INK, width=2)
+        dim_line(px2, py2 - 36, px2 + pw2, py2 - 36, str(W))
+        dim_line(px2 + pw2 + 36, py2, px2 + pw2 + 36, py2 + ph2, str(D), vertical=True)
+        d.text((540, py2 + ph2 + 14), "俯视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
+        _dims_txt = "宽 %d mm · 高 %d mm · 深 %d mm" % (W, H, D)
+        _hole = re.sub(r"[（(].*$", "", str(cfg.get("hole_dims") or "")).strip()
+        if _hole:
+            _hole = _hole.replace("*", " × ").replace("x", " × ").replace("X", " × ").strip()
+            _dims_txt += "    最小开孔 %s" % _hole
+        d.text((540, 972), _dims_txt, font=_font(F_REG, _d4), fill=GRAY, anchor="mm")
     else:
         # 无官方尺寸图、参数里也没真实尺寸（2026-10-28 用户令「没有尺寸的就画一个」）：
         # 机图描深色线稿占主位（版式同聚光、纯白底），绝不编数字，底部一句话兜底
@@ -1963,6 +1979,45 @@ def _gather_info(model, log):
         except Exception as e:
             if log:
                 log("中关村补参失败：%r" % (e,))
+    # 电子说明书/欣盛图参兜底（2026-11-21 用户令，与 copywriter 同源）：中关村/必应/GLM
+    # 对渠道机全落空时，先问海尔电子说明书（纯接口秒级），再欣盛详情长图视觉读参。
+    # 只补缺键不覆盖；各自负缓存，试过没有 7 天内不再跑（重出清负缓存即重试）。
+    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "hzy_params"):
+        try:
+            _hp = _hzy_params(model, log)
+            if _hp:
+                _have = {str(k).strip() for k, _v in (info.get("props") or [])}
+                for k, v in _hp:
+                    if str(k).strip() not in _have:
+                        info.setdefault("props", []).append((str(k), str(v)))
+                if log:
+                    log("电子说明书补参：%d 条（合计 %d 条）" % (len(_hp), len(info.get("props") or [])))
+            else:
+                _neg_set(_mdir, "hzy_params")
+                if log:
+                    log("电子说明书没有参数（已记住，7 天内不再重复找）")
+        except Exception as e:
+            if log:
+                log("电子说明书补参失败：%r" % (e,))
+    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "xs_img_params"):
+        try:
+            if xs is None:
+                xs = fetch_xinsheng(model, log)
+            _xp = _xs_img_params(model, xs, log)
+            if _xp:
+                _have = {str(k).strip() for k, _v in (info.get("props") or [])}
+                for k, v in _xp:
+                    if str(k).strip() not in _have:
+                        info.setdefault("props", []).append((str(k), str(v)))
+                if log:
+                    log("欣盛图读参补参：%d 条（合计 %d 条）" % (len(_xp), len(info.get("props") or [])))
+            else:
+                _neg_set(_mdir, "xs_img_params")
+                if log:
+                    log("欣盛图读参没有结果（已记住，7 天内不再重复找）")
+        except Exception as e:
+            if log:
+                log("欣盛图读参补参失败：%r" % (e,))
     if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "web_params"):
         try:
             for k, v in _web_params(model, log):
@@ -1992,6 +2047,49 @@ def _gather_info(model, log):
             if src and src.get("pname"):
                 info["title"] = str(src["pname"])
                 break
+    # 品类防串（2026-11-21 CWC8-B57GHU1 实锤）：标题只剩裸型号、cat 废词「电器」时，
+    # 欣盛/官网 pname（「卡萨帝洗碗机8套…」）是唯一靠谱品类来源——认出品类词就升级
+    # cat/title，否则卖点模板掉进通用分支，洗碗机会被写成「冷藏冷冻分储」冰箱话术。
+    # 活抓拿不到 pname 就退本地欣盛库（xinsheng.sqlite3，name 里带品类词、category 列直接是中文品类）。
+    try:
+        import pei_core as _pc2
+        _cn = (_pc2.cat_name(info) or "").strip()
+        if not _cn or _cn in ("电器", "家电"):
+            _pn = ""
+            for _src in (data, xs):
+                if (_src or {}).get("pname"):
+                    _pn = str(_src["pname"])
+                    break
+            if not _pn:
+                try:
+                    import sqlite3 as _sq3
+                    _dbp = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ModelLookup", "xinsheng.sqlite3")
+                    _db = _sq3.connect(_dbp)
+                    _db.row_factory = _sq3.Row
+                    _rows = _db.execute("select name from products where name like ? limit 10",
+                                        ("%" + norm_model(model) + "%",)).fetchall()
+                    _best = ""
+                    for _r in _rows:
+                        _nm = str(_r["name"] or "")
+                        if next((w for w in _pc2.CAT_WORDS if w in _nm), ""):
+                            _best = _nm   # 优先带品类词的（跳过「碗柜可配CWC8」这类配件名）
+                            break
+                        if not _best and _nm:
+                            _best = _nm
+                    _pn = _best
+                    _db.close()
+                except Exception:
+                    _pn = ""
+            _w = next((w for w in _pc2.CAT_WORDS if w in _pn), "")
+            if _w:
+                info["cat"] = _w
+                _tt = str(info.get("title") or "")
+                if not any(w in _tt for w in _pc2.CAT_WORDS):
+                    info["title"] = _pn   # 裸型号标题升级成带品类的真名
+                if log:
+                    log("品类从 pname 认出：%s（标题升级：%s）" % (_w, info["title"]))
+    except Exception:
+        pass
     if not (info.get("brand") or ""):
         t = (info.get("title") or "") + " " + model
         info["brand"] = "卡萨帝" if "卡萨帝" in t else ("统帅" if "统帅" in t or "Leader" in t else "海尔")
@@ -3671,6 +3769,16 @@ def _hard_points(info, pd, sp):
     不要安装省心、日常好打理这类虚话。品类话术模板优先，官网卖点硬行兜底。"""
     cat = str(info.get("cat") or "")
     tt = str(info.get("title") or "")
+    # 品类废词兜底（2026-11-21 CWC8 实锤）：cat 是「电器/家电」空词时从标题认品类，
+    # 认不出就把洗碗机/冰箱模板全判空，掉进通用分支出「冷藏冷冻分储」串品类话术
+    if cat in ("", "电器", "家电"):
+        try:
+            import pei_core as _pchp
+            _w = next((w for w in _pchp.CAT_WORDS if w in tt), "")
+            if _w:
+                cat = _w
+        except Exception:
+            pass
     alltext = tt + " " + " ".join(str(k) + str(v) for k, v in (info.get("props") or []))
     out = []
 
@@ -3686,7 +3794,7 @@ def _hard_points(info, pd, sp):
         ks, vs = str(k), str(v)
         if cap_kg is None and "洗涤容量" in ks and "kg" in vs.lower():
             cap_kg = num(vs)
-        if cap_set is None and ("洗涤容量" in ks or "套数" in ks) and ("套" in vs or "件" in vs):
+        if cap_set is None and ("洗涤容量" in ks or "套数" in ks or "装载容量" in ks) and ("套" in vs or "件" in vs):
             cap_set = num(vs)
         if cap_l is None and ("总容积" in ks or ("容积" in ks and "L" in vs.upper())):
             cap_l = num(vs)
@@ -3765,13 +3873,19 @@ def _hard_points(info, pd, sp):
             add("变频压缩机，控温稳定")
     elif "洗碗机" in cat or "洗碗" in tt:
         if cap_set:
-            add("%s套洗涤容量" % cap_set)
+            add("%s套大容量，锅碗瓢盆一次洗完" % cap_set)
         if "开门速干" in alltext or "干燥方式" in str(pd):
             add("智能开门速干")
         if "消毒" in alltext or "除菌" in alltext or "杀菌" in alltext:
             add("高温除菌消毒")
+        # 2026-11-21 CWC8 实锤补货：单抽屉/水效等级都是真卖点，模板原来只出 2-3 条
+        if "抽屉" in alltext:
+            add("抽屉式设计，抽拉取放不弯腰")
         if "嵌" in alltext:
-            add("嵌入式安装")
+            add("嵌入式安装，嵌进橱柜不占地")
+        _wsx = num(str(pd.get("水效等级", "") or ""))
+        if _wsx:
+            add("水效%s级，节水节能" % _wsx)
     elif "电视" in cat or "电视" in tt:
         n = num(str(pd.get("屏幕尺寸", "")) or (re.search(r"(\d{2,3})寸", tt).group(1) if re.search(r"(\d{2,3})寸", tt) else None))
         if n:
@@ -4070,6 +4184,16 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
     else:
         capn = ""
     size_pills = ["%s × %s mm" % (dims[0], dims[1]), "深 %s mm" % dims[2]] if dims else []
+    # 最小开孔尺寸（嵌入式机型装机最关心的数字，2026-11-21 CWC8 实锤）：img4 底部一并印上
+    # 键名常带后缀（「最小开孔尺寸(宽*深*高mm)」实锤）→ 子串匹配
+    hole_dims = ""
+    for _hk in ("最小开孔", "开孔尺寸", "挖孔尺寸"):
+        for _pk, _pv in pd.items():
+            if _hk in str(_pk) and str(_pv).strip():
+                hole_dims = str(_pv).strip()
+                break
+        if hole_dims:
+            break
     if not size_pills:
         # 灶具式两段尺寸（2026-10-29 用户实锤 JZT-QHA7BE9 官网有 台面730*420/挖孔650*350
         # 却被报「缺尺寸」）：没有三段式外形尺寸时，拿台面/挖孔真数据当尺寸药丸，绝不空卡
@@ -4148,6 +4272,7 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
         "cells": cells,
         "feat_label": "同时支持",
         "feature_pills": fpills,
+        "hole_dims": hole_dims,
         "sizeimg": _si if os.path.isfile(_si) else None,
         "url": info.get("url") or "",
     }
@@ -4575,7 +4700,11 @@ def generate(model, force=0, log=None):
                     _old = json.load(f)
                 _cfg = _old.get("cfg") or {}
                 if _cfg.get("model") and (_cfg.get("params_rows") or {}):
-                    return _rerender_cached(model, mdir, _old, log)
+                    # 2026-11-21 CWC8-B57GHU1 实锤：快照 cat 是废词「电器/家电」时快照也
+                    # 不能信——品类错了卖点模板全串品类（洗碗机出「冷藏冷冻分储」），
+                    # 重渲染救不回来，落完整抓取链自愈一次（pname 认品类 → 重写 set.json）
+                    if str(_cfg.get("cat") or "") not in ("", "电器", "家电"):
+                        return _rerender_cached(model, mdir, _old, log)
             except Exception:
                 pass
         # 强制重出时清掉旧的尺寸图缓存（251WBIU1 白门板假阳性实锤：不改代码也得能自愈）

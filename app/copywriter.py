@@ -149,6 +149,28 @@ def fetch(url, extra_headers=None, binary=False, retries=1, timeout=15):
 # 海尔系官网域名（代抓兜底只对这些生效）
 _OS_HOST_RE = re.compile(r"^https?://[^/]*(?:haier\.com|casarte\.com|leader\.com\.cn)/", re.I)
 
+# 2026-11-21 用户令「IP 都被限制成爬虫了，解决下」：海尔 WAF 按 IP 封（casarte/haier 全站
+# 403，真 Chrome 也一样 → 纯 IP 黑名单）。原逻辑每条请求都先直连挨一记 403 才走代抓——
+# 白挨打还容易把封禁升级。加 403 冷却表：某域名吃一次 403 后 30 分钟内直连跳过、
+# 直接走 CF 代抓（osfetch 实测 casarte 200）；冷却期内代抓也不成功才回直连试。
+_RELAY_COOLDOWN = {}          # host -> 冷却截止 time.time()
+_RELAY_COOLDOWN_SECS = 1800   # 30 分钟
+
+
+def _relay_hot(url):
+    """该 URL 的域名是否在 403 冷却期内（期内直连没意义，直接代抓）。"""
+    if not _OS_HOST_RE.match(url or ""):
+        return False
+    host = urllib.parse.urlparse(url).netloc.lower()
+    return time.time() < _RELAY_COOLDOWN.get(host, 0)
+
+
+def _relay_mark(url):
+    """记一笔 403：该域名进入 30 分钟冷却。"""
+    if _OS_HOST_RE.match(url or ""):
+        host = urllib.parse.urlparse(url).netloc.lower()
+        _RELAY_COOLDOWN[host] = time.time() + _RELAY_COOLDOWN_SECS
+
 
 def _relay_fetch(url, headers=None, binary=False, timeout=30):
     """经 CF Worker /osfetch 代抓（2026-11-11 统帅 WAF 兜底）。要登录令牌；失败抛原异常。"""
@@ -163,6 +185,58 @@ def _relay_fetch(url, headers=None, binary=False, timeout=30):
     with urlopen_ssl(req, timeout=timeout) as r:
         raw = r.read()
         return raw if binary else raw.decode("utf-8", errors="replace")
+
+
+def fetch(url, extra_headers=None, binary=False, retries=1, timeout=15):
+    headers = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "zh-CN,zh;q=0.9",
+               "Accept-Encoding": "gzip, deflate"}
+    if extra_headers:
+        headers.update(extra_headers)
+    last = None
+    for i in range(retries + 1):
+        # 2026-11-21：冷却期内先试 CF 代抓，成则直接回（省一记 403，也少给 WAF 送指纹）
+        if _relay_hot(url):
+            try:
+                return _relay_fetch(url, headers, binary=binary, timeout=timeout)
+            except Exception as _re:
+                last = _re    # 代抓也不成才落回直连
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urlopen_ssl(req, timeout=timeout) as r:
+                raw = r.read()
+                enc = r.headers.get("Content-Encoding", "")
+                if enc and "gzip" in enc:
+                    raw = gzip.decompress(raw)
+                elif enc and "deflate" in enc:
+                    try:
+                        raw = zlib.decompress(raw, -zlib.MAX_WBITS)
+                    except zlib.error:
+                        pass
+                return raw if binary else raw.decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            # 2026-11-11：统帅站 leader.com.cn 挂 WAF，本机非浏览器 TLS 指纹全 403。
+            # 兜底走 CF Worker /osfetch 代抓（Cloudflare 出口指纹能过盾）。只对海尔系域名生效。
+            if getattr(e, "code", 0) in (403, 404, 503) and _OS_HOST_RE.match(url or ""):
+                _relay_mark(url)   # 2026-11-21：吃 403 就进冷却，后续请求直接代抓
+                try:
+                    return _relay_fetch(url, headers, binary=binary, timeout=timeout)
+                except Exception:
+                    pass
+            last = e
+            if i < retries:
+                time.sleep(0.8)
+        except Exception as e:
+            # 2026-11-10：image.haier.com 对本机出口是 TCP RST（不是 403），网络层异常
+            # 同样可能是 IP 封禁——海尔系域名一律试一次 CF 代抓再认输。
+            if _OS_HOST_RE.match(url or ""):
+                try:
+                    return _relay_fetch(url, headers, binary=binary, timeout=timeout)
+                except Exception:
+                    pass
+            last = e
+            if i < retries:
+                time.sleep(0.8)
+    raise last
 
 
 # ---------------------------------------------------------------- 官网抓取
@@ -487,24 +561,24 @@ def fetch_xinsheng(model, log):
         code = _load_model_code_map().get(nm)
         row = None
         if code:
-            row = con.execute("SELECT code,name,sale_price,album_urls FROM products WHERE code=?",
+            row = con.execute("SELECT code,name,sale_price,album_urls,pid FROM products WHERE code=?",
                               (code,)).fetchone()
         if not row:
-            for code, name, sp, al in con.execute(
-                    "SELECT code,name,sale_price,album_urls FROM products "
+            for code, name, sp, al, pid in con.execute(
+                    "SELECT code,name,sale_price,album_urls,pid FROM products "
                     "WHERE code IS NOT NULL AND code != ''"):
                 toks = TOK_RE.findall((name or '').upper())
                 if toks:
                     tn = norm_model(max(toks, key=len))
                     if tn and (tn == nm or tn in nm or nm.startswith(tn)):
-                        row = (code, name, sp, al)
+                        row = (code, name, sp, al, pid)
                         break
         con.close()
     except Exception:
         return None
     if not row:
         return None
-    code, name, sp, al = row
+    code, name, sp, al, pid = row
     album = []
     try:
         album = [u for u in json.loads(al or "[]") if isinstance(u, str) and u.startswith("http")]
@@ -512,7 +586,250 @@ def fetch_xinsheng(model, log):
         pass
     log("欣盛商城命中：%s" % (name or '')[:30])
     return {'source': '欣盛商城', 'brand': '', 'pname': name or model, 'price': str(sp or ''),
-            'url': 'https://ys.longyangdq.cn/', 'groups': [], 'sellpoints': [], 'imgs': album}
+            'url': 'https://ys.longyangdq.cn/', 'groups': [], 'sellpoints': [], 'imgs': album,
+            'pid': pid}   # pid 带出（2026-11-21：详情长图读参数要拿它请求 Products 接口）
+
+
+# ---------------------------------------------------------------- 欣盛详情长图读参数
+_XS_API_URL = ("https://ys.longyangdq.cn/client/Products/index?iShopId=&terminaltype=PC&token=&id=%s")
+_XS_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+          "Chrome/131.0.0.0 Safari/537.36")
+# 参数表图通常在详情长图末尾（CWC8-B57GHU1 实锤：9 张里倒数第 2 张是「产品参数」表）——
+# 从后往前问，命中即停，最多看 4 张省视觉调用。
+_XS_IMG_PROBE_MAX = 4
+_XS_PARAM_PROMPT = (
+    "这是家电产品详情长图。请判断它是不是「规格/产品参数表」（含电压/功率/容量/尺寸等"
+    "两列或多列键值表格）。只输出纯JSON不要解释："
+    '{"is_params": true或false, "rows": [["参数名","参数值"], ...]}。'
+    "是参数表时 rows 逐行完整读出所有键值；不是时 is_params=false、rows=[]。")
+
+
+# ---------------------------------------------------------------- 海尔电子说明书站参数
+# 2026-11-21 用户令「参数也可以去 hzy.haier.com/cn/vipcode/eleInstruction 找」：
+# 链路 型号 → getProductBrandNameByProductCode（拿平台码 productCode/propertyExist）
+#      → getProDescription（拿说明书 H5 页 URL，washerh5.haier.net）
+#      → 同目录 prod.json「技术参数介绍」table_heng_2lie 结构化表（纯接口、秒级、零视觉）。
+# 实锤：hzy.haier.com/washerh5.haier.net 都没被 WAF 封（被封的是 www.casarte/www.haier 主站）；
+# CWC8-B57GHU1 13 行参数与欣盛详情图 8 条完全吻合。
+_HZY_TABLE_CODES = {
+    "rated_voltage": "额定电压",
+    "rated_frequency": "额定频率",
+    "rated_power": "额定输入功率",
+    "water_pressure": "水压",
+    "tableware_set_num": "餐具装载容量",
+    "water_efficiency_level": "水效等级",
+    "installation_method": "安装方式",
+    "overall_width_depth_height": "整机外形尺寸(宽*深*高mm)",
+    "openpore_width_depth_height": "最小开孔尺寸(宽*深*高mm)",
+    "countertop_width_depth": "台面尺寸(宽*深mm)",
+    "without_countertop_width_depth_height": "无台面尺寸(宽*深*高mm)",
+    "door_body_occupancy_width_mm": "门体占用宽度(mm)",
+}
+
+
+def _hzy_params(model, log):
+    """海尔电子说明书站参数。成功返回 [(中文名, 值)...]，没命中/失败返回 []。
+    product_model 行只用来防串机（平台码对应型号≠请求型号 → 整包弃用），不进参数。"""
+    nm = norm_model(model)
+    hdrs = {"User-Agent": _XS_UA, "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": "https://hzy.haier.com/cn/vipcode/eleInstruction",
+            "X-Requested-With": "XMLHttpRequest"}
+
+    def _post(path, data):
+        u = ("https://hzy.haier.com/vipCode/%s?vipCode_domainName=&vipCode_ssotoken="
+             "&vipCode_userId=" % path)
+        req = urllib.request.Request(u, data=urllib.parse.urlencode(data).encode(),
+                                     headers=hdrs)
+        with urlopen_ssl(req, timeout=20) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+
+    # 1. 型号 → 平台码（productModel 必须等于请求型号，防串机）
+    try:
+        d = _post("product/getProductBrandNameByProductCode", {"productCode": model})
+        e = (d.get("data") or [{}])[0]
+        if norm_model(e.get("productModel") or "") != nm:
+            log("电子说明书没收录该型号（或对不上），跳过")
+            return []
+        if str(e.get("propertyExist") or "") != "1" and str(e.get("manualExist") or "") != "1":
+            return []
+        pcode = str(e.get("productCode") or "")
+        if not pcode:
+            return []
+    except Exception as ex:
+        log("电子说明书查询失败：%s" % str(ex)[:80])
+        return []
+    # 2. 平台码 → 说明书 H5 页 → 同目录 prod.json
+    try:
+        d2 = _post("product/getProDescription", {"code": pcode})
+        url = str(d2.get("resultMsg") or "")
+        if "http" not in url:
+            return []
+        purl = url.split("?")[0].rsplit("/", 1)[0] + "/prod.json"
+        req = urllib.request.Request(purl, headers={"User-Agent": _XS_UA,
+                                                    "Referer": url})
+        with urlopen_ssl(req, timeout=20) as r:
+            prod = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception as ex:
+        log("prod.json 拉取失败：%s" % str(ex)[:80])
+        return []
+    # 3. 递归找「技术参数介绍」表格节点
+    rows = []
+
+    def _collect(t):
+        for r in (t.get("material_text") or []):
+            if not isinstance(r, dict):
+                continue
+            code = str(r.get("code") or "")
+            val = r.get("value")
+            txt = ""
+            if isinstance(val, dict):
+                txt = str(val.get("material_text") or "")
+                if not txt:
+                    for c in (val.get("content") or [] if isinstance(val.get("content"), list) else []):
+                        if isinstance(c, dict) and c.get("material_text"):
+                            txt = str(c["material_text"])
+                            break
+            elif val is not None:
+                txt = str(val)
+            txt = txt.strip()
+            if code and txt:
+                rows.append((code, txt))
+
+    def _walk(node):
+        if isinstance(node, dict):
+            if str(node.get("material_type") or "").startswith("table") \
+                    and node.get("material_lable") == "技术参数介绍":
+                _collect(node)
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                _walk(v)
+
+    _walk(prod)
+    # 防串机：product_model 行必须等于请求型号
+    pm = dict(rows).get("product_model") or ""
+    if pm and norm_model(pm) != nm:
+        log("电子说明书型号对不上（prod.json 标 %s ≠ %s），弃用" % (pm[:30], model))
+        return []
+    out = []
+    for code, txt in rows:
+        if code == "product_model":
+            continue
+        cn = _HZY_TABLE_CODES.get(code)
+        if cn and txt:
+            out.append((cn, txt))
+    if out:
+        log("电子说明书命中参数 %d 条（平台码 %s）" % (len(out), pcode))
+    return out
+
+
+def _xs_api_via_browser(pid, log):
+    """Playwright 拉欣盛商品接口 JSON（2026-11-21 实锤：阿里云盾只认真浏览器 TLS，
+    纯 urllib/curl/CF 中继全 404；页面里框架带 XSRF 请求才 200）。没装 playwright
+    /chromium 或超时返回 None（静默降级，不挡主链）。"""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        log("playwright 未安装，欣盛详情参数跳过")
+        return None
+    data = None
+    try:
+        with sync_playwright() as p:
+            b = p.chromium.launch(headless=True, args=["--no-proxy-server"])
+            pg = b.new_context(user_agent=_XS_UA).new_page()
+            got = {}
+
+            def _on_resp(r):
+                if "Products/index" in r.url:
+                    try:
+                        got["d"] = json.loads(r.text())
+                    except Exception:
+                        pass
+
+            pg.on("response", _on_resp)
+            pg.goto("https://ys.longyangdq.cn/detail?goods_id=%s" % pid,
+                    wait_until="domcontentloaded", timeout=45000)
+            pg.wait_for_timeout(5000)
+            b.close()
+        data = ((got.get("d") or {}).get("data") or {})
+    except Exception as e:
+        log("欣盛接口浏览器拉取失败：%s" % str(e)[:80])
+        return None
+    return data or None
+
+
+def _xs_img_params(model, xs, log):
+    """欣盛详情长图读参数（2026-11-21 用户令「读取欣盛图片的参数」）：
+    Products 接口 oProductSub.mobileDescription 里的详情长图通常带「产品参数」表，
+    视觉链（Qwen→GLM-4V→商汤）读出来落 groups。结构化 lsProductParameters 常为空
+    （CWC8-B57GHU1 实锤），图片是唯一参数源。成功返回 [(k,v)...]，失败返回 []。"""
+    pid = (xs or {}).get("pid") if isinstance(xs, dict) else None
+    if not pid:
+        return []
+    data = _xs_api_via_browser(pid, log)
+    if not data:
+        return []
+    sub = data.get("oProductSub") or {}
+    md = str(sub.get("mobileDescription") or "")
+    urls = [u for u in re.findall(r'src="([^"]+)"', md) if u.startswith("http")]
+    if not urls:
+        log("欣盛详情长图 0 张，图片读参跳过")
+        return []
+    log("欣盛详情长图 %d 张，开始视觉找参数表（从后往前最多 %d 张）"
+        % (len(urls), _XS_IMG_PROBE_MAX))
+    import base64 as _b64
+    rows = []
+    probed = 0
+    for u in reversed(urls):
+        if probed >= _XS_IMG_PROBE_MAX:
+            break
+        probed += 1
+        try:
+            req = urllib.request.Request(u, headers={"User-Agent": _XS_UA,
+                                                     "Referer": "https://ys.longyangdq.cn/"})
+            raw = urlopen_ssl(req, timeout=25).read()
+        except Exception as e:
+            log("详情图下载失败：%s" % str(e)[:60])
+            continue
+        du = "data:image/jpeg;base64," + _b64.b64encode(raw).decode("ascii")
+        try:
+            txt = _vision_call_auto(du, _XS_PARAM_PROMPT, log)
+        except Exception as e:
+            log("视觉读图失败：%s" % str(e)[:80])
+            continue
+        if not txt:
+            continue
+        try:
+            j = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
+        except Exception:
+            continue
+        if not j.get("is_params"):
+            continue
+        for kv in (j.get("rows") or []):
+            if isinstance(kv, (list, tuple)) and len(kv) >= 2:
+                k, v = str(kv[0]).strip(), str(kv[1]).strip()
+                if k and v and len(k) <= 20:
+                    rows.append((k, v))
+        if rows:
+            log("欣盛详情图读出参数 %d 条（第 %d 张）" % (len(rows), len(urls) - probed + 1))
+            break
+    return rows
+
+
+def _vision_call_auto(data_url, prompt, log):
+    """视觉链统一入口：优先 kitset._vision_key（Mac 零配置兜底），失败再裸调。"""
+    try:
+        from pei_core import _vision_call as _vc
+    except Exception:
+        return None
+    key = None
+    try:
+        import kitset as _ks
+        key = _ks._vision_key()
+    except Exception:
+        key = None
+    return _vc(key, data_url, prompt, log=log)
 
 
 # ---------------------------------------------------------------- GLM 文案
@@ -1075,13 +1392,19 @@ def build_desc(model, kk, data, pts, ship='nat'):
     if flat:
         L.append('【参数】' + ' | '.join(flat[:10]))
     if str(data.get('price') or '').strip():
+        # 2026-11-21 实锤：x（文案三）被落成「展示样机」——文案三也是全新机口径（与
+        # 1039 行标题规则/1782 行 AI 规则对齐），只有 s（样机列）才用展示样机
         L.append('【官网价】%s （本店售价见标价，%s）'
-                 % (data['price'], '全新机' if kk == 'l' else '展示样机'))
+                 % (data['price'], '展示样机' if kk == 's' else '全新机'))
     L.append('【交易】先验后签收，破损拒收')
     L.append('')
     if kk == 'l':
         L.append('%s官方正品，全新机，全国联保' % brand)
         L.append('品质保证，放心购买，售后无忧')
+    elif kk == 'x':
+        # 文案三结尾措辞与聚光必异（三列意思可同措辞必异），口径同为全新机
+        L.append('%s官方正品，全新机，全国联保' % brand)
+        L.append('功能完好，放心拍，售后无忧')
     else:
         L.append('%s官方正品，展示样机，功能完好' % brand)
         L.append('外观可能有轻微展示痕迹，介意慎拍')
@@ -1210,6 +1533,18 @@ def generate(model, kind='l', force=0, log=None):
         xs = None
     elif xs and not str(data.get('price') or '').strip() and str(xs.get('price') or '').strip():
         data['price'] = xs['price']   # 官网没挂价 → 欣盛价兜底
+    # 抓取链 0 参数时的补强顺序（2026-11-21）：① 海尔电子说明书站（纯接口秒级零成本）
+    # → ② 欣盛详情长图视觉读参（~2 分钟）。都是真参数，AI 铁律不编造照旧。
+    if not data.get('groups'):
+        _hzy_rows = _hzy_params(model, log)
+        if _hzy_rows:
+            data['groups'] = [("参数", _hzy_rows)]
+    if not data.get('groups'):
+        _xs_pid = data.get('pid') or (xs or {}).get('pid')
+        if _xs_pid:
+            _xs_rows = _xs_img_params(model, {'pid': _xs_pid}, log)
+            if _xs_rows:
+                data['groups'] = [("参数", _xs_rows)]
     # 蓝底参数直给（2026-11-17 用户令「不是抓不到时才兜底，直接把蓝底 set.json 的
     # 真实参数给聚光，不要我去抓了」）：聚光文案的参数源固定为蓝底 set.json 快照——
     # 有就直接用（覆盖官网/欣盛抓来的），抓取链只补价格/图，不再决定参数有没有。
