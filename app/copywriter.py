@@ -658,20 +658,108 @@ def _hzy_params(model, log):
     except Exception as ex:
         log("电子说明书查询失败：%s" % str(ex)[:80])
         return []
-    # 2. 平台码 → 说明书 H5 页 → 同目录 prod.json
+    # 2. 平台码 → 说明书 H5 页 → 同目录 prod.json；拉不到 JSON（返回 SPA 兜底页）
+    # 时走 SUMEBookMap 接口链（2026-11-22 CWC16-B07BK 实锤：WAS 型说明书数据在
+    # /app/api/{行业码}/casarteSUMEBookMap/{产品码}/static/html-casarte/ 下，
+    # 树里「技术参数」节点 href 指向 SMO*.html，tr 表格 8 条真参数）。
+    url = ""
     try:
         d2 = _post("product/getProDescription", {"code": pcode})
         url = str(d2.get("resultMsg") or "")
         if "http" not in url:
             return []
+    except Exception as ex:
+        log("电子说明书 H5 页查询失败：%s" % str(ex)[:80])
+        return []
+
+    def _sumebook_rows(u):
+        """SUMEBookMap 型电子说明书：树找「技术参数」→ SMO*.html → tr 表格行。"""
+        try:
+            pr = urllib.parse.urlparse(u)
+            segs = [s for s in pr.path.split("/") if s]
+            ind = ""
+            for i, s in enumerate(segs):
+                if s == "app" and i + 2 < len(segs) and segs[i + 1] in ("casarte", "haier", "leader"):
+                    ind = segs[i + 2]
+            pc = (urllib.parse.parse_qs(pr.query).get("productCode") or [""])[0]
+            if not ind or not pc:
+                return []
+            base = "%s://%s/app/api/%s/casarteSUMEBookMap/%s/static/html-casarte/" % (
+                pr.scheme, pr.netloc, ind, urllib.parse.quote(pc))
+            req = urllib.request.Request(base + "casarteSUMEBookMap.json",
+                                         headers={"User-Agent": _XS_UA, "Referer": u})
+            with urlopen_ssl(req, timeout=20) as r:
+                tree = json.loads(r.read().decode("utf-8", "replace"))
+            # 防串机：根 name 必须含请求型号
+            if norm_model(str(tree.get("name") or "")) != nm:
+                log("SUMEBookMap 型号对不上（根标 %s ≠ %s），弃用" % (tree.get("name"), model))
+                return []
+            targets = []
+
+            def _walk2(node):
+                if str(node.get("name") or "").strip() in ("技术参数", "规格参数", "产品规格"):
+                    h = str(node.get("href") or "").strip()
+                    if h:
+                        targets.append(h)
+                for k in ("casarteSUMEBookMap", "PartGroup", "PartNode"):
+                    v = node.get(k)
+                    if isinstance(v, list):
+                        for c in v:
+                            _walk2(c)
+                    elif isinstance(v, dict):
+                        _walk2(v)
+
+            _walk2(tree)
+            rows2, seen2 = [], set()
+            for h in targets[:3]:
+                try:
+                    req2 = urllib.request.Request(
+                        base + h.lstrip("./") if not h.startswith("http") else h,
+                        headers={"User-Agent": _XS_UA, "Referer": u})
+                    with urlopen_ssl(req2, timeout=20) as r2:
+                        html2 = r2.read().decode("utf-8", "replace")
+                except Exception:
+                    continue
+                for tr in re.findall(r"<tr[\s\S]*?</tr>", html2, re.I):
+                    cells = [re.sub(r"<[^>]+>", "", c).strip()
+                             for c in re.findall(r"<t[dh][^>]*>([\s\S]*?)</t[dh]>", tr, re.I)]
+                    cells = [c for c in cells if c]
+                    if len(cells) >= 2 and cells[0] not in seen2:
+                        seen2.add(cells[0])
+                        rows2.append((cells[0], cells[1]))
+            if rows2 and log:
+                log("SUMEBookMap 技术参数页命中 %d 条" % len(rows2))
+            return rows2
+        except Exception as ex:
+            log("SUMEBookMap 链失败：%s" % str(ex)[:80])
+            return []
+
+    try:
         purl = url.split("?")[0].rsplit("/", 1)[0] + "/prod.json"
         req = urllib.request.Request(purl, headers={"User-Agent": _XS_UA,
                                                     "Referer": url})
         with urlopen_ssl(req, timeout=20) as r:
-            prod = json.loads(r.read().decode("utf-8", "replace"))
+            raw = r.read().decode("utf-8", "replace")
+        if raw.lstrip().startswith(("{", "[")):
+            prod = json.loads(raw)
+        else:
+            prod = None
+            if log:
+                log("prod.json 是 SPA 兜底页，走 SUMEBookMap 接口链")
     except Exception as ex:
+        prod = None
         log("prod.json 拉取失败：%s" % str(ex)[:80])
-        return []
+    if prod is None:
+        _srows = _sumebook_rows(url)
+        if not _srows:
+            return []
+        rows = list(_srows)
+        pm = ""     # 根 name 已在 _sumebook_rows 里防串机
+        out = []
+        _CODE2CN = dict(_HZY_TABLE_CODES) if _HZY_TABLE_CODES else {}
+        for k, v in rows:
+            out.append((k, v))
+        return out
     # 3. 递归找「技术参数介绍」表格节点
     rows = []
 
@@ -1040,6 +1128,10 @@ def glm_copy(model, kind, data, log):
     kk_titles = ('注意：这是正品全新机——标题里必须用「全新机」，绝不许出现「展示样机/样机/全新原封」字样。'
                  if kind != 's' else
                  '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新机/全新/全新原封」字样。')
+    # 2026-11-22 CWC16-B07BK 实锤：AI 把「装载容量 8套/每抽屉」整段写进标题/卖点，
+    # 跟品名整机口径 16套 打架——容量一律用整机总量，禁出现「每抽屉」口径
+    if '每抽屉' in str(_props) or '每抽屉' in str(data.get('pname') or ''):
+        bans = tuple(bans) + ('每抽屉',)
     nums_set = set(NUM_RE.findall(norm_model(model)))
     # 2026-11-20 三列撞车治理：其他列（含蓝底口径那份）已发出的句子列成禁复用清单，
     # 直接喂给 AI——它看不见别列写了什么才是全列撞车的病根。
@@ -1573,6 +1665,36 @@ def generate(model, kind='l', force=0, log=None):
                 data['brand'] = _bd
                 if log:
                     log("品牌补强：文案品牌用蓝底口径「%s」" % _bd)
+        # 裸型号 pname 升级（2026-11-22 CWC16-B07BK 实锤）：官网/欣盛全无数据的型号
+        # pname 只剩裸型号，AI 拿不到品类语境瞎猜出「家用热水器」标题。蓝底 set.json
+        # 顶层 name（品类自愈后=品牌+品类+型号）是权威：带品类词且含型号才升级。
+        # 顺手把蓝底真卖点（品类自愈后的容量/双子抽屉等）喂给 AI 当料——无数据型号
+        # sellpoints 是空的，不喂 AI 就没东西可写。
+        _CATW = ('洗碗机', '冰箱', '洗衣机', '热水器', '空调', '电视', '油烟机',
+                 '燃气灶', '消毒柜', '蒸箱', '烤箱', '微蒸烤', '酒柜', '冷柜',
+                 '净水', '茶吧机', '饮水机')
+        try:
+            import kitset as _ks2
+            _sj = (json.load(io.open(os.path.join(
+                _ks2.model_dir(_resolve_model(model)), "set.json"),
+                encoding="utf-8")) or {})
+        except Exception:
+            _sj = {}
+        _sjname = str(_sj.get('name') or '').strip()
+        _pn = str(data.get('pname') or '').strip()
+        if (_sjname and nm in _sjname
+                and any(w in _sjname for w in _CATW)
+                and not any(w in _pn for w in _CATW)):
+            data['pname'] = _sjname
+            if log:
+                log("pname 升级：裸型号 → 蓝底口径「%s」" % _sjname)
+        if not (data.get('sellpoints') or []):
+            _bpts = [p for p in (_sj.get('points') or []) if p and str(p).strip()]
+            if _bpts:
+                data['sellpoints'] = _bpts
+                data['_blue_pts'] = _bpts
+                if log:
+                    log("卖点喂料：文案卖点用蓝底 set.json 的 %d 条真卖点" % len(_bpts))
     except Exception:
         pass
     # 价格统一整数显示：抓来的 "1649.0" 直接进标题会带小数尾巴（2026-10-12 实锤）
@@ -1635,7 +1757,27 @@ def generate(model, kind='l', force=0, log=None):
     # 兜底再扫一遍（AI 闸在 _verify，这条兜官网 sellpoints 直通的漏网）。
     _pts0 = _dedupe_vs_blue(pts, _blue_points(model), cap=5)
     pts = [p for p in _pts0 if not _is_size_line(p)
+           and "每抽屉" not in p
            and not any(w in p for w in NO_WORDS) and not any(w in p for w in SCEN_WORDS)]
+    # 2026-11-22 无数据型号保底（CWC16-B07BK 实锤「东星斑都没有数据了」）：全网零参数
+    # 型号 AI 只有蓝底几条真卖点当料，质量闸/两列去重剔完只剩 1 条——蓝底喂料在
+    # 3 条以下时换装补回（_reword_opener 换开头，不跟蓝底整句一样，11-14 两列
+    # 不同口径照守），凑够卖点条数优先。
+    if len(pts) < 3 and data.get('_blue_pts'):
+        for _bp in data['_blue_pts']:
+            if len(pts) >= 5:
+                break
+            _bp2 = _reword_opener(_bp)
+            _k2 = _bp2.split("，")[0]
+            # 首段撞头也算双胞胎（16套大容量×2 实锤）：开头规格句一样的不补
+            if _bp2 and not any((_x in p or p in _x) for p in pts for _x in (_bp, _bp2)) \
+                    and not any(p.split("，")[0] in _k2 or _k2 in p.split("，")[0]
+                                for p in pts) \
+                    and not _is_size_line(_bp2) \
+                    and not any(w in _bp2 for w in NO_WORDS + SCEN_WORDS):
+                pts.append(_bp2)
+        if log and len(pts) >= 3:
+            log("无数据型号卖点保底：蓝底喂料换装补到 %d 条" % len(pts))
     # 2026-11-20 三列撞车治理：AI 写完再硬过滤一遍——跟其他列/蓝底连续 7 字撞车的
     # 换皮句整条扔；剔完不足 3 条就回退（条数优先，撞车靠 prompt 禁复用清单压）。
     _oth2 = _other_copy_lines(model, kk) + (_blue_points(model) or [])

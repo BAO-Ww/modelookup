@@ -846,7 +846,18 @@ def sellpoints(info, exclude=None):
         elif "洗衣机" in cat or "干衣机" in cat:
             add(vol + "kg 洗涤容量")
         elif "洗碗机" in cat:
-            add(vol + "套容量")
+            # 2026-11-22 CWC16-B07BK 实锤：「装载容量 8套/每抽屉」是抽屉口径，
+            # 双子抽屉 8×2=16 跟标题 16套 打架——每抽屉值不进容量胶囊
+            _raw_v = ""
+            for _nk in ("装载容量", "洗涤容量", "套数", "容量"):
+                for _pk, _pv in pd.items():
+                    if _nk in str(_pk) and "每抽屉" in str(_pv):
+                        _raw_v = str(_pv)
+                        break
+                if _raw_v:
+                    break
+            if not _raw_v:
+                add(vol + "套容量")
         else:
             add(vol + "升总容积，冷藏冷冻分储")
     # 加热/动力类（2026-11-14 用户令「加热快怎么个快法要写明白」：按容量算整胆时间）

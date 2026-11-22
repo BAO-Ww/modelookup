@@ -592,6 +592,10 @@ def _v8_points(points, params_rows, n=6):
         # 2026-11-17 实锤卖点图补出「暂无数据/显示屏」卡：空值参数不进卖点池
         if str(v).strip() in ("暂无数据", "暂无", "无", "-", "/", "不支持", "否"):
             continue
+        # 2026-11-22 CWC16-B07BK 实锤：「装载容量 8套/每抽屉」补成卖点行「8套容量」
+        # 跟标题/话术的 16套 打架——每抽屉口径的行不进卖点池（参数卡照常展示）
+        if "每抽屉" in str(v):
+            continue
         t = ("%s：%s" % (k, v)).strip()
         if v and t not in out:
             # 2026-11-17 用户实锤「滚筒式，洗烘一体」「12kg」参数卡跟上面话术卡
@@ -875,7 +879,9 @@ def _render_img4(cfg, out, prod=None, safe=False):
 
         dim_line(fx, fy - 40, fx + fw, fy - 40, str(W))
         dim_line(fx + fw + 36, fy, fx + fw + 36, fy + fh, str(H), vertical=True)
-        d.text((540, fy + fh + 14), "正视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
+        # 2026-11-22 CWC16 实锤：居中的「正视图」会和俯视图宽度标注叠字（同在版心中线），
+        # 挪到正视图盒子左边缘——俯视图 821 标注在版心中央，互不相碰
+        d.text((fx, fy + fh + 14), "正视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
         # 俯视图（宽×深）：先限高再反推宽，冰箱这类高机不撑爆版面
         ph2 = min(150, max(24, int(D / W * 300)))
         pw2 = max(60, min(620, int(ph2 * W / D)))
@@ -2080,6 +2086,28 @@ def _gather_info(model, log):
                     _db.close()
                 except Exception:
                     _pn = ""
+            # ③ 自家价格表兜底（2026-11-22 CWC16-B07BK 实锤：全网都搜不到的新机
+            # 在自家表里 cat/品名 一定有——cat 列直接是中文品类、n 是完整商品名。
+            # 全网五路+本地欣盛库全落空时，这是永不失败的最后一层）
+            try:
+                import payload as _pl
+                _nm2 = norm_model(model) or ""
+                for _r in (_pl.get_payload().get("rows") or []):
+                    _mo = str(_r.get("mo") or _r.get("c") or "")
+                    if _nm2 and norm_model(_mo) == _nm2:
+                        _cat2 = str(_r.get("cat") or "").strip()
+                        _n2 = str(_r.get("n") or "").strip()
+                        if _cat2 and _cat2 not in ("", "电器", "家电"):
+                            info["cat"] = _cat2
+                        if _n2:
+                            _pn = _n2
+                            if not any(w in str(info.get("title") or "") for w in _pc2.CAT_WORDS):
+                                info["title"] = _n2
+                        if log and (_cat2 or _n2):
+                            log("品类/品名从自家价格表认出：%s / %s" % (_cat2, _n2[:44]))
+                        break
+            except Exception:
+                pass
             _w = next((w for w in _pc2.CAT_WORDS if w in _pn), "")
             if _w:
                 info["cat"] = _w
@@ -2810,9 +2838,13 @@ def _rescue_prod(im, log):
 
 def _same_img(a, b, thr=0.6):
     """同图判定：墨迹二值化后 64×64 比对 IoU。
-    必须先二值化再缩——细线尺寸图在灰度缩图里会消失，跟白底照片看起来一样（251WBIU1 实锤）。"""
+    必须先二值化再缩——细线尺寸图在灰度缩图里会消失，跟白底照片看起来一样（251WBIU1 实锤）。
+    2026-11-22 CWC16-B07BK 大坑：透明底 PNG 直接 convert('L') 透明区全变纯黑=整图墨迹，
+    跟黑底线稿（墨迹也满图）IoU 直接 1.0——官方尺寸图被「与机图同图」误杀。
+    两张图先垫白再比，透明区算白纸不算墨。"""
     try:
         def ink(im):
+            im = _flat_white(im)
             g = im.convert("L").resize((64, 64))
             return [1 if v < 215 else 0 for v in g.getdata()]
         ia, ib = ink(a), ink(b)
@@ -3517,6 +3549,18 @@ def _parse_dims(pd):
             continue
         ns = sorted(nums, reverse=True)
         return ns[1], ns[0], ns[2]      # 兜底：宽=次大, 高=最大, 深=最小
+    # ③ 分列键兜底（2026-11-22 CWC16-B07BK 实锤：官网只给 宽度/高度/深度 三行，
+    # 没有任何合并尺寸键——①②都落空，dims=None 尺寸图退化手绘空框）
+    _sep = {}
+    for k, v in items:
+        ks = str(k).strip()
+        _m = re.match(r"^(宽度|宽度mm|宽|高度|高|深度|深)$", ks)
+        if _m:
+            _ns = re.findall(r"\d{2,4}(?:\.\d+)?", str(v))
+            if _ns:
+                _sep[ks.rstrip("度mm")] = int(float(_ns[0]))
+    if {"宽", "高", "深"} <= set(_sep.keys()):
+        return _sep["宽"], _sep["高"], _sep["深"]
     return None
 
 
@@ -3573,6 +3617,12 @@ def _kit_titles(brand, model, pd, info, sp):
             feats.append(x)
     # 技术词：官网页标题里的招牌技术（XQS100-BZ6VE2「10公斤双动力波轮洗衣机」实锤）
     tt = str(info.get("title") or "")
+    # 2026-11-22 CWC16-B07BK 实锤：品名/标题的 N套 = 整机总量口径（双子抽屉 8×2=16），
+    # 先进 caps 且 总位=True，压过参数「装载容量 8套/每抽屉」——标题容量跟整机一致
+    if "洗碗" in tt:
+        _tcm2 = re.search(r"(\d{1,2})套", tt)
+        if _tcm2:
+            caps.append((True, int(_tcm2.group(1)), "套"))
     for w in ("双动力", "空气洗", "精华洗", "活水洗", "除螨", "防缠绕", "直驱"):
         if w in tt:
             _add(w)
@@ -3623,6 +3673,10 @@ def _kit_titles(brand, model, pd, info, sp):
                     _add(w)
                     break
         if "容积" in ks or ("容量" in ks and "kg" not in vs.lower()):
+            # 2026-11-22 CWC16-B07BK 实锤：「装载容量 8套/每抽屉」抽屉口径不进标题
+            # 容量（跟整机 16套 打架），标题口径已在上面的品名 N套 收过
+            if "每抽屉" in vs:
+                continue
             n = re.sub(r"[^0-9]", "", vs)
             if n:
                 # 洗碗机容量单位 件/套（CWY15 总容积=15件 实锤），冰箱冷柜才是 L
@@ -3872,6 +3926,16 @@ def _hard_points(info, pd, sp):
         elif inv:
             add("变频压缩机，控温稳定")
     elif "洗碗机" in cat or "洗碗" in tt:
+        # 容量口径（2026-11-22 CWC16-B07BK 实锤）：品名/标题的 N套 = 整机总量
+        # （自家价格表口径），优先于参数「餐具装载容量 8套/每抽屉」——双子抽屉
+        # 8×2=16，参数值抢先会出「8套大容量」跟标题 16套 打架
+        _mt = re.search(r"(\d{1,2})套", tt or "")
+        if _mt:
+            cap_set = _mt.group(1)
+        elif not cap_set:
+            _ms = re.search(r"(\d{1,2})套", alltext)
+            if _ms:
+                cap_set = _ms.group(1)
         if cap_set:
             add("%s套大容量，锅碗瓢盆一次洗完" % cap_set)
         if "开门速干" in alltext or "干燥方式" in str(pd):
@@ -3879,6 +3943,10 @@ def _hard_points(info, pd, sp):
         if "消毒" in alltext or "除菌" in alltext or "杀菌" in alltext:
             add("高温除菌消毒")
         # 2026-11-21 CWC8 实锤补货：单抽屉/水效等级都是真卖点，模板原来只出 2-3 条
+        # 2026-11-22 CWC16 实锤：双子抽屉（分层摆放）和抽屉式（抽拉取放）是两个角度，
+        # 品名带双子时两条都出——措辞必异不算双胞胎
+        if "双子抽屉" in alltext:
+            add("双子抽屉分层放，大小餐具分开摆")
         if "抽屉" in alltext:
             add("抽屉式设计，抽拉取放不弯腰")
         if "嵌" in alltext:
@@ -4063,9 +4131,16 @@ def _short_feats(pd, info):
             continue   # kg 容量不再走下面的容积/L 判定（洗烘一体/烘干方式已在上面 add 过）
         # 洗碗机/容量类（CWY15 实锤：底部只剩「大容量」一个词）；容量单位 件/套
         if ("套" in vs or "件" in vs) and ("容量" in ks or "套数" in ks or "容积" in ks):
-            n = re.sub(r"[^0-9]", "", vs)
-            if n:
-                add(n + "套大容量")
+            # 2026-11-22 CWC16-B07BK 实锤：「装载容量 8套/每抽屉」每抽屉口径
+            # 不进胶囊（双子抽屉 8×2=16，跟标题 16套 打架）——改用品名整机 N套
+            if "每抽屉" in vs:
+                _tm2 = re.search(r"(\d{1,2})套", str(info.get("title") or ""))
+                if _tm2:
+                    add(_tm2.group(1) + "套大容量")
+            else:
+                n = re.sub(r"[^0-9]", "", vs)
+                if n:
+                    add(n + "套大容量")
         elif "容积" in ks or ("容量" in ks and ("L" in vs or "升" in vs)):
             n = re.sub(r"[^0-9]", "", vs)
             if n:
@@ -4147,6 +4222,19 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
     brand = (info.get("brand") or "海尔").strip()
     cat = pei_core.cat_name(info) or ""
     cap = pei_core.capacity_str(info) or ""
+    # 2026-11-22 CWC16-B07BK 实锤：品名/标题的 N套 = 整机总量口径（自家价格表），
+    # 优先于参数「装载容量 8套/每抽屉」（双子抽屉 8×2=16）——标题容量跟整机口径一致
+    _tcm = re.search(r"(\d{1,2})套", str(info.get("title") or ""))
+    if _tcm and ("洗碗机" in cat or "洗碗" in str(info.get("cat") or "")):
+        cap = _tcm.group(1) + "套"
+    elif not cap and _tcm and "洗碗" in str(info.get("title") or ""):
+        cap = _tcm.group(1) + "套"
+    # 2026-11-22 CWC16-B07BK 实锤：洗碗机参数表没容量键时，自家品名「…16套双子抽屉…」
+    # 就带容量——标题四要素（品牌+品类+容量+型号+全新）不能缺容量
+    if not cap and ("洗碗机" in cat or "洗碗" in str(info.get("cat") or "")):
+        _cm = re.search(r"(\d{1,2})套", str(info.get("title") or ""))
+        if _cm:
+            cap = _cm.group(1) + "套"
     feat = (pei_core.core_feature(info) or "") if (info.get("props") or []) else ""
     tw = pei_core.type_word(info) or ""
     brand_en = {"海尔": "HAIER", "卡萨帝": "CASARTE", "统帅": "LEADER", "Leader": "LEADER"}.get(brand, brand.upper())
@@ -4161,9 +4249,15 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
         if split:
             line1, line2 = split
     rows = []
+    # 2026-11-22 CWC16-B07BK 实锤：爬虫按大小猜的 宽度/高度/深度 行（宽821实为高）
+    # 跟官方「整机外形尺寸(宽x深x高)」行同卡打架——带标签行在场时猜序行不进参数卡
+    _labeled_in = any("外形尺寸" in str(k) and "宽" in str(k) and "高" in str(k)
+                      for k, _ in (info.get("props") or []))
     for k, v in (info.get("props") or []):
         ks, vs = str(k), str(v)
         if not vs or any(x in ks for x in _SKIP_KEYS):
+            continue
+        if _labeled_in and ks in ("宽度", "高度", "深度", "宽", "高", "深"):
             continue
         rows.append((ks, vs))
         if len(rows) >= 8:
@@ -4173,9 +4267,18 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
     dims = _parse_dims(pd) or _KNOWN_DIMS.get(model) or _KNOWN_DIMS.get(norm_model(model) or "")
     # 官方尺寸图在场时的口径（2026-10-26）：AI 从图上读出的数字最权威；
     # AI 没读出就 dims=None 不印数字（参数表数字跟官方图打架 = 图文矛盾，ES60H-Q3 实锤）
+    # 2026-11-22 CWC16-B07BK 例外收口：props 里有「尺寸(宽x深x高)」带顺序标签的
+    # 官方表格行（SUMEBookMap 技术参数页）时表格数字最权威——AI 读图有方位歧义
+    # （正视图/侧视图数字张冠李戴，宽599 读成宽616 实锤），标签对号入座零歧义。
     _si_chk = os.path.join(mdir, "sizeimg.jpg") if mdir else None
     _have_si = bool(_si_chk and os.path.isfile(_si_chk))
-    if ai_dims:
+    _labeled_dims = bool(dims) and any(
+        ("尺寸" in str(k) or "外形" in str(k)) and "宽" in str(k) and "高" in str(k)
+        and ("深" in str(k) or "厚" in str(k))
+        for k in pd)
+    if _labeled_dims:
+        pass
+    elif ai_dims:
         dims = list(ai_dims)
     elif _have_si:
         dims = None
@@ -4187,7 +4290,7 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
     # 最小开孔尺寸（嵌入式机型装机最关心的数字，2026-11-21 CWC8 实锤）：img4 底部一并印上
     # 键名常带后缀（「最小开孔尺寸(宽*深*高mm)」实锤）→ 子串匹配
     hole_dims = ""
-    for _hk in ("最小开孔", "开孔尺寸", "挖孔尺寸"):
+    for _hk in ("最小开孔", "开孔尺寸", "挖孔尺寸", "开口尺寸"):
         for _pk, _pv in pd.items():
             if _hk in str(_pk) and str(_pv).strip():
                 hole_dims = str(_pv).strip()
@@ -4708,10 +4811,15 @@ def generate(model, force=0, log=None):
             except Exception:
                 pass
         # 强制重出时清掉旧的尺寸图缓存（251WBIU1 白门板假阳性实锤：不改代码也得能自愈）
+        # 2026-11-22 CWC16-B07BK 实锤：直接删太狠——重抓一旦失败，唯一的官方尺寸图
+        # 就永久丢了。改成挪备份：hunt 抓到新图用新图，抓不到自动还原（自愈但绝不丢图）。
         _stale = os.path.join(mdir, "sizeimg.jpg")
         if os.path.isfile(_stale):
             try:
-                os.remove(_stale)
+                _bak = os.path.join(mdir, "sizeimg.jpg.bak")
+                if os.path.isfile(_bak):
+                    os.remove(_bak)
+                os.rename(_stale, _bak)
             except Exception:
                 pass
         # 2026-10-31 晚实锤（BCD-500WLCFD8FVAU1）：AI 终审把真尺寸图误否一次 →
@@ -4786,8 +4894,23 @@ def generate(model, force=0, log=None):
             prod = os.path.join(mdir, "product.png")
             if log:
                 log("用卡片缩略图凑（清晰度有限，建议在写文案里补张高清图）")
-    if not prod:
-        raise RuntimeError("没抓到可用机图——先在「写文案」里生成一次图片，或确认欣盛/官网/中关村有该型号图")
+        if not prod:
+            raise RuntimeError("没抓到可用机图——先在「写文案」里生成一次图片，或确认欣盛/官网/中关村有该型号图")
+        # 2026-11-22 force 尺寸图保险：hunt 跑完还没图，把 force 前备份的旧官方尺寸图
+        # 还原回去（重抓失败不再永久丢图）；hunt 抓到了新的就删备份用新图
+        _bak = os.path.join(mdir, "sizeimg.jpg.bak")
+        if not os.path.isfile(os.path.join(mdir, "sizeimg.jpg")) and os.path.isfile(_bak):
+            try:
+                os.rename(_bak, os.path.join(mdir, "sizeimg.jpg"))
+                if log:
+                    log("重抓没拿到官方尺寸图，还原重出前的旧图")
+            except Exception:
+                pass
+        elif os.path.isfile(_bak):
+            try:
+                os.remove(_bak)
+            except Exception:
+                pass
     log("组装套图数据…")
     _ai_dims = _ai_read_size_nums(os.path.join(mdir, "sizeimg.jpg"), log) if (
         mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg"))) else None
