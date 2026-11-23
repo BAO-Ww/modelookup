@@ -349,6 +349,49 @@ class ApiPostMixin:
             self._send(200, json.dumps(r, ensure_ascii=False))
             return
 
+        # ---------- 手动塞主图/尺寸图（2026-11-23 用户令「四层都没有就让我塞进去跟主图」） ----------
+        # 收 base64 dataURL，落 kitset/<型号>/官网/主图.png —— 下次生成 _manual_overrides
+        # 直接当 product.png（跳过 AI 选图）；kind=size 落 尺寸图.png 同理进 sizeimg 链。
+        if u.path == "/api/kitmain":
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            except Exception:
+                d = {}
+            model = str(d.get("model") or "").strip()
+            data = str(d.get("data") or "")
+            kind = str(d.get("kind") or "main")
+            if not model or not data:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model 或图片数据"}, ensure_ascii=False))
+                return
+            import re as _re
+            m = _re.match(r"data:image/(?:png|jpe?g|webp);base64,(.+)", data, _re.S)
+            if not m:
+                self._send(400, json.dumps({"ok": False, "msg": "图片数据格式不对"}, ensure_ascii=False))
+                return
+            try:
+                import kitset as _ks
+                dd = os.path.join(_ks.model_dir(model), "官网")
+                os.makedirs(dd, exist_ok=True)
+                _stem = "尺寸图" if kind == "size" else "主图"
+                # 清掉旧变体（主图.jpg/主图_2.png 之类），只留刚传的这张，避免 override 挑错
+                for _f in os.listdir(dd):
+                    _st, _ex = os.path.splitext(_f)
+                    if _st == _stem or _st.startswith(_stem + "_"):
+                        try:
+                            os.remove(os.path.join(dd, _f))
+                        except Exception:
+                            pass
+                fp = os.path.join(dd, _stem + ".png")
+                with open(fp, "wb") as fh:
+                    fh.write(base64.b64decode(m.group(1)))
+                state.LOG.append("手动塞图：%s ← 官网/%s.png（%d KB）"
+                                 % (model, _stem, len(m.group(1)) // 1370))
+                self._send(200, json.dumps({"ok": True, "saved": fp}, ensure_ascii=False))
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+            return
+
         # ---------- 素材存储路径（2026-10-24 用户定稿：界面可改，peiwork+copy 共用，老数据搬） ----------
         if u.path in ("/api/pubroot", "/api/pubrootset"):
             import pubwork

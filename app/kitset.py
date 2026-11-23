@@ -21,7 +21,7 @@ from collections import Counter
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
-from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch, _hzy_params, _xs_img_params
+from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch, _hzy_params, _xs_img_params, _book_fetch
 from normalize import norm_model
 from renderlock import serialized
 import paths
@@ -72,7 +72,7 @@ def model_dir(model):
 # 下载的候选图按来源进 官网/欣盛/中关村/其他 子文件夹
 SPOT_SUB = "聚光"
 BLUE_SUB = "蓝底"
-_SRC_TAG_DIRS = ("官网", "欣盛", "中关村", "其他")
+_SRC_TAG_DIRS = ("官网", "说明书", "欣盛", "中关村", "其他")
 _MIG_OK = set()
 
 
@@ -1561,29 +1561,39 @@ def _zol_data(model, brand, log):
 
 def _zol_data_once(model, brand, log):
     pages = []
+    # 2026-11-23 C8U12G3 实锤：ZOL 详情页型号带空格（「卡萨帝C8 U12G3」），原样关键词
+    # 必应一条都不中。型号拆空格变体（首段字母+数字后插空格）两路搜索都带上。
+    _sp = re.sub(r'^([A-Za-z]\d+)(?=[A-Za-z])', r'\1 ', model).strip()
+    _qvs = list(dict.fromkeys([x for x in (model, _sp) if x]))
     try:
-        q = urllib.parse.quote(("%s%s" % (brand or "", model)).strip())
-        html = _http_text("https://detail.zol.com.cn/index.php?c=SearchList&keyword=" + q)
-        if html:
-            pages += [u for u, t in re.findall(
-                r'href="(https://detail\.zol\.com\.cn/[^"]+?/[^"]+?\.shtml)"[^>]*>([^<]{4,60})<', html)
-                if (norm_model(model) or "")[:8] in norm_model(t)]
+        for _qv in _qvs:
+            q = urllib.parse.quote(("%s%s" % (brand or "", _qv)).strip())
+            html = _http_text("https://detail.zol.com.cn/index.php?c=SearchList&keyword=" + q)
+            if html:
+                pages += [u for u, t in re.findall(
+                    r'href="(https://detail\.zol\.com\.cn/[^"]+?/[^"]+?\.shtml)"[^>]*>([^<]{4,60})<', html)
+                    if (norm_model(model) or "")[:8] in norm_model(t)]
+            if pages:
+                break
     except Exception:
         pass
     if not pages:
         # 必应 RSS 抽风式限流（2026-10-29 实锤：同一查询一把有结果一把空频道）——
-        # www/cn 两个入口 + count=30 变体连试，谁出结果用谁
+        # www/cn 两个入口 + count=30 变体连试，谁出结果用谁；型号原样+拆空格各来一轮
         try:
             import time as _t2
-            base_q = "site:detail.zol.com.cn " + model
-            for bu in ("https://www.bing.com/search?" + urllib.parse.urlencode({"q": base_q, "format": "rss"}),
-                       "https://cn.bing.com/search?" + urllib.parse.urlencode({"q": base_q, "format": "rss"}),
-                       "https://www.bing.com/search?" + urllib.parse.urlencode({"q": base_q, "format": "rss", "count": "30"})):
-                xml = _http_text(bu)
-                pages += re.findall(r"<link>(https://detail\.zol\.com\.cn/[^<]+?\.shtml)</link>", xml or "")
+            for _qv in _qvs:
+                base_q = "site:detail.zol.com.cn " + _qv
+                for bu in ("https://www.bing.com/search?" + urllib.parse.urlencode({"q": base_q, "format": "rss"}),
+                           "https://cn.bing.com/search?" + urllib.parse.urlencode({"q": base_q, "format": "rss"}),
+                           "https://www.bing.com/search?" + urllib.parse.urlencode({"q": base_q, "format": "rss", "count": "30"})):
+                    xml = _http_text(bu)
+                    pages += re.findall(r"<link>(https://detail\.zol\.com\.cn/[^<]+?\.shtml)</link>", xml or "")
+                    if pages:
+                        break
+                    _t2.sleep(1)
                 if pages:
                     break
-                _t2.sleep(1)
         except Exception:
             pass
     pages = [p for p in dict.fromkeys(pages) if "/param." not in p][:2]
@@ -1868,40 +1878,695 @@ def _r2_pull(model, log=None):
     return out
 
 
-def _gather_info(model, log):
+# ---------------- 婷专用老链（2026-11-23 用户令「宝是宝婷是婷」分家） ----------------
+# 以下两函数为 v3.0.87 原版行为（pubwork 爬虫→R2→官网→欣盛→中关村→必应→GLM），
+# 仅婷套图（white_hero）/婷宝版配文相关链路使用；宝套图/宝三文案走新版（官网→说明书两层）。
+
+def _gather_info_legacy(model, log):
+
     """pubwork 爬虫 → 官网三站 → 欣盛，三路凑 props/brand/title/price/url。
+
+    返回 (info, data imgs_urls)；info 至少含 model/brand/title/props。"""
+
+    info = None
+
+    try:
+
+        import pubwork
+
+        # kitset 权威副本优先（2026-10-29 聚光独立体系）：蓝底上次抓的真参数在自己家
+
+        info = load_kinfo(model) or pubwork.load_info(model)
+
+        # 2026-11-19 型号自报闸门：历史缓存可能存着串页脏数据（BCD-335WLDPGU1 缓存成
+
+        # BCD-342WLLFDEDW9U1 实锤），页面标型号对不上 → 弃缓存重抓，绝不拿别家机器出图
+
+        _mm = pubwork._model_mismatch(info, model)
+
+        if _mm:
+
+            if log:
+
+                log("缓存参数型号对不上（页面标 %s ≠ 请求 %s），弃缓存重抓" % (_mm, model))
+
+            info = None
+
+        if not info or not (info.get("props") or []):
+
+            info = pubwork.work(model, prog=lambda p, m: (log(m) if log else None))
+
+    except Exception as e:
+
+        if log:
+
+            log("pubwork 未命中（%s）" % e)
+
+        info = None
+
+    imgs = []
+
+    data = None
+
+    xs = None
+
+    # 2026-11-11 用户令「不应该是去 R2 拿图嘛，怎么又去爬虫了」：先取云端 R2 图库
+
+    _r2 = _r2_pull(model, log)
+
+    if _r2:
+
+        for _p in _r2:
+
+            _par = os.path.basename(os.path.dirname(_p))
+
+            imgs.append((_p, _par if _par in _SRC_TAG_DIRS else "其他"))
+
+    # 2026-11-16 用户令「所有的都抓取放到 R2 里面」：以前是「R2 有图 + 参数够」就整体不爬，
+
+    # 官网/欣盛/中关村三源各只有一部分图，尺寸线稿这种只在详情长图里的永远补不上。
+
+    # 改成按来源目录独立判断——哪个来源目录里一张图都没有就去补那个来源，
+
+    # 每个来源只补一次（抓过即跳过），既不重复爬也不留空档。
+
+    _mdir_src = model_dir(model)
+
+
+
+    def _src_has(_sub):
+
+        _p = os.path.join(_mdir_src, _sub)
+
+        try:
+
+            return os.path.isdir(_p) and any(
+
+                f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")) for f in os.listdir(_p))
+
+        except Exception:
+
+            return False
+
+
+
+    _miss_gw = not _src_has("官网")
+
+    _miss_xs = not _src_has("欣盛")
+
+    _miss_zol = not _src_has("中关村")
+
+    _low_props = len((info or {}).get("props") or []) < 5
+
+    if _miss_gw or _low_props:
+
+        try:
+
+            data = fetch_official(model, log, need_imgs=True)   # need_imgs：参数库命中也要抓官网图
+
+        except Exception:
+
+            data = None
+
+    if _miss_xs or _low_props:
+
+        try:
+
+            xs = fetch_xinsheng(model, log)
+
+        except Exception:
+
+            xs = None
+
+    for src, _tag in ((data, "官网"), (xs, "欣盛")):
+
+        if src and src.get("imgs"):
+
+            # 2026-10-31 用户令：下载的图按来源分文件夹——候选带来源标签，
+
+            # _pick_prod 落盘时进 官网\ / 欣盛\ 子目录
+
+            imgs.extend([(u, _tag) for u in src["imgs"] if u])
+
+    if imgs:
+
+        # 大图变体优先（_1200 > 其他 > _600）：透明底机图锁定不比面积，先到先得，
+
+        # 600px 小图先到会顶掉 1200px 大图导致成图发糊（2026-10-22 XQS100 用户实锤）
+
+        imgs = sorted(imgs, key=lambda it: 0 if "_1200" in it[0] else (2 if "_600" in it[0] else 1))
+
+    if not info:
+
+        info = {}
+
+    if not (info.get("props") or []):
+
+        props = []
+
+        for src in (data, xs):
+
+            for _g, kv in ((src or {}).get("groups") or []):
+
+                for k, v in (kv or []):
+
+                    if str(k) and str(v) and (str(k), str(v)) not in props:
+
+                        props.append((str(k), str(v)))
+
+        if props:
+
+            info["props"] = props
+
+    # 官网参数并集（2026-10-28 用户令）：pubwork/欣盛先到的 props 常缺「尺寸」键
+
+    # （EB100Z35Pro2 官网明摆着 尺寸(宽*高*深)mm=550*1030*570 却没进 props 实锤）——
+
+    # 官网命中的键追加到 props 尾部、不动已有顺序；_parse_dims 按键名找尺寸，补上即出真尺寸
+
+    if (data or {}).get("groups") and info.get("props") is not None:
+
+        _have = {str(k).strip() for k, _ in (info.get("props") or [])}
+
+        for _g, kv in (data.get("groups") or []):
+
+            for k, v in (kv or []):
+
+                ks, vs = str(k).strip(), str(v).strip()
+
+                if ks and vs and ks not in _have:
+
+                    info["props"].append((ks, vs))
+
+                    _have.add(ks)
+
+    # 全网搜参兜底（2026-10-29 用户令）：pubwork/官网/欣盛/中关村全空时（渠道机实锤），
+
+    # 必应搜型号从结果页正文抠参数。已有键不覆盖；凑不满 5 条才算「参数残缺」才触发。
+
+    # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 2 天内不再跑（重出会清掉重试）。
+
+    _mdir = model_dir(model)
+
+    # 中关村全量参数源（2026-10-29 LTD-575WDS9U1 实锤：leader 官网 WAF 拦 IP 403、
+
+    # pubwork/欣盛 0 参数、必应 0 结果，ZOL 却有 23 条全参数）——必应之前先问 ZOL，
+
+    # 图也并进候选。负缓存键 zol_params 与 _ensure_dims 的 zol_dims（尺寸专用）分开。
+
+    # 2026-11-16 用户令「所有的都抓取放到 R2 里面」：中关村从「参数 <5 条才兜底」
+
+    # 改成「缺中关村图也要抓」（_miss_zol 由上面分源判断给出），图并进候选、参数照旧补缺。
+
+    if (_miss_zol or len(info.get("props") or []) < 5) and not _neg_get(_mdir, "zol_params"):
+
+        try:
+
+            _zi, _zp = _zol_data(model, (info.get("brand") or ""), log)
+
+            if _zi:
+
+                imgs.extend([(u, "中关村") for u in _zi if u])
+
+            if _zp:
+
+                _have = {str(k).strip() for k, _v in (info.get("props") or [])}
+
+                for k, v in _zp:
+
+                    if str(k).strip() not in _have:
+
+                        info.setdefault("props", []).append((str(k), str(v)))
+
+                if log:
+
+                    log("中关村补全参数：%d 条（合计 %d 条）" % (len(_zp), len(info.get("props") or [])))
+
+            if not _zp:
+
+                _neg_set(_mdir, "zol_params")
+
+                if log:
+
+                    log("中关村没有参数（已记住，7 天内不再重复找）")
+
+        except Exception as e:
+
+            if log:
+
+                log("中关村补参失败：%r" % (e,))
+
+    # 电子说明书/欣盛图参兜底（2026-11-21 用户令，与 copywriter 同源）：中关村/必应/GLM
+
+    # 对渠道机全落空时，先问海尔电子说明书（纯接口秒级），再欣盛详情长图视觉读参。
+
+    # 只补缺键不覆盖；各自负缓存，试过没有 7 天内不再跑（重出清负缓存即重试）。
+
+    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "hzy_params"):
+
+        try:
+
+            _hp = _hzy_params(model, log)
+
+            if _hp:
+
+                _have = {str(k).strip() for k, _v in (info.get("props") or [])}
+
+                for k, v in _hp:
+
+                    if str(k).strip() not in _have:
+
+                        info.setdefault("props", []).append((str(k), str(v)))
+
+                if log:
+
+                    log("电子说明书补参：%d 条（合计 %d 条）" % (len(_hp), len(info.get("props") or [])))
+
+            else:
+
+                _neg_set(_mdir, "hzy_params")
+
+                if log:
+
+                    log("电子说明书没有参数（已记住，7 天内不再重复找）")
+
+        except Exception as e:
+
+            if log:
+
+                log("电子说明书补参失败：%r" % (e,))
+
+    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "xs_img_params"):
+
+        try:
+
+            if xs is None:
+
+                xs = fetch_xinsheng(model, log)
+
+            _xp = _xs_img_params(model, xs, log)
+
+            if _xp:
+
+                _have = {str(k).strip() for k, _v in (info.get("props") or [])}
+
+                for k, v in _xp:
+
+                    if str(k).strip() not in _have:
+
+                        info.setdefault("props", []).append((str(k), str(v)))
+
+                if log:
+
+                    log("欣盛图读参补参：%d 条（合计 %d 条）" % (len(_xp), len(info.get("props") or [])))
+
+            else:
+
+                _neg_set(_mdir, "xs_img_params")
+
+                if log:
+
+                    log("欣盛图读参没有结果（已记住，7 天内不再重复找）")
+
+        except Exception as e:
+
+            if log:
+
+                log("欣盛图读参补参失败：%r" % (e,))
+
+    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "web_params"):
+
+        try:
+
+            for k, v in _web_params(model, log):
+
+                if str(k).strip() not in {str(x).strip() for x, _ in (info.get("props") or [])}:
+
+                    info.setdefault("props", []).append((str(k), str(v)))
+
+        except Exception:
+
+            pass
+
+        if not _web_params._last_ok:
+
+            _neg_set(_mdir, "web_params")
+
+            if log:
+
+                log("全网搜参没有结果（已记住，7 天内不再重复找）")
+
+        # GLM 联网搜参（2026-10-29 用户令「把 GLM 加上让它去找」）：必应也空才动用，
+
+        # glm-4.5-flash 挂 web_search 真上网搜，免费。同样只补缺键、绝不覆盖已有参数。
+
+        if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "glm_params"):
+
+            try:
+
+                for k, v in _glm_params(model, log):
+
+                    if str(k).strip() not in {str(x).strip() for x, _ in (info.get("props") or [])}:
+
+                        info.setdefault("props", []).append((str(k), str(v)))
+
+            except Exception:
+
+                pass
+
+            if not _glm_params._last_ok:
+
+                _neg_set(_mdir, "glm_params")
+
+                if log:
+
+                    log("GLM 联网搜参也没有结果（已记住，7 天内不再重复找）")
+
+    if not (info.get("title") or ""):
+
+        for src in (data, xs):
+
+            if src and src.get("pname"):
+
+                info["title"] = str(src["pname"])
+
+                break
+
+    # 品类防串（2026-11-21 CWC8-B57GHU1 实锤）：标题只剩裸型号、cat 废词「电器」时，
+
+    # 欣盛/官网 pname（「卡萨帝洗碗机8套…」）是唯一靠谱品类来源——认出品类词就升级
+
+    # cat/title，否则卖点模板掉进通用分支，洗碗机会被写成「冷藏冷冻分储」冰箱话术。
+
+    # 活抓拿不到 pname 就退本地欣盛库（xinsheng.sqlite3，name 里带品类词、category 列直接是中文品类）。
+
+    try:
+
+        import pei_core as _pc2
+
+        _cn = (_pc2.cat_name(info) or "").strip()
+
+        if not _cn or _cn in ("电器", "家电"):
+
+            _pn = ""
+
+            for _src in (data, xs):
+
+                if (_src or {}).get("pname"):
+
+                    _pn = str(_src["pname"])
+
+                    break
+
+            if not _pn:
+
+                try:
+
+                    import sqlite3 as _sq3
+
+                    _dbp = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ModelLookup", "xinsheng.sqlite3")
+
+                    _db = _sq3.connect(_dbp)
+
+                    _db.row_factory = _sq3.Row
+
+                    _rows = _db.execute("select name from products where name like ? limit 10",
+
+                                        ("%" + norm_model(model) + "%",)).fetchall()
+
+                    _best = ""
+
+                    for _r in _rows:
+
+                        _nm = str(_r["name"] or "")
+
+                        if next((w for w in _pc2.CAT_WORDS if w in _nm), ""):
+
+                            _best = _nm   # 优先带品类词的（跳过「碗柜可配CWC8」这类配件名）
+
+                            break
+
+                        if not _best and _nm:
+
+                            _best = _nm
+
+                    _pn = _best
+
+                    _db.close()
+
+                except Exception:
+
+                    _pn = ""
+
+            # ③ 自家价格表兜底（2026-11-22 CWC16-B07BK 实锤：全网都搜不到的新机
+
+            # 在自家表里 cat/品名 一定有——cat 列直接是中文品类、n 是完整商品名。
+
+            # 全网五路+本地欣盛库全落空时，这是永不失败的最后一层）
+
+            try:
+
+                import payload as _pl
+
+                _nm2 = norm_model(model) or ""
+
+                for _r in (_pl.get_payload().get("rows") or []):
+
+                    _mo = str(_r.get("mo") or _r.get("c") or "")
+
+                    if _nm2 and norm_model(_mo) == _nm2:
+
+                        _cat2 = str(_r.get("cat") or "").strip()
+
+                        _n2 = str(_r.get("n") or "").strip()
+
+                        if _cat2 and _cat2 not in ("", "电器", "家电"):
+
+                            info["cat"] = _cat2
+
+                        if _n2:
+
+                            _pn = _n2
+
+                            if not any(w in str(info.get("title") or "") for w in _pc2.CAT_WORDS):
+
+                                info["title"] = _n2
+
+                        if log and (_cat2 or _n2):
+
+                            log("品类/品名从自家价格表认出：%s / %s" % (_cat2, _n2[:44]))
+
+                        break
+
+            except Exception:
+
+                pass
+
+            _w = next((w for w in _pc2.CAT_WORDS if w in _pn), "")
+
+            if _w:
+
+                info["cat"] = _w
+
+                _tt = str(info.get("title") or "")
+
+                if not any(w in _tt for w in _pc2.CAT_WORDS):
+
+                    info["title"] = _pn   # 裸型号标题升级成带品类的真名
+
+                if log:
+
+                    log("品类从 pname 认出：%s（标题升级：%s）" % (_w, info["title"]))
+
+    except Exception:
+
+        pass
+
+    if not (info.get("brand") or ""):
+
+        t = (info.get("title") or "") + " " + model
+
+        info["brand"] = "卡萨帝" if "卡萨帝" in t else ("统帅" if "统帅" in t or "Leader" in t else "海尔")
+
+    info.setdefault("model", norm_model(model) or model)
+
+    if info.get("url"):
+
+        try:
+
+            import pei_core as _pc
+
+            _c = _pc.cat_from_url(info["url"])
+
+            if _c:
+
+                info["cat"] = _c  # 缓存里的 cat 可能是旧映射（HKC3000 净水机被标洗衣机实锤），按 URL 现算覆盖
+
+        except Exception:
+
+            pass
+
+    # 抓到参数就落盘（2026-10-29 LTD-575WDS9U1 实锤：凑到 23 条却只活在内存，
+
+    # info.json 永远 0 条，下回生成又从头来）。只写有目录的（本地已有素材的）。
+
+    if (info.get("props") or []) and info.get("dir"):
+
+        try:
+
+            import pubwork as _pw
+
+            _disk = _pw.load_info(model)
+
+            _disk_n = len((_disk or {}).get("props") or [])
+
+            if len(info["props"]) > _disk_n:
+
+                _disk = dict(_disk or info)
+
+                _disk["props"] = info["props"]
+
+                if info.get("title"):
+
+                    _disk.setdefault("title", info["title"])
+
+                _pw._save_info(_disk)
+
+                if log:
+
+                    log("参数落盘：%d 条（原 %d 条）" % (len(info["props"]), _disk_n))
+
+            # kitset 权威副本（2026-10-29 聚光独立体系）：蓝底抓的真参数落自己家，
+
+            # 聚光读这份——写文案目录就算删了也不影响蓝底/聚光
+
+            try:
+
+                _kc = dict(_disk or info)
+
+                _kc["props"] = info["props"]
+
+                _kc["dir"] = model_dir(model)
+
+                os.makedirs(_kc["dir"], exist_ok=True)
+
+                with io.open(os.path.join(_kc["dir"], "info.json"), "w", encoding="utf-8") as f:
+
+                    json.dump(_kc, f, ensure_ascii=False, indent=1)
+
+            except Exception:
+
+                pass
+
+        except Exception:
+
+            pass
+
+    return info, imgs
+
+
+
+def _ensure_dims_legacy(info, mdir, img_urls=None, log=None):
+
+    """尺寸补漏（2026-10-29 用户令）：参数里没外形尺寸、又没有官方尺寸图时，
+
+    去中关村参数页把「外形尺寸」等缺键并进 props（已有键绝不覆盖）。
+
+    官网有图有参时主兜底不触发，但官网参数表可能就是没尺寸键（XQG100-H28E 实锤：
+
+    ZOL 详情页 index2180682 有外形尺寸，官网没有）。蓝底 generate 与聚光 img_size 共用。
+
+    返回 (info, img_urls)。有官方尺寸图时不补——图上数字才权威（ES60H-Q3 图文矛盾实锤）。"""
+
+    log = log or (lambda s: None)
+
+    model = (info.get("model") or "").strip()
+
+    pd0 = pei_core.prop_dict(info.get("props") or [])
+
+    have_si = bool(mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg")))
+
+    # 灶具式两段尺寸也算「有尺寸」（2026-10-29 JZT-QHA7BE9 实锤：官网给了
+
+    # 台面730*420/挖孔650*350，这里却跑去中关村找不存在的「外形尺寸」白烧一轮）
+
+    if have_si or _parse_dims(pd0) or any(k in pd0 for k in ("台面尺寸", "挖孔尺寸", "开孔尺寸")) \
+            or _KNOWN_DIMS.get(model) or _KNOWN_DIMS.get(norm_model(model) or ""):
+
+        return info, img_urls
+
+    log("参数里没外形尺寸，去中关村补…")
+
+    if mdir and _neg_get(mdir, "zol_dims"):
+
+        log("中关村补参已试过没有（7 天内不重复找）")
+
+        return info, img_urls
+
+    try:
+
+        zi, zp = _zol_data(model, (info.get("brand") or ""), log)
+
+    except Exception as e:
+
+        log("中关村补参失败：%r" % (e,))
+
+        if mdir:
+
+            _neg_set(mdir, "zol_dims")
+
+        return info, img_urls
+
+    if zi and not img_urls:
+
+        img_urls = [(u, "中关村") for u in zi if u]
+
+    if zp:
+
+        have = {str(k) for k, _v in (info.get("props") or [])}
+
+        for k, v in zp:
+
+            if str(k) not in have:
+
+                info.setdefault("props", []).append((k, v))
+
+        log("中关村补参：%d 条（合计 %d 条）" % (len(zp), len(info.get("props") or [])))
+
+    elif mdir and not _parse_dims(pei_core.prop_dict(info.get("props") or [])):
+
+        _neg_set(mdir, "zol_dims")
+
+        log("中关村也没有尺寸参数（已记住，7 天内不再重复找）")
+
+    return info, img_urls
+
+
+
+def _gather_info(model, log):
+    """宝链（2026-11-23 用户令「图片加一个中关村的，参数只抓说明书网站的」）：
+    参数 = 官网三站 → 说明书站（两层，别的来源一概不抓）；
+    图 = 官网三站 → 说明书站 → 欣盛商城 → 中关村（四层，中关村只补图）；
+    R2 图库/pubwork 爬虫/必应/GLM 联网搜参全下线，自家价格表品类兜底保留。
     返回 (info, data imgs_urls)；info 至少含 model/brand/title/props。"""
     info = None
     try:
-        import pubwork
-        # kitset 权威副本优先（2026-10-29 聚光独立体系）：蓝底上次抓的真参数在自己家
-        info = load_kinfo(model) or pubwork.load_info(model)
+        # kitset 权威副本（2026-10-29 聚光独立体系）：蓝底上次抓的真参数在自己家
+        info = load_kinfo(model)
         # 2026-11-19 型号自报闸门：历史缓存可能存着串页脏数据（BCD-335WLDPGU1 缓存成
         # BCD-342WLLFDEDW9U1 实锤），页面标型号对不上 → 弃缓存重抓，绝不拿别家机器出图
-        _mm = pubwork._model_mismatch(info, model)
-        if _mm:
-            if log:
-                log("缓存参数型号对不上（页面标 %s ≠ 请求 %s），弃缓存重抓" % (_mm, model))
-            info = None
-        if not info or not (info.get("props") or []):
-            info = pubwork.work(model, prog=lambda p, m: (log(m) if log else None))
-    except Exception as e:
-        if log:
-            log("pubwork 未命中（%s）" % e)
+        if info:
+            import pubwork as _pw_chk
+            _mm = _pw_chk._model_mismatch(info, model)
+            if _mm:
+                if log:
+                    log("缓存参数型号对不上（页面标 %s ≠ 请求 %s），弃缓存重抓" % (_mm, model))
+                info = None
+    except Exception:
         info = None
     imgs = []
     data = None
-    xs = None
-    # 2026-11-11 用户令「不应该是去 R2 拿图嘛，怎么又去爬虫了」：先取云端 R2 图库
-    _r2 = _r2_pull(model, log)
-    if _r2:
-        for _p in _r2:
-            _par = os.path.basename(os.path.dirname(_p))
-            imgs.append((_p, _par if _par in _SRC_TAG_DIRS else "其他"))
-    # 2026-11-16 用户令「所有的都抓取放到 R2 里面」：以前是「R2 有图 + 参数够」就整体不爬，
-    # 官网/欣盛/中关村三源各只有一部分图，尺寸线稿这种只在详情长图里的永远补不上。
-    # 改成按来源目录独立判断——哪个来源目录里一张图都没有就去补那个来源，
-    # 每个来源只补一次（抓过即跳过），既不重复爬也不留空档。
+    book = None
     _mdir_src = model_dir(model)
 
     def _src_has(_sub):
@@ -1913,24 +2578,59 @@ def _gather_info(model, log):
             return False
 
     _miss_gw = not _src_has("官网")
-    _miss_xs = not _src_has("欣盛")
-    _miss_zol = not _src_has("中关村")
     _low_props = len((info or {}).get("props") or []) < 5
     if _miss_gw or _low_props:
         try:
             data = fetch_official(model, log, need_imgs=True)   # need_imgs：参数库命中也要抓官网图
         except Exception:
             data = None
-    if _miss_xs or _low_props:
+    if data and data.get("imgs"):
+        # 2026-10-31 用户令：下载的图按来源分文件夹——候选带来源标签，
+        # _pick_prod 落盘时进 官网\ 子目录
+        imgs.extend([(u, "官网") for u in data["imgs"] if u])
+    # 说明书站全量（新链第二层）：官网缺参数或缺图、或 sizeimg 还没着落才打——
+    # 官网抓到的图/参不重复抓（2026-11-23 LES50H-AC5 实锤：官网全命中时 book 被跳过，
+    # 尺寸线稿永远进不了候选 → img4 永远手绘；尺寸图官方源头只在说明书）。
+    # _book_fetch 内已有三层防串机（树根比对/参数页型号闸/同系列放行）。
+    if not data or not (data.get("groups") or []) or not (data.get("imgs") or []) \
+            or not os.path.isfile(os.path.join(_mdir_src, "sizeimg.jpg")):
         try:
-            xs = fetch_xinsheng(model, log)
-        except Exception:
-            xs = None
-    for src, _tag in ((data, "官网"), (xs, "欣盛")):
-        if src and src.get("imgs"):
-            # 2026-10-31 用户令：下载的图按来源分文件夹——候选带来源标签，
-            # _pick_prod 落盘时进 官网\ / 欣盛\ 子目录
-            imgs.extend([(u, _tag) for u in src["imgs"] if u])
+            book = _book_fetch(model, log)
+        except Exception as e:
+            if log:
+                log("说明书站全量抓取失败：%r" % (e,))
+            book = None
+    if book:
+        if not info:
+            info = {}
+        # 2026-11-23 扫描版 PDF 说明书（C8U12G3 32 页线稿实锤）：页面对主图毫无价值
+        # （全是线稿/文字，AI 全否还把 40 席吃光挤掉中关村真机图）——不进主图池，
+        # 全部转尺寸图强信号清单（结构线稿正是尺寸图要的东西）。
+        if book.get("scanned"):
+            _scan_u = [u for _n, u in (book.get("imgs") or [])]
+            _old = [u for u in (info.get("_book_size_urls") or []) if u not in set(_scan_u)]
+            info["_book_size_urls"] = _scan_u + _old
+        elif (book.get("imgs") or []) and not (data or {}).get("imgs"):
+            # 官网一张图都没有 → 说明书图全量顶上（机器形态/尺寸节点已排前）
+            imgs.extend([(u, "说明书") for _n, u in book["imgs"]])
+        elif book.get("size_imgs"):
+            # 官网有图 → 只补尺寸线稿（官网详情页没有线稿，用户令「尺寸图也在说明书找」）
+            _have = {u for _t, u in imgs}
+            imgs.extend([(_u2, "说明书") for _n, _u2 in book["size_imgs"] if _u2 not in _have])
+        if book.get("size_imgs"):
+            # 尺寸线稿 URL 单独记账（强信号清单，_pick_prod AI 全否后按它兜底）。
+            # 顺序以本次 book 为权威（结构线稿排首），历史缓存 url 追加在后——
+            # 只去重追加会把新排首的线稿挤到尾部（[:4] 取不到，LES50H-AC5 实锤）
+            _book_u = [u for _n, u in book["size_imgs"]]
+            _old = [u for u in (info.get("_book_size_urls") or []) if u not in set(_book_u)]
+            info["_book_size_urls"] = _book_u + _old
+        if book.get("dim_table"):
+            # 尺寸数值表（线稿只标字母、毫米数在同页表格，LES50H-AC5 实锤）——
+            # _pick_prod 合成「官方线稿+表格图注」用；按节点签名去重防缓存叠加
+            _have_dt = {(t.get("node"), tuple(t.get("labels") or ())) for t in (info.get("_book_dim_table") or [])}
+            info.setdefault("_book_dim_table", []).extend(
+                t for t in book["dim_table"]
+                if (t.get("node"), tuple(t.get("labels") or ())) not in _have_dt)
     if imgs:
         # 大图变体优先（_1200 > 其他 > _600）：透明底机图锁定不比面积，先到先得，
         # 600px 小图先到会顶掉 1200px 大图导致成图发糊（2026-10-22 XQS100 用户实锤）
@@ -1939,14 +2639,14 @@ def _gather_info(model, log):
         info = {}
     if not (info.get("props") or []):
         props = []
-        for src in (data, xs):
+        for src in (data,):
             for _g, kv in ((src or {}).get("groups") or []):
                 for k, v in (kv or []):
                     if str(k) and str(v) and (str(k), str(v)) not in props:
                         props.append((str(k), str(v)))
         if props:
             info["props"] = props
-    # 官网参数并集（2026-10-28 用户令）：pubwork/欣盛先到的 props 常缺「尺寸」键
+    # 官网参数并集（2026-10-28 用户令）：pubwork 先到的 props 常缺「尺寸」键
     # （EB100Z35Pro2 官网明摆着 尺寸(宽*高*深)mm=550*1030*570 却没进 props 实锤）——
     # 官网命中的键追加到 props 尾部、不动已有顺序；_parse_dims 按键名找尺寸，补上即出真尺寸
     if (data or {}).get("groups") and info.get("props") is not None:
@@ -1957,138 +2657,74 @@ def _gather_info(model, log):
                 if ks and vs and ks not in _have:
                     info["props"].append((ks, vs))
                     _have.add(ks)
-    # 全网搜参兜底（2026-10-29 用户令）：pubwork/官网/欣盛/中关村全空时（渠道机实锤），
-    # 必应搜型号从结果页正文抠参数。已有键不覆盖；凑不满 5 条才算「参数残缺」才触发。
-    # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 2 天内不再跑（重出会清掉重试）。
-    _mdir = model_dir(model)
-    # 中关村全量参数源（2026-10-29 LTD-575WDS9U1 实锤：leader 官网 WAF 拦 IP 403、
-    # pubwork/欣盛 0 参数、必应 0 结果，ZOL 却有 23 条全参数）——必应之前先问 ZOL，
-    # 图也并进候选。负缓存键 zol_params 与 _ensure_dims 的 zol_dims（尺寸专用）分开。
-    # 2026-11-16 用户令「所有的都抓取放到 R2 里面」：中关村从「参数 <5 条才兜底」
-    # 改成「缺中关村图也要抓」（_miss_zol 由上面分源判断给出），图并进候选、参数照旧补缺。
-    if (_miss_zol or len(info.get("props") or []) < 5) and not _neg_get(_mdir, "zol_params"):
+    # 说明书参数补缺（新链第二层；_book_fetch 内已有防串机 + 同系列放行闸，
+    # LES50H/LES60H 一本双型号的容量行已被剥掉）：
+    if book and book.get("rows"):
+        _have = {str(k).strip() for k, _v in (info.get("props") or [])}
+        _add = [(str(k), str(v)) for k, v in book["rows"] if str(k).strip() not in _have]
+        if _add:
+            info.setdefault("props", []).extend(_add)
+            if log:
+                log("说明书补缺参数 %d 条（合计 %d 条）" % (len(_add), len(info.get("props") or [])))
+    # 图片兜底两层（2026-11-23 用户令「图片加一个中关村的，参数只抓说明书网站的」）：
+    # 参数只走 官网→说明书（欣盛读参/中关村补参全不抓——欣盛详情长图视觉读参一张 30 秒
+    # 起步，是文案慢的大头，用户明令砍）；欣盛/中关村只补图。
+    # 2026-11-23 补：扫描版 PDF 说明书整页渲染的全是线稿/文字页（C8U12G3 封面线稿
+    # AI 全否实锤），不算「有真机图」——照样放行欣盛/中关村层补真机照片。
+    _no_prod_img = not imgs or bool(book and book.get("scanned"))
+    if _no_prod_img:
+        try:
+            _xs = fetch_xinsheng(model, log)
+        except Exception:
+            _xs = None
+        if _xs and (_xs.get("imgs") or []):
+            imgs.extend([(u, "欣盛") for u in _xs["imgs"]])
+            if log:
+                log("欣盛商城补图 %d 张" % len(_xs["imgs"]))
+    if _no_prod_img and not _neg_get(_mdir_src, "zol_imgs"):
         try:
             _zi, _zp = _zol_data(model, (info.get("brand") or ""), log)
-            if _zi:
-                imgs.extend([(u, "中关村") for u in _zi if u])
-            if _zp:
-                _have = {str(k).strip() for k, _v in (info.get("props") or [])}
-                for k, v in _zp:
-                    if str(k).strip() not in _have:
-                        info.setdefault("props", []).append((str(k), str(v)))
-                if log:
-                    log("中关村补全参数：%d 条（合计 %d 条）" % (len(_zp), len(info.get("props") or [])))
-            if not _zp:
-                _neg_set(_mdir, "zol_params")
-                if log:
-                    log("中关村没有参数（已记住，7 天内不再重复找）")
-        except Exception as e:
-            if log:
-                log("中关村补参失败：%r" % (e,))
-    # 电子说明书/欣盛图参兜底（2026-11-21 用户令，与 copywriter 同源）：中关村/必应/GLM
-    # 对渠道机全落空时，先问海尔电子说明书（纯接口秒级），再欣盛详情长图视觉读参。
-    # 只补缺键不覆盖；各自负缓存，试过没有 7 天内不再跑（重出清负缓存即重试）。
-    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "hzy_params"):
-        try:
-            _hp = _hzy_params(model, log)
-            if _hp:
-                _have = {str(k).strip() for k, _v in (info.get("props") or [])}
-                for k, v in _hp:
-                    if str(k).strip() not in _have:
-                        info.setdefault("props", []).append((str(k), str(v)))
-                if log:
-                    log("电子说明书补参：%d 条（合计 %d 条）" % (len(_hp), len(info.get("props") or [])))
-            else:
-                _neg_set(_mdir, "hzy_params")
-                if log:
-                    log("电子说明书没有参数（已记住，7 天内不再重复找）")
-        except Exception as e:
-            if log:
-                log("电子说明书补参失败：%r" % (e,))
-    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "xs_img_params"):
-        try:
-            if xs is None:
-                xs = fetch_xinsheng(model, log)
-            _xp = _xs_img_params(model, xs, log)
-            if _xp:
-                _have = {str(k).strip() for k, _v in (info.get("props") or [])}
-                for k, v in _xp:
-                    if str(k).strip() not in _have:
-                        info.setdefault("props", []).append((str(k), str(v)))
-                if log:
-                    log("欣盛图读参补参：%d 条（合计 %d 条）" % (len(_xp), len(info.get("props") or [])))
-            else:
-                _neg_set(_mdir, "xs_img_params")
-                if log:
-                    log("欣盛图读参没有结果（已记住，7 天内不再重复找）")
-        except Exception as e:
-            if log:
-                log("欣盛图读参补参失败：%r" % (e,))
-    if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "web_params"):
-        try:
-            for k, v in _web_params(model, log):
-                if str(k).strip() not in {str(x).strip() for x, _ in (info.get("props") or [])}:
-                    info.setdefault("props", []).append((str(k), str(v)))
         except Exception:
-            pass
-        if not _web_params._last_ok:
-            _neg_set(_mdir, "web_params")
+            _zi = []
+        if _zi:
+            imgs.extend([(u, "中关村") for u in _zi if u])
             if log:
-                log("全网搜参没有结果（已记住，7 天内不再重复找）")
-        # GLM 联网搜参（2026-10-29 用户令「把 GLM 加上让它去找」）：必应也空才动用，
-        # glm-4.5-flash 挂 web_search 真上网搜，免费。同样只补缺键、绝不覆盖已有参数。
-        if len(info.get("props") or []) < 5 and not _neg_get(_mdir, "glm_params"):
-            try:
-                for k, v in _glm_params(model, log):
-                    if str(k).strip() not in {str(x).strip() for x, _ in (info.get("props") or [])}:
-                        info.setdefault("props", []).append((str(k), str(v)))
-            except Exception:
-                pass
-            if not _glm_params._last_ok:
-                _neg_set(_mdir, "glm_params")
-                if log:
-                    log("GLM 联网搜参也没有结果（已记住，7 天内不再重复找）")
+                log("中关村补图 %d 张" % len(_zi))
+        else:
+            _neg_set(_mdir_src, "zol_imgs")
+            if log:
+                log("中关村没有图（已记住，7 天内不再重复找）")
+    _mdir = model_dir(model)
+    # 说明书 pname/brand 视图（root=「型号说明书」→ 剥后缀当品名；brand 取 URL 品牌段）
+    _bookview = None
+    if book:
+        _bn = re.sub(r"说明书\s*$", "", str(book.get("root") or "")).strip()
+        if _bn and norm_model(_bn) == (norm_model(model) or ""):
+            _bookview = {"pname": _bn, "brand": str(book.get("brand") or "")}
+        if _bookview and not (info.get("brand") or "") and book.get("brand"):
+            info["brand"] = book["brand"]
+        if book.get("url") and not (info.get("url") or ""):
+            info["url"] = book["url"]
     if not (info.get("title") or ""):
-        for src in (data, xs):
+        for src in (data, _bookview):
             if src and src.get("pname"):
                 info["title"] = str(src["pname"])
                 break
     # 品类防串（2026-11-21 CWC8-B57GHU1 实锤）：标题只剩裸型号、cat 废词「电器」时，
-    # 欣盛/官网 pname（「卡萨帝洗碗机8套…」）是唯一靠谱品类来源——认出品类词就升级
+    # 官网/说明书 pname（「卡萨帝洗碗机8套…」）是唯一靠谱品类来源——认出品类词就升级
     # cat/title，否则卖点模板掉进通用分支，洗碗机会被写成「冷藏冷冻分储」冰箱话术。
-    # 活抓拿不到 pname 就退本地欣盛库（xinsheng.sqlite3，name 里带品类词、category 列直接是中文品类）。
     try:
         import pei_core as _pc2
         _cn = (_pc2.cat_name(info) or "").strip()
         if not _cn or _cn in ("电器", "家电"):
             _pn = ""
-            for _src in (data, xs):
+            for _src in (data, _bookview):
                 if (_src or {}).get("pname"):
                     _pn = str(_src["pname"])
                     break
-            if not _pn:
-                try:
-                    import sqlite3 as _sq3
-                    _dbp = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ModelLookup", "xinsheng.sqlite3")
-                    _db = _sq3.connect(_dbp)
-                    _db.row_factory = _sq3.Row
-                    _rows = _db.execute("select name from products where name like ? limit 10",
-                                        ("%" + norm_model(model) + "%",)).fetchall()
-                    _best = ""
-                    for _r in _rows:
-                        _nm = str(_r["name"] or "")
-                        if next((w for w in _pc2.CAT_WORDS if w in _nm), ""):
-                            _best = _nm   # 优先带品类词的（跳过「碗柜可配CWC8」这类配件名）
-                            break
-                        if not _best and _nm:
-                            _best = _nm
-                    _pn = _best
-                    _db.close()
-                except Exception:
-                    _pn = ""
-            # ③ 自家价格表兜底（2026-11-22 CWC16-B07BK 实锤：全网都搜不到的新机
+            # 自家价格表兜底（2026-11-22 CWC16-B07BK 实锤：官网/说明书都搜不到的新机
             # 在自家表里 cat/品名 一定有——cat 列直接是中文品类、n 是完整商品名。
-            # 全网五路+本地欣盛库全落空时，这是永不失败的最后一层）
+            # 这是永不失败的最后一层；2026-11-23 用户令后仍是自家数据不算第三方抓取）
             try:
                 import payload as _pl
                 _nm2 = norm_model(model) or ""
@@ -2131,31 +2767,18 @@ def _gather_info(model, log):
         except Exception:
             pass
     # 抓到参数就落盘（2026-10-29 LTD-575WDS9U1 实锤：凑到 23 条却只活在内存，
-    # info.json 永远 0 条，下回生成又从头来）。只写有目录的（本地已有素材的）。
-    if (info.get("props") or []) and info.get("dir"):
+    # info.json 永远 0 条，下回生成又从头来）。
+    # 2026-11-23 新链：pubwork 磁盘缓存已砍，只落 kitset 权威副本（info.json）。
+    if (info.get("props") or []):
         try:
-            import pubwork as _pw
-            _disk = _pw.load_info(model)
-            _disk_n = len((_disk or {}).get("props") or [])
-            if len(info["props"]) > _disk_n:
-                _disk = dict(_disk or info)
-                _disk["props"] = info["props"]
-                if info.get("title"):
-                    _disk.setdefault("title", info["title"])
-                _pw._save_info(_disk)
-                if log:
-                    log("参数落盘：%d 条（原 %d 条）" % (len(info["props"]), _disk_n))
-            # kitset 权威副本（2026-10-29 聚光独立体系）：蓝底抓的真参数落自己家，
-            # 聚光读这份——写文案目录就算删了也不影响蓝底/聚光
-            try:
-                _kc = dict(_disk or info)
-                _kc["props"] = info["props"]
-                _kc["dir"] = model_dir(model)
-                os.makedirs(_kc["dir"], exist_ok=True)
-                with io.open(os.path.join(_kc["dir"], "info.json"), "w", encoding="utf-8") as f:
-                    json.dump(_kc, f, ensure_ascii=False, indent=1)
-            except Exception:
-                pass
+            _kc = dict(info)
+            _kc["props"] = info["props"]
+            _kc["dir"] = model_dir(model)
+            os.makedirs(_kc["dir"], exist_ok=True)
+            with io.open(os.path.join(_kc["dir"], "info.json"), "w", encoding="utf-8") as f:
+                json.dump(_kc, f, ensure_ascii=False, indent=1)
+            if log:
+                log("参数落盘 kitset 权威副本：%d 条" % len(info["props"]))
         except Exception:
             pass
     return info, imgs
@@ -3104,7 +3727,8 @@ def _rescue_sizeimg_official(mdir, dims=None, log=None):
     return None
 
 
-def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=None):
+def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=None,
+               size_urls=(), size_table=(), chain="book"):
     """机图：①软件图库（payload imgs / 欣盛 ximg，与卡片同源）②抓取链候选做
     「边框同色+泛洪抠底」选抠出主体最大且落地的。官网尺寸线框图顺带识别存
     sizeimg.jpg 给 img4。横幅/场景图/拼图/悬浮创意图自动淘汰。"""
@@ -3230,9 +3854,15 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             # 2026-11-03：抓取图按来源落 官网/欣盛/中关村/其他 四个子目录（10-31 改），
             # 但候选只 glob 了 官网/——统帅型号只有 欣盛/（2000px 干净整机照），
             # 把关弃掉 AI 海报后启发式根本见不着它，只能拿 400px 图库小图超分。全扫。
-            _kown = [p for _d in _SRC_TAG_DIRS
-                     for p in (glob.glob(os.path.join(kit_root(), nm2, _d, "*.png")) +
-                               glob.glob(os.path.join(kit_root(), nm2, _d, "*.jpg")))]
+            # 2026-11-23：说明书/ 目录限 8 席——扫描版 PDF 渲染页一存 30+ 张，
+            # 按字节降序全占 24 席，中关村真机图连评审都进不了（C8U12G3 实锤）；
+            # 扫描页的尺寸图价值走 _book_size_urls 强信号清单，不靠这些席位。
+            _kown = []
+            for _d in _SRC_TAG_DIRS:
+                _g = (glob.glob(os.path.join(kit_root(), nm2, _d, "*.png")) +
+                      glob.glob(os.path.join(kit_root(), nm2, _d, "*.jpg")))
+                _g.sort(key=lambda p: -os.path.getsize(p))
+                _kown += _g[:8 if _d == "说明书" else 40]
             _pc = (glob.glob(os.path.join(pdir, "*.png")) +
                    glob.glob(os.path.join(pdir, "*.jpg")))
             for _d in _SRC_TAG_DIRS:
@@ -3264,6 +3894,7 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
     _ai_cand = []   # 尺寸图 AI 复核候选（本地路径，启发式漏判时商汤/GLM 兜底认）
     _cand_md5 = set()  # 候选去重（2026-11-12：官网同图两份会占满 12 格/双倍额度）
     _ai_rej = set()  # 2026-10-31：已由 AI 明确否掉的图，别在兜底循环里再烧一次额度
+    _url_fp = {}    # url → 本地落盘路径（说明书尺寸线稿兜底用，2026-11-23）
     seen = set()
     n = 0
     for item in srcs:
@@ -3286,6 +3917,7 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 fp = os.path.join(_sdir, "src_%d.jpg" % n)
                 with io.open(fp, "wb") as f:
                     f.write(raw)
+                _url_fp[u] = fp
                 im = Image.open(fp)
             else:
                 if not os.path.isfile(u):
@@ -3455,19 +4087,104 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 if log:
                     log("视觉 AI 不可用，尺寸图复核跳过")
                 break
-    if not have_size and page_url and mdir and not _neg_get(mdir, "sizeimg_official", ttl_days=2):
-        # 候选图里没认出尺寸图：去官网详情页定向翻一遍（有官方尺寸图就不用手绘）。
-        # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 2 天内不再跑（重出会清掉重试）
-        _hunt_sizeimg_page(page_url, sizeimg, log,
-                           skip_urls=(picked_url,) if picked_url else (),
-                           prod_path=picked if have_prod and os.path.isfile(picked) else None)
-        if not os.path.isfile(sizeimg):
-            _neg_set(mdir, "sizeimg_official")
+    if not have_size and size_urls and mdir and not _neg_get(mdir, "sizeimg_book", ttl_days=2):
+        # 说明书尺寸线稿兜底（2026-11-23 用户令「尺寸图也在说明书找」）：节点名是强信号
+        # （「产品尺寸及安装要求/安装方法」页线稿带毫米间距标注），AI 终审全否也直接试
+        # ——_nums_gate 读得出毫米数字才收，读不出宁走手绘防张冠李戴（LES50H-AC5 实锤：
+        # 安装线稿被 AI 判「不是尺寸图」全否，img4 退化成面板轮廓手绘）。
+        # 线稿只标字母没数字的（LES50H 线稿 a1/b1/d1、毫米数在同页表格），用
+        # size_table 数值表合成图注——官方线稿+官方数字，字母对字母不猜映射。
+        # 线稿 URL 可能被主循环 40 席裁掉（copy+本地缓存 32 张先占坑实锤），缺了自己补下载。
+
+        def _size_fp(_su):
+            _sfp = _url_fp.get(_su)
+            if _sfp and os.path.isfile(_sfp):
+                return _sfp
+            # 扫描版 PDF 说明书页是本地文件（2026-11-23 C8U12G3），直接用
+            if not re.match(r"^https?://", str(_su)):
+                return _su if os.path.isfile(_su) else None
+            try:
+                _raw = fetch(_su, extra_headers={
+                    "Referer": "https://hzy.haier.com/cn/vipcode/eleInstruction"},
+                    binary=True, timeout=20)
+                if _raw and len(_raw) > 3000:
+                    _sdir = os.path.join(mdir, "说明书")
+                    os.makedirs(_sdir, exist_ok=True)
+                    _sfp = os.path.join(_sdir, "size_%d.jpg" % (len(_url_fp) + 1))
+                    with io.open(_sfp, "wb") as f:
+                        f.write(_raw)
+                    _url_fp[_su] = _sfp
+                    return _sfp
+            except Exception:
+                return None
+            return None
+
+        for _su in size_urls[:8]:   # 扫描版 PDF 页 32 张起（C8U12G3），4 席不够摸到尺寸页
+            _sfp = _size_fp(_su)
+            if not _sfp:
+                continue
+            try:
+                im2 = Image.open(_sfp)
+                _flat_white(im2).save(sizeimg, quality=92)
+                if _nums_gate(sizeimg, log, "说明书线稿 %s" % os.path.basename(_sfp)):
+                    have_size = True
+                    if log:
+                        log("说明书尺寸线稿兜底采用：%s（节点名强信号 + 毫米数字核对通过）"
+                            % os.path.basename(_sfp))
+                    break
+            except Exception:
+                continue
+        if not have_size and size_table:
+            # 表格合成：数值表里找本型号行（先全码、再同系列骨架放行——LES60H 双容量实锤）
+            _nm_p = norm_model(model) or model
+            _row = _labels = None
+
+            def _skl(s):
+                return re.sub(r"[0-9.\-]", "", norm_model(s) or s or "")
+
+            for _tb in size_table:
+                _vv = _tb.get("vals") or {}
+                if _nm_p in _vv:
+                    _row, _labels = _vv[_nm_p], _tb.get("labels") or []
+                    break
+                for _mk in _vv:
+                    if _skl(_mk) and _skl(_mk) == _skl(model):
+                        _row, _labels = _vv[_mk], _tb.get("labels") or []
+                        break
+                if _row:
+                    break
+            if _row and _labels:
+                for _su in size_urls[:8]:   # 扫描版 PDF 页 32 张起（C8U12G3），4 席不够摸到尺寸页
+                    _sfp = _size_fp(_su)
+                    if not _sfp:
+                        continue
+                    try:
+                        im2 = _flat_white(Image.open(_sfp)).convert("RGB")
+                        # 图注条：白底黑字「a=825mm b=370mm …」，附在线稿下方
+                        _lb = "   ".join("%s=%smm" % (str(_l), str(_v))
+                                         for _l, _v in zip(_labels, _row))
+                        _fnt = _font(F_BOLD, max(28, im2.width // 34))
+                        _tmp = Image.new("RGB", (im2.width, im2.height + _fnt.size * 2),
+                                         (255, 255, 255))
+                        _tmp.paste(im2, (0, 0))
+                        _dr = ImageDraw.Draw(_tmp)
+                        _tw = _dr.textlength(_lb, font=_fnt)
+                        _dr.text(((im2.width - _tw) // 2, im2.height + _fnt.size // 2),
+                                 _lb, font=_fnt, fill=(20, 20, 20))
+                        _tmp.save(sizeimg, quality=92)
+                        if _nums_gate(sizeimg, log, "说明书线稿+表格图注"):
+                            have_size = True
+                            if log:
+                                log("说明书尺寸线稿+数值表图注合成采用（%s）" % _lb)
+                            break
+                    except Exception:
+                        continue
+        if not have_size and mdir:
+            _neg_set(mdir, "sizeimg_book")
             if log:
-                log("官网没有官方尺寸图（已记住，2 天内不再重复找）")
-    if not have_size and want_dims:
-        # 官网也没有 → 中关村图集兜底（2026-10-29 用户令「中关村有图怎么还自己画」）：
-        # 真图优先，AI 读图上数字跟本机真实参数全对上号才收，对不上宁走手绘防张冠李戴
+                log("说明书尺寸线稿读不出毫米数字，走手绘（已记负缓存，2 天内不再试）")
+    if not have_size and chain == "legacy" and want_dims:
+        # 婷老链专用：中关村图集兜底（v3.0.87 原版行为；宝新链走说明书线稿合成）
         if mdir and _neg_get(mdir, "sizeimg_zol", ttl_days=2):
             if log:
                 log("中关村图集已试过没有（2 天内不重复找）")
@@ -3482,6 +4199,18 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                         log("中关村图集也没有尺寸图（已记住，2 天内不再重复找）")
             except Exception:
                 pass
+    if not have_size and page_url and mdir and not _neg_get(mdir, "sizeimg_official", ttl_days=2):
+        # 候选图里没认出尺寸图：去官网详情页定向翻一遍（有官方尺寸图就不用手绘）。
+        # 负缓存（2026-10-29 用户令「反复跑完没有就提示没有」）：试过没有的 2 天内不再跑（重出会清掉重试）
+        _hunt_sizeimg_page(page_url, sizeimg, log,
+                           skip_urls=(picked_url,) if picked_url else (),
+                           prod_path=picked if have_prod and os.path.isfile(picked) else None)
+        if not os.path.isfile(sizeimg):
+            _neg_set(mdir, "sizeimg_official")
+            if log:
+                log("官网没有官方尺寸图（已记住，2 天内不再重复找）")
+    # 2026-11-23 用户令（新链）：中关村图集兜底砍掉——尺寸图只认图池（官网+说明书，
+    # 说明书「尺寸/安装」节点线稿已进图池）+ 官网详情页 hunt，都没有走手绘。
     # 2026-11-16 用户令「所有的都抓取放到 R2 里面」：主图/候选落盘完，异步把本型号
     # 官网/欣盛/中关村 三源新图推上云端 R2 图库（探测后只传缺的，失败不影响出图）。
     try:
@@ -3566,41 +4295,31 @@ def _parse_dims(pd):
 
 def _ensure_dims(info, mdir, img_urls=None, log=None):
     """尺寸补漏（2026-10-29 用户令）：参数里没外形尺寸、又没有官方尺寸图时，
-    去中关村参数页把「外形尺寸」等缺键并进 props（已有键绝不覆盖）。
-    官网有图有参时主兜底不触发，但官网参数表可能就是没尺寸键（XQG100-H28E 实锤：
-    ZOL 详情页 index2180682 有外形尺寸，官网没有）。蓝底 generate 与聚光 img_size 共用。
+    去说明书站把「外形尺寸/开孔尺寸」等缺键并进 props（已有键绝不覆盖）。
+    2026-11-23 用户令（新链）：中关村下线，尺寸补漏只问说明书站（技术数据页常带
+    外形尺寸/最小开孔尺寸，_book_fetch 已做防串机+同系列放行）。
     返回 (info, img_urls)。有官方尺寸图时不补——图上数字才权威（ES60H-Q3 图文矛盾实锤）。"""
     log = log or (lambda s: None)
     model = (info.get("model") or "").strip()
     pd0 = pei_core.prop_dict(info.get("props") or [])
     have_si = bool(mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg")))
     # 灶具式两段尺寸也算「有尺寸」（2026-10-29 JZT-QHA7BE9 实锤：官网给了
-    # 台面730*420/挖孔650*350，这里却跑去中关村找不存在的「外形尺寸」白烧一轮）
+    # 台面730*420/挖孔650*350，这里却跑去乱找不存在的「外形尺寸」白烧一轮）
     if have_si or _parse_dims(pd0) or any(k in pd0 for k in ("台面尺寸", "挖孔尺寸", "开孔尺寸")) \
             or _KNOWN_DIMS.get(model) or _KNOWN_DIMS.get(norm_model(model) or ""):
         return info, img_urls
-    log("参数里没外形尺寸，去中关村补…")
-    if mdir and _neg_get(mdir, "zol_dims"):
-        log("中关村补参已试过没有（7 天内不重复找）")
-        return info, img_urls
+    log("参数里没外形尺寸，去说明书站补…")
     try:
-        zi, zp = _zol_data(model, (info.get("brand") or ""), log)
+        book = _book_fetch(model, log)
     except Exception as e:
-        log("中关村补参失败：%r" % (e,))
-        if mdir:
-            _neg_set(mdir, "zol_dims")
+        log("说明书补尺寸失败：%r" % (e,))
         return info, img_urls
-    if zi and not img_urls:
-        img_urls = [(u, "中关村") for u in zi if u]
-    if zp:
+    if book and book.get("rows"):
         have = {str(k) for k, _v in (info.get("props") or [])}
-        for k, v in zp:
+        for k, v in book["rows"]:
             if str(k) not in have:
                 info.setdefault("props", []).append((k, v))
-        log("中关村补参：%d 条（合计 %d 条）" % (len(zp), len(info.get("props") or [])))
-    elif mdir and not _parse_dims(pei_core.prop_dict(info.get("props") or [])):
-        _neg_set(mdir, "zol_dims")
-        log("中关村也没有尺寸参数（已记住，7 天内不再重复找）")
+        log("说明书补参：%d 条（合计 %d 条）" % (len(book["rows"]), len(info.get("props") or [])))
     return info, img_urls
 
 
@@ -4503,10 +5222,6 @@ def fetch_candidates(model, log=None):
                 pass
     info, img_urls = _gather_info(model, log)
     if not img_urls:
-        log("常规渠道缺图，试中关村…")
-        zimgs, _zp = _zol_data(model, (info or {}).get("brand") or "", log)
-        img_urls = [(u, "中关村") for u in zimgs if u]
-    if not img_urls:
         return False
     _pick_prod(model, img_urls, mdir, log, page_url=(info or {}).get("url") or None,
                kind=(info or {}).get("kind") or (info or {}).get("cat") or "")
@@ -4787,7 +5502,7 @@ def _rerender_cached(model, mdir, old, log):
     return res
 
 
-def generate(model, force=0, log=None):
+def generate(model, force=0, log=None, chain="book"):
     log = log or (lambda s: None)
     if not os.path.isfile(F_REG):
         raise RuntimeError("缺系统字体 msyh.ttc（%s）" % F_REG)
@@ -4859,22 +5574,27 @@ def generate(model, force=0, log=None):
             return res
         except Exception:
             pass
-    log("抓参数/机图（爬虫→官网→欣盛）…")
-    info, img_urls = _gather_info(model, log)
-    zimgs, zprops = ([], [])
-    if not img_urls or not (info.get("props") or []):
-        # 官网/欣盛没图或没参数：中关村在线兜底（用户令 2026-10-21）
-        log("常规渠道缺料，试中关村…")
-        zimgs, zprops = _zol_data(model, (info or {}).get("brand") or "", log)
-        zimgs = [(u, "中关村") for u in zimgs if u]   # 下载落盘按来源进 中关村\ 文件夹
-        if zimgs and not img_urls:
-            img_urls = zimgs
-        if zprops and not (info.get("props") or []):
-            info["props"] = zprops
-    # 尺寸补漏（2026-10-29 用户令「一个机器怎么可能没有尺寸」+「中关村的也可以找找数据」）：
-    # 官网有图有参时上面那道兜底不触发，但官网参数表可能就是没有外形尺寸键
-    # （XQG100-H28E 实锤）——中关村参数页补一次（详见 _ensure_dims）。
-    info, img_urls = _ensure_dims(info, mdir, img_urls, log)
+    zimgs = []
+    if chain == "legacy":
+        # 婷（白字/婷宝版）专用老链：v3.0.87 原版行为，与宝新链（官网→说明书）互不影响
+        log("抓参数/机图（婷老链：爬虫→官网→欣盛→中关村）…")
+        info, img_urls = _gather_info_legacy(model, log)
+        if not img_urls or not (info.get("props") or []):
+            # 官网/欣盛没图或没参数：中关村在线兜底（用户令 2026-10-21）
+            log("常规渠道缺料，试中关村…")
+            zimgs, zprops = _zol_data(model, (info or {}).get("brand") or "", log)
+            zimgs = [(u, "中关村") for u in zimgs if u]   # 下载落盘按来源进 中关村\ 文件夹
+            if zimgs and not img_urls:
+                img_urls = zimgs
+            if zprops and not (info.get("props") or []):
+                info["props"] = zprops
+        info, img_urls = _ensure_dims_legacy(info, mdir, img_urls, log)
+    else:
+        log("抓参数/机图（官网→说明书）…")
+        info, img_urls = _gather_info(model, log)
+        # 尺寸补漏（2026-10-29 用户令「一个机器怎么可能没有尺寸」；2026-11-23 新链：
+        # 中关村下线，缺尺寸键改问说明书站——详见 _ensure_dims）。
+        info, img_urls = _ensure_dims(info, mdir, img_urls, log)
     # 本机真实尺寸（中关村图集尺寸图的对号基准）：_ensure_dims 后 props 里该有的都有了
     try:
         _want = _parse_dims(dict(info.get("props") or []))
@@ -4882,10 +5602,12 @@ def generate(model, force=0, log=None):
         _want = None
     prod = _pick_prod(model, img_urls, mdir, log, page_url=(info or {}).get("url") or None,
                       kind=(info or {}).get("kind") or (info or {}).get("cat") or "",
-                      want_dims=_want)
+                      want_dims=_want,
+                      size_urls=tuple((info or {}).get("_book_size_urls") or ()),
+                      size_table=tuple((info or {}).get("_book_dim_table") or ()))
     if not prod and zimgs:
         log("中关村图单独再试一轮…")
-        prod = _pick_prod(model, zimgs, mdir, log, want_dims=_want)
+        prod = _pick_prod(model, zimgs, mdir, log, want_dims=_want, chain="legacy")
     if not prod:
         # 最后兜底：卡片缩略图（小图，清晰度有限但好过失败）
         lib2 = _library_img(model, min_side=0)
@@ -4895,7 +5617,13 @@ def generate(model, force=0, log=None):
             if log:
                 log("用卡片缩略图凑（清晰度有限，建议在写文案里补张高清图）")
         if not prod:
-            raise RuntimeError("没抓到可用机图——先在「写文案」里生成一次图片，或确认欣盛/官网/中关村有该型号图")
+            # 2026-11-23 用户令「都没有的话直接就让我塞进去跟主图」：四层图源全空时
+            # 明确告诉用户怎么手动塞图——_manual_overrides 会把 官网/主图.* 直接当
+            # product.png（跳过 AI 选图，幂等），塞尺寸图同理（文件名带「尺寸图」）。
+            raise RuntimeError(
+                "官网/说明书/欣盛/中关村四层都没找到机图——手动塞图：把你的图放进 "
+                "图片库 %s 的「官网」文件夹，文件名带「主图」两个字（如 主图.png），"
+                "重新生成即当主图；尺寸图同理（文件名带「尺寸图」）" % mdir)
         # 2026-11-22 force 尺寸图保险：hunt 跑完还没图，把 force 前备份的旧官方尺寸图
         # 还原回去（重抓失败不再永久丢图）；hunt 抓到了新的就删备份用新图
         _bak = os.path.join(mdir, "sizeimg.jpg.bak")
@@ -5154,7 +5882,8 @@ def white_hero(model, tone="blue", log=None):
         # 「蓝底参数快照拿不到」。改 force=1 真重出一遍（跟 regen_one 老数据同口径），
         # 跑完 cfg 落盘，之后白字秒开。
         log("没有参数快照，先跑一遍蓝底（1-2 分钟，跑一次以后秒开）…")
-        generate(model, 1, log=log)
+        # 2026-11-23 分家：婷白字缺快照重跑走婷老链（chain="legacy"），不碰宝新链
+        generate(model, 1, log=log, chain="legacy")
         j, mdir = _cfg_of(model)
         if not j or not j.get("cfg"):
             raise RuntimeError("蓝底参数快照拿不到——先在蓝底里给这个型号出一次图")

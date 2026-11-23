@@ -627,6 +627,421 @@ _HZY_TABLE_CODES = {
 }
 
 
+# ---------------------------------------------------------------- 电子说明书站全量抓（宝窗口新链第二层）
+# 2026-11-23 用户令「宝窗口找图跟数据全改：优先官网，官网没有的直接去说明书站，
+# 把型号所有图片跟参数、使用说明下载下来再扔给 AI 写文案」：
+#   ① rows      「技术数据/技术规格」节点 tr 表格参数
+#   ② imgs      全树 SMO 页内 image/*.png|jpg（带节点名；装饰 artwork/ 与 svg/gif 排除）
+#   ③ size_imgs 「尺寸/安装要求」节点页内图（尺寸线稿）
+#   ④ manual    使用说明文字（安全/安装/保养…，给 AI 当真料）
+# 实测（2026-11-23）：C1 HD10L5CLU1（pcode CEAAH9004_C）正面 3885×3829 透明底 PNG、
+# LES50H-AC5（GA0SZR00P_A）外观图 3524×2215，全部原图尺寸可直进图池。
+_BOOK_PARAM_NAMES = ("技术数据", "技术规格", "技术参数", "规格参数", "产品规格", "产品参数")
+_BOOK_MANUAL_NAMES = ("安全注意", "注意事", "警告", "使用方法", "安装方法", "清洗保养",
+                      "维护", "产品特色", "功能介绍", "洗涤注意", "使用方面", "疑难解答")
+_BOOK_ROW_HEADS = ("项目", "内容", "项目名称", "参数名称", "名称", "条目")
+_BOOK_TEXT_MAX = 24
+
+
+def _book_find_entry(_post, model, nm, log):
+    """型号 → 说明书站产品条目（防串机 + 模糊重试）。
+    2026-11-23 用户令「说明书你搜索型号我不管是什么格式的全部下载下来」：
+    站内机型登记常带空格（C8 U12G3 实锤，整码搜索 total=0，站内搜索是子串匹配
+    『U12G3』才命中）；且收录标记不可信（CEABA2017 manualExist=0 但 PDF 真实存在，
+    getProDescription 才是唯一的真话）——整码搜不到就逐字裁前缀重试，
+    按归一化型号比对选回正确那台。命中返回 entry dict，没命中返回 {}。"""
+    try:
+        hits = _post("product/getProductBrandNameByProductCode",
+                     {"productCode": model}).get("data") or []
+    except Exception:
+        hits = []
+    e = next((x for x in hits
+              if norm_model(x.get("productModel") or "") == nm), {})
+    if not e:
+        q = str(model)
+        for _ in range(4):
+            q = q[1:]
+            if len(q) < 4:
+                break
+            try:
+                hits = _post("product/getProductBrandNameByProductCode",
+                             {"productCode": q}).get("data") or []
+            except Exception:
+                hits = []
+            e = next((x for x in hits
+                      if norm_model(x.get("productModel") or "") == nm), {})
+            if e:
+                log("说明书站模糊命中：%s（码 %s）"
+                    % (e.get("productModel"), e.get("productCode")))
+                break
+    return e or {}
+
+
+def _book_pdf(model, url, pcode, log):
+    """PDF 整本说明书（2026-11-23 用户令「不管什么格式的全部下载下来」）：
+    下载存 kitset/<型号>/说明书/电子说明书.pdf（下过不再重下，限速礼貌抓），
+    PyMuPDF 解析——参数页抠「名称 值」行，内嵌位图全导出，含「尺寸」+毫米数页
+    整页 2x 渲染当尺寸线稿（矢量线稿抠不出位图只能整页渲）。"""
+    try:
+        import kitset as _ks
+        mdir = os.path.join(_ks.model_dir(model), "说明书")
+    except Exception:
+        mdir = os.path.join("kitset", norm_model(model), "说明书")
+    os.makedirs(mdir, exist_ok=True)
+    pdf_fp = os.path.join(mdir, "电子说明书.pdf")
+    if not os.path.isfile(pdf_fp):
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": _XS_UA, "Referer": "https://hzy.haier.com/"})
+            with urlopen_ssl(req, timeout=60) as r:
+                raw = r.read()
+            if len(raw) < 3000 or b"%PDF" not in raw[:300]:
+                log("说明书 PDF 下载异常（%d 字节），放弃" % len(raw))
+                return {}
+            with io.open(pdf_fp, "wb") as f:
+                f.write(raw)
+            log("说明书 PDF 已下载（%.1f MB）→ %s" % (len(raw) / 1048576.0, pdf_fp))
+        except Exception as ex:
+            log("说明书 PDF 下载失败：%s" % str(ex)[:80])
+            return {}
+    try:
+        import pymupdf as fitz  # PyMuPDF 新名（fitz 旧名已弃用）
+    except Exception:
+        try:
+            import fitz
+        except Exception:
+            log("说明书 PDF 已存盘但缺解析库（requirements 里 PyMuPDF），参数图先不解析")
+            return {}
+    try:
+        doc = fitz.open(pdf_fp)
+    except Exception as ex:
+        log("说明书 PDF 打不开：%s" % str(ex)[:80])
+        return {}
+    rows, manual, imgs, size_imgs, dts = [], [], [], [], []
+    seen_r = set()
+    # 先探有没有文字层：扫描版 PDF（C8U12G3 实锤 32 页 14 字符）没有文本，
+    # 只能整页渲染当图——参数靠现有视觉链认，机图/尺寸线稿靠 _pick_prod 启发式+AI
+    _tot_txt = 0
+    try:
+        for pi in range(doc.page_count):
+            _tot_txt += len((doc.load_page(pi).get_text() or "").strip())
+    except Exception:
+        pass
+    _scanned = _tot_txt < 200
+    if _scanned:
+        log("说明书 PDF 是扫描版（全 32 页无文字层），整页渲染 %d 张图进图池" % doc.page_count)
+    try:
+        for pi in range(doc.page_count):
+            if _scanned:
+                try:
+                    pix = doc.load_page(pi).get_pixmap(matrix=fitz.Matrix(2, 2))
+                    fp = os.path.join(mdir, "pdf_p%02d.png" % (pi + 1))
+                    pix.save(fp)
+                    imgs.append(("说明书PDF 第%d页" % (pi + 1), fp))
+                    pix = None
+                except Exception:
+                    pass
+                continue
+            page = doc.load_page(pi)
+            # 内嵌位图全导出（小图/装饰在 _pick_prod 有 250px 尺寸闸，不用这层挑）
+            try:
+                for im in page.get_images(full=True):
+                    try:
+                        pix = fitz.Pixmap(doc, im[0])
+                        if pix.width < 300 or pix.height < 300:
+                            pix = None
+                            continue
+                        if pix.colorspace and pix.colorspace.n > 3:
+                            pix = fitz.Pixmap(fitz.csRGB, pix)
+                        fp = os.path.join(mdir, "pdf_p%d_%d.png" % (pi + 1, im[0]))
+                        pix.save(fp)
+                        imgs.append(("说明书PDF 第%d页" % (pi + 1), fp))
+                        pix = None
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            try:
+                txt = page.get_text() or ""
+            except Exception:
+                txt = ""
+            if not txt:
+                continue
+            # 参数行：「名称 值」两段式（中文/字母名称 2~14 字），只在参数页抠防噪音
+            if any(w in txt for w in _BOOK_PARAM_NAMES) or "规格" in txt:
+                for ln in txt.splitlines():
+                    t = " ".join(ln.split())
+                    m = re.match(r"^([\u4e00-\u9fa5A-Za-z／/（）()·\*x×]{2,14}?)\s+(.{1,40})$", t)
+                    if not m:
+                        continue
+                    k, v = m.group(1).strip(), m.group(2).strip()
+                    if k in seen_r or k in _BOOK_ROW_HEADS or not v \
+                            or re.fullmatch(r"\d+", v):
+                        continue
+                    seen_r.add(k)
+                    rows.append((k, v))
+            # 说明要点（给 AI 当真料）
+            if any(w in txt for w in _BOOK_MANUAL_NAMES):
+                for ln in txt.splitlines():
+                    t = " ".join(ln.split())
+                    if 8 <= len(t) <= 100 \
+                            and not t.lower().startswith(("http", "www")) \
+                            and t not in manual:
+                        manual.append(t)
+                    if len(manual) >= _BOOK_TEXT_MAX:
+                        break
+            # 尺寸页：整页渲染当尺寸线稿（同页 a=825mm 式数值抠成 dim_table，图注合成用）
+            _mm = re.findall(r"([a-dA-D])\s*[（(]?\s*mm\s*[）)]?\s*[=：:]?\s*(\d{3,4})", txt)
+            if "尺寸" in txt:
+                try:
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                    fp = os.path.join(mdir, "pdf_size_p%d.png" % (pi + 1))
+                    pix.save(fp)
+                    imgs.append(("说明书PDF 尺寸图 第%d页" % (pi + 1), fp))
+                    size_imgs.append(("说明书PDF 尺寸图 第%d页" % (pi + 1), fp))
+                except Exception:
+                    pass
+                if len(_mm) >= 2:
+                    dts.append({"node": "说明书PDF 第%d页" % (pi + 1),
+                                "labels": [a.upper() for a, _v in _mm],
+                                "vals": {model: [int(v) for _a, v in _mm]}})
+                    log("说明书 PDF 尺寸页数值：%s"
+                        % "；".join("%s=%s" % (a, v) for a, v in _mm))
+    finally:
+        doc.close()
+    log("说明书 PDF 解析：参数 %d 条 / 图 %d 张（尺寸页 %d）/ 说明要点 %d 条"
+        % (len(rows), len(imgs), len(size_imgs), len(manual)))
+    return {"rows": rows, "imgs": imgs, "size_imgs": size_imgs,
+            "manual": manual, "dim_table": dts, "url": url, "pcode": pcode,
+            "brand": "", "root": "电子说明书PDF", "scanned": _scanned}
+
+
+def _book_fetch(model, log):
+    """电子说明书站全量抓。防串机：树根 name 必须含请求型号（norm 归一比对）。
+    命中返回 dict（见上注释），没命中/失败返回 {}。"""
+    nm = norm_model(model)
+    hdrs = {"User-Agent": _XS_UA,
+            "Referer": "https://hzy.haier.com/cn/vipcode/eleInstruction"}
+
+    def _post(path, data):
+        u = ("https://hzy.haier.com/vipCode/%s?vipCode_domainName=&vipCode_ssotoken="
+             "&vipCode_userId=" % path)
+        req = urllib.request.Request(u, data=urllib.parse.urlencode(data).encode(),
+                                     headers={**hdrs,
+                                              "Content-Type": "application/x-www-form-urlencoded",
+                                              "X-Requested-With": "XMLHttpRequest"})
+        with urlopen_ssl(req, timeout=20) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+
+    # 1. 型号 → 产品码（防串机 + 模糊重试，_book_find_entry 里有 11-23 实锤注释）
+    try:
+        e = _book_find_entry(_post, model, nm, log)
+        if not e:
+            log("说明书站没收录该型号（或对不上），跳过")
+            return {}
+        pcode = str(e.get("productCode") or "")
+        if not pcode:
+            return {}
+    except Exception as ex:
+        log("说明书站查询失败：%s" % str(ex)[:80])
+        return {}
+    # 2. 产品码 → 说明书地址（type=1 H5 电子书 / type=2 PDF 整本，11-23 用户令
+    # 「不管什么格式的全部下载下来」——PDF 走 _book_pdf 下载整本+解析）
+    try:
+        d2 = _post("product/getProDescription", {"code": pcode})
+        url = str(d2.get("resultMsg") or "")
+        _btype = str(d2.get("type") or "")
+        if "http" not in url:
+            return {}
+    except Exception as ex:
+        log("说明书 H5 页查询失败：%s" % str(ex)[:80])
+        return {}
+    if _btype == "2" or url.lower().split("?")[0].endswith(".pdf"):
+        return _book_pdf(model, url, pcode, log)
+    # 3. SUMEBookMap 树
+    pr = urllib.parse.urlparse(url)
+    segs = [s for s in pr.path.split("/") if s]
+    ind = ""
+    brand_seg = ""
+    for i, s in enumerate(segs):
+        if s == "app" and i + 2 < len(segs) and segs[i + 1] in ("casarte", "haier", "leader"):
+            brand_seg = segs[i + 1]     # /app/{品牌}/{行业码}/…
+            ind = segs[i + 2]
+            break
+    pc = (urllib.parse.parse_qs(pr.query).get("productCode") or [""])[0]
+    if not ind or not pc:
+        log("说明书页不是 SUMEBookMap 形态（%s），跳过" % pr.netloc)
+        return {}
+    base = "%s://%s/app/api/%s/casarteSUMEBookMap/%s/static/html-casarte/" % (
+        pr.scheme, pr.netloc, ind, urllib.parse.quote(pc))
+    try:
+        req = urllib.request.Request(base + "casarteSUMEBookMap.json", headers=hdrs)
+        with urlopen_ssl(req, timeout=20) as r:
+            tree = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception as ex:
+        log("说明书树拉取失败：%s" % str(ex)[:80])
+        return {}
+    # 2026-11-23 放宽：根标常带颜色/卖点前缀（星蕴银拉丝BCD-400WLLTDEDS9U1 实锤被
+    # 全等比对误拒、整链失效）——改为根标 norm 后【包含】请求型号即放行；
+    # 必须含完整型号才过，根标是别的型号时依然拦得住，防串机不放松。
+    _root_nm = norm_model(str(tree.get("name") or "").replace("说明书", "").replace("使用说明书", ""))
+    if not (_root_nm and nm in _root_nm):
+        log("说明书型号对不上（根标 %s 不含 %s），弃用" % (tree.get("name"), model))
+        return {}
+    # 全树收节点（递归所有键——各品牌树键名不统一，probe 实锤 WAS/WAT 两形态都能收全）
+    nodes = []
+
+    def _walk(node):
+        if isinstance(node, dict):
+            h = str(node.get("href") or "").strip()
+            n = str(node.get("name") or "").strip()
+            if h and n and h.lower().endswith(".html"):
+                nodes.append((n, h))
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                _walk(v)
+
+    _walk(tree)
+    nodes = nodes[:80]
+    # 并发拉 SMO 页（67 页顺序拉 ~20s，8 并发 ~3s）
+    pages = {}
+    _hrefs = [h for _n, h in nodes]
+
+    def _get(h):
+        u = h if h.startswith("http") else base + h.lstrip("./")
+        try:
+            req = urllib.request.Request(u, headers=hdrs)
+            with urlopen_ssl(req, timeout=15) as r:
+                return r.read().decode("utf-8", "replace")
+        except Exception:
+            return ""
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for (n, h), html in zip(nodes, ex.map(_get, _hrefs)):
+                pages[h] = html
+    except Exception:
+        for n, h in nodes:
+            pages[h] = _get(h)
+    # 逐页解析：参数行 / 图 / 说明文字 / 尺寸数值表
+    imgs, size_imgs, rows, manual, dim_tables = [], [], [], [], []
+    seen_i, seen_r = set(), set()
+    for n, h in nodes:
+        html = pages.get(h) or ""
+        if not html:
+            continue
+        if any(w in n for w in _BOOK_PARAM_NAMES):
+            for tr in re.findall(r"<tr[\s\S]*?</tr>", html, re.I):
+                cells = [re.sub(r"<[^>]+>", "", c).strip()
+                         for c in re.findall(r"<t[dh][^>]*>([\s\S]*?)</t[dh]>", tr, re.I)]
+                cells = [c for c in cells if c]
+                if len(cells) >= 2 and cells[0] not in seen_r \
+                        and cells[0] not in _BOOK_ROW_HEADS:
+                    seen_r.add(cells[0])
+                    rows.append((cells[0], cells[1]))
+        # 尺寸数值表（2026-11-23 LES50H-AC5 实锤：说明书线稿只标字母 a1/b1/d1，
+        # 毫米数在同页表格里「型号 a（mm） b（mm）…」——图上没数字，_nums_gate 必挂，
+        # 表格抠出来跟线稿合成才有真尺寸图）。表头行=「型号」开头且带「字母（mm）」列。
+        _trs = [([re.sub(r"<[^>]+>", "", c).strip()
+                  for c in re.findall(r"<t[dh][^>]*>([\s\S]*?)</t[dh]>", tr, re.I)])
+                for tr in re.findall(r"<tr[\s\S]*?</tr>", html, re.I)]
+        _trs = [[c for c in r if c] for r in _trs]
+        _i = 0
+        while _i < len(_trs):
+            r0 = _trs[_i]
+            if len(r0) >= 2 and "型号" in r0[0] \
+                    and sum(1 for c in r0[1:] if re.fullmatch(r"[a-zA-Z]{1,3}\d?（mm）", c)) >= max(1, len(r0) - 2):
+                labels = [re.sub(r"（mm）$", "", c) for c in r0[1:]]
+                _i += 1
+                vals = {}
+                while _i < len(_trs):
+                    r1 = _trs[_i]
+                    if len(r1) == len(r0) and re.match(r"^[A-Za-z][A-Za-z0-9\- ]{3,}$", r1[0]) \
+                            and all(re.fullmatch(r"\d+(\.\d+)?", c) for c in r1[1:]):
+                        vals[r1[0]] = [float(v) if "." in v else int(v) for v in r1[1:]]
+                        _i += 1
+                    else:
+                        break
+                if vals:
+                    dim_tables.append({"node": n, "labels": labels, "vals": vals})
+                    log("说明书尺寸数值表（%s）：%s" % (n, "；".join(
+                        "%s=%s" % (m, "/".join(str(x) for x in v)) for m, v in vals.items())))
+                continue
+            _i += 1
+        for src in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.I):
+            sl = src.lower()
+            if "artwork/" in sl or sl.endswith((".svg", ".gif")):
+                continue
+            u2 = urllib.parse.urljoin(base, src)
+            if not re.search(r"\.(png|jpe?g|webp)(\?|$)", u2, re.I) or u2 in seen_i:
+                continue
+            seen_i.add(u2)
+            if any(w in n for w in ("尺寸", "安装要求", "安装方法")):
+                size_imgs.append((n, u2))
+            imgs.append((n, u2))
+        if any(w in n for w in _BOOK_MANUAL_NAMES):
+            body = re.sub(r"<(script|style)[\s\S]*?</\1>", "", html, flags=re.I)
+            cnt = 0
+            for m in re.findall(r"<(?:li|p)[^>]*>([\s\S]*?)</(?:li|p)>", body, re.I):
+                t = re.sub(r"<[^>]+>", "", m)
+                t = re.sub(r"\s+", " ", t).strip()
+                if 6 <= len(t) <= 100 and not t.lower().startswith(("http", "www")) \
+                        and t not in manual:
+                    manual.append(t)
+                    cnt += 1
+                if cnt >= 8 or len(manual) >= _BOOK_TEXT_MAX:
+                    break
+    brand = {"casarte": "卡萨帝", "leader": "统帅", "haier": "海尔"}.get(brand_seg, "")
+    # 图排序（C1 HD10L5CLU1 全树 192 张实锤）：机器形态/尺寸类节点排前，
+    # 程序表/注意事项/APP 等操作截图垫后——视觉选图先吃高价值图，落盘编号也在前。
+    _PRI = ("正面", "背面", "外观", "部件", "附件", "尺寸", "安装要求", "安装方法",
+            "控制面板", "电气原理", "产品介绍", "品牌介绍")
+
+    def _prio(it):
+        n = it[0]
+        return 0 if any(w in n for w in _PRI) else 1
+
+    imgs.sort(key=_prio)
+    size_imgs.sort(key=_prio)
+    # 数值表所在节点的图就是带字母标注的结构线稿（LES50H「外观及部件介绍」实锤：
+    # 节点名不含「尺寸/安装」进不了 size_imgs，合成图注会配到挂板安装图上）——
+    # 插到队首（数值表跟线稿同源，字母对得上；稳定排序会把它排到第 5 位取不到）
+    _dt_nodes = {t.get("node") for t in dim_tables}
+    if _dt_nodes:
+        _dt_imgs = [(_n, _u) for _n, _u in imgs
+                    if _n in _dt_nodes and (_n, _u) not in size_imgs]
+        size_imgs[:0] = _dt_imgs
+        size_imgs.sort(key=_prio)
+    # 参数防串机（官方一本多型号共用参数页实锤：LES50H/LES60H 同一本手册，
+    # 参数页只标 LES50H-AC5 → 60L 机型照抄会写出 50L 错参数，CWC8 教训照守）。
+    # 2026-11-23 用户令「LES60H 这种就是两个容量而已」：同系列变体放行——
+    # 剥掉数字后的字母骨架一致（LES-H-AC 同）= 同平台双容量 → 剥掉型号行与容量行，
+    # 其余通用参数（功率/能效/水压/温度…）保留；骨架不一致 → 整组弃用。
+    _pm = dict(rows).get("产品型号") or dict(rows).get("产品系列") or ""
+
+    def _skel(s):
+        return re.sub(r"[0-9.\-]", "", norm_model(s) or "")
+
+    if _pm and norm_model(_pm) != nm:
+        if _skel(_pm) and _skel(_pm) == _skel(model):
+            _n0 = len(rows)
+            rows = [(k, v) for k, v in rows
+                    if str(k) not in ("产品型号", "产品系列") and "容量" not in str(k)]
+            log("说明书参数页标 %s ≠ 请求 %s：同系列变体（就是容量差），剥型号/容量行放行 %d 条通用参数"
+                % (_pm, model, len(rows)))
+        else:
+            log("说明书参数页标 %s ≠ 请求 %s（非同系列），参数弃用防串机" % (_pm, model))
+            rows = []
+    log("说明书全量：参数 %d 条 / 图 %d 张（尺寸线稿 %d）/ 说明要点 %d 条"
+        % (len(rows), len(imgs), len(size_imgs), len(manual)))
+    return {"rows": rows, "imgs": imgs, "size_imgs": size_imgs,
+            "manual": manual, "dim_table": dim_tables, "url": url, "pcode": pcode,
+            "brand": brand, "root": str(tree.get("name") or "")}
+
+
 def _hzy_params(model, log):
     """海尔电子说明书站参数。成功返回 [(中文名, 值)...]，没命中/失败返回 []。
     product_model 行只用来防串机（平台码对应型号≠请求型号 → 整包弃用），不进参数。"""
@@ -643,14 +1058,11 @@ def _hzy_params(model, log):
         with urlopen_ssl(req, timeout=20) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
 
-    # 1. 型号 → 平台码（productModel 必须等于请求型号，防串机）
+    # 1. 型号 → 产品码（productModel 必须等于请求型号，防串机；模糊重试同 _book_fetch）
     try:
-        d = _post("product/getProductBrandNameByProductCode", {"productCode": model})
-        e = (d.get("data") or [{}])[0]
-        if norm_model(e.get("productModel") or "") != nm:
+        e = _book_find_entry(_post, model, nm, log)
+        if not e:
             log("电子说明书没收录该型号（或对不上），跳过")
-            return []
-        if str(e.get("propertyExist") or "") != "1" and str(e.get("manualExist") or "") != "1":
             return []
         pcode = str(e.get("productCode") or "")
         if not pcode:
@@ -690,9 +1102,11 @@ def _hzy_params(model, log):
                                          headers={"User-Agent": _XS_UA, "Referer": u})
             with urlopen_ssl(req, timeout=20) as r:
                 tree = json.loads(r.read().decode("utf-8", "replace"))
-            # 防串机：根 name 必须含请求型号
-            if norm_model(str(tree.get("name") or "")) != nm:
-                log("SUMEBookMap 型号对不上（根标 %s ≠ %s），弃用" % (tree.get("name"), model))
+            # 防串机：根 name 必须含请求型号（2026-11-23 放宽为包含比对——根标带
+            # 颜色/卖点前缀时全等比对误拒，星蕴银拉丝BCD-400WLLTDEDS9U1 实锤）
+            _root_nm = norm_model(str(tree.get("name") or ""))
+            if not (_root_nm and nm in _root_nm):
+                log("SUMEBookMap 型号对不上（根标 %s 不含 %s），弃用" % (tree.get("name"), model))
                 return []
             targets = []
 
@@ -999,6 +1413,11 @@ def _facts_text(data, model):
         lines.append("[%s] %s" % (g, "；".join("%s:%s" % (a, b) for a, b in _pairs)))
     if data.get('sellpoints'):
         lines.append("官网卖点: " + "、".join(data['sellpoints']))
+    # 说明书要点（2026-11-23 新链）：官方使用说明转述给 AI 当真料——数字全真，
+    # 进 facts 后数字闸放行；尺寸类行有 _is_size_line 一票否决兜底。
+    _ml = [str(m).strip() for m in (data.get('manual') or []) if str(m).strip()]
+    if _ml:
+        lines.append("官方说明书要点(真实资料可转述): " + "；".join(_ml[:14]))
     return "\n".join(lines)
 
 
@@ -1128,6 +1547,13 @@ def glm_copy(model, kind, data, log):
     kk_titles = ('注意：这是正品全新机——标题里必须用「全新机」，绝不许出现「展示样机/样机/全新原封」字样。'
                  if kind != 's' else
                  '注意：这是展示样机——标题里必须用「展示样机/功能完好」，绝不许出现「全新机/全新/全新原封」字样。')
+    # 2026-11-23 LES50H-AC5 实锤「50L电水式」：AI 把品类词「电热水器」写变形——
+    # 品类词必须逐字完整，禁任何缩写/变形/拼错。
+    _kat = str(data.get('cat') or '').strip()
+    if _kat and _kat not in ('电器', '家电'):
+        kk_titles += ('\n品类词必须完整写「%s」，禁止任何缩写/变形/拼错'
+                      '（绝不允许出现「电水式」「水热器」这类变形），标题里的品类词与「%s」逐字一致。'
+                      % (_kat, _kat))
     # 2026-11-22 CWC16-B07BK 实锤：AI 把「装载容量 8套/每抽屉」整段写进标题/卖点，
     # 跟品名整机口径 16套 打架——容量一律用整机总量，禁出现「每抽屉」口径
     if '每抽屉' in str(_props) or '每抽屉' in str(data.get('pname') or ''):
@@ -1535,7 +1961,7 @@ def dl_images(pairs, mdir, log):
         except Exception:
             continue
     n_off = sum(1 for x in saved if x['src'] == '官网')
-    log("配图落盘 %d 张（官网 %d + 欣盛 %d）" % (len(saved), n_off, len(saved) - n_off))
+    log("配图落盘 %d 张（官网 %d + 说明书 %d）" % (len(saved), n_off, len(saved) - n_off))
     return saved
 
 
@@ -1591,7 +2017,7 @@ def generate(model, kind='l', force=0, log=None):
     log = log or (lambda s: None)
     nm = _safe_dir(norm_model(model) or model)
     kk = _kk(kind)
-    cache = os.path.join(copy_root(), "%s_%s_v4.json" % (nm, kk))   # v4：官网+欣盛双源全图（旧缓存不读）
+    cache = os.path.join(copy_root(), "%s_%s_v7.json" % (nm, kk))   # v7：图四层/参数两层新链（旧缓存不读）
     if not force and os.path.isfile(cache):
         try:
             with io.open(cache, encoding="utf-8") as f:
@@ -1613,30 +2039,115 @@ def generate(model, kind='l', force=0, log=None):
             return res
         except Exception:
             pass
-    # 2026-10-13 用户定稿：官网图跟欣盛图都下载——两路都查，不再二选一
-    data = fetch_official(model, log)
-    xs = fetch_xinsheng(model, log)
-    if not data and not xs:
-        log("官网+欣盛都没命中，AI 只按型号裸写（禁参数）")
-        data = {'source': '无数据', 'brand': '', 'pname': model, 'price': '',
-                'url': '', 'groups': [], 'sellpoints': [], 'imgs': []}
-    elif not data:
-        data = xs
-        xs = None
-    elif xs and not str(data.get('price') or '').strip() and str(xs.get('price') or '').strip():
-        data['price'] = xs['price']   # 官网没挂价 → 欣盛价兜底
-    # 抓取链 0 参数时的补强顺序（2026-11-21）：① 海尔电子说明书站（纯接口秒级零成本）
-    # → ② 欣盛详情长图视觉读参（~2 分钟）。都是真参数，AI 铁律不编造照旧。
-    if not data.get('groups'):
-        _hzy_rows = _hzy_params(model, log)
-        if _hzy_rows:
-            data['groups'] = [("参数", _hzy_rows)]
-    if not data.get('groups'):
-        _xs_pid = data.get('pid') or (xs or {}).get('pid')
-        if _xs_pid:
-            _xs_rows = _xs_img_params(model, {'pid': _xs_pid}, log)
-            if _xs_rows:
-                data['groups'] = [("参数", _xs_rows)]
+    if kind == 'z':
+        # 婷宝版配文专用老链（2026-11-23 用户令「宝是宝婷是婷」分家）：官网+欣盛，
+        # v3.0.87 原版行为；宝三文案（l/s/x）走下面的官网→说明书新链，互不影响
+        data = fetch_official(model, log)
+        xs = fetch_xinsheng(model, log)
+        if not data and not xs:
+            log("官网+欣盛都没命中，AI 只按型号裸写（禁参数）")
+            data = {'source': '无数据', 'brand': '', 'pname': model, 'price': '',
+                    'url': '', 'groups': [], 'sellpoints': [], 'imgs': []}
+        elif not data:
+            data = xs
+            xs = None
+        elif xs and not str(data.get('price') or '').strip() and str(xs.get('price') or '').strip():
+            data['price'] = xs['price']   # 官网没挂价 → 欣盛价兜底
+        # 抓取链 0 参数时的补强顺序（2026-11-21）：① 海尔电子说明书站（纯接口秒级零成本）
+        # → ② 欣盛详情长图视觉读参（~2 分钟）。都是真参数，AI 铁律不编造照旧。
+        if not data.get('groups'):
+            _hzy_rows = _hzy_params(model, log)
+            if _hzy_rows:
+                data['groups'] = [("参数", _hzy_rows)]
+        if not data.get('groups'):
+            _xs_pid = data.get('pid') or (xs or {}).get('pid')
+            if _xs_pid:
+                _xs_rows = _xs_img_params(model, {'pid': _xs_pid}, log)
+                if _xs_rows:
+                    data['groups'] = [("参数", _xs_rows)]
+    else:
+        # 2026-11-23 用户令（宝窗口新链）：参数=官网→说明书站两层；图=官网→说明书→
+        # 欣盛→中关村四层；R2 图库/pubwork/必应/GLM/欣盛读参 全下线。
+        # 官网优先（need_imgs=True：云端参数库命中也要打官网拿图）；
+        # 官网缺参数或缺图（或整没命中）才打说明书站全量——官网抓到的不再重复抓。
+        data = fetch_official(model, log, need_imgs=True)
+        _book = None
+        if not data:
+            log("官网没命中，转说明书站兜底")
+            data = {'source': '无数据', 'brand': '', 'pname': model, 'price': '',
+                    'url': '', 'groups': [], 'sellpoints': [], 'imgs': []}
+        if not data.get('groups') or not (data.get('imgs') or []):
+            _book = _book_fetch(model, log)
+            if _book:
+                # 参数：官网有的键不覆盖，缺的整组追加（官网优先，说明书补缺）
+                if _book.get('rows'):
+                    if not data.get('groups'):
+                        data['groups'] = [("参数", _book['rows'])]
+                        if log:
+                            log("参数全量来自说明书站：%d 条" % len(_book['rows']))
+                    else:
+                        _have = set()
+                        for _g, kv in (data.get('groups') or []):
+                            if isinstance(kv, (list, tuple)):
+                                for k, _v in kv:
+                                    _have.add(str(k).strip())
+                        _add = [(k, v) for k, v in _book['rows'] if str(k).strip() not in _have]
+                        if _add:
+                            data['groups'].append(("参数", _add))
+                            if log:
+                                log("说明书补缺参数 %d 条" % len(_add))
+                # 图：官网一张没有 → 说明书全量顶上；官网有图 → 只补尺寸线稿（官网详情页没有线稿）
+                # 扫描版 PDF（scanned）例外：页面全是线稿/文字当不了主图，留给中关村层
+                if (not (data.get('imgs') or []) and _book.get('imgs')
+                        and not _book.get('scanned')):
+                    data['imgs'] = [u for _n, u in _book['imgs']]
+                    data['_book_imgs'] = True
+                    if log:
+                        log("官网无图，说明书图 %d 张顶上" % len(data['imgs']))
+                elif _book.get('size_imgs'):
+                    data['_book_size'] = [u for _n, u in _book['size_imgs']
+                                          if u not in (data.get('imgs') or [])]
+                    if log and data['_book_size']:
+                        log("说明书补尺寸线稿 %d 张（追加在官网图之后）" % len(data['_book_size']))
+                # 使用说明文字 → AI 素材
+                if _book.get('manual'):
+                    data['manual'] = _book['manual']
+                # 官网整没命中时，品牌/品名用说明书口径兜底（树根 name=「型号说明书」）
+                if data['source'] == '无数据':
+                    data['source'] = '说明书'
+                    data['url'] = _book.get('url') or ''
+                    if _book.get('brand') and not data.get('brand'):
+                        data['brand'] = _book['brand']
+                    _bn = re.sub(r'说明书\s*$', '', str(_book.get('root') or '')).strip()
+                    if _bn and norm_model(_bn) == norm_model(model):
+                        data['pname'] = _bn
+        # 图片兜底两层（2026-11-23 用户令「图片加一个中关村的，参数只抓说明书网站的」）：
+        # 参数只走 官网→说明书（欣盛详情长图读参砍掉——一张 30 秒起步，是文案慢的大头）；
+        # 欣盛/中关村只补图不补参，图全空才依次打。
+        # 2026-11-23 补：扫描版 PDF 说明书整页渲染全是线稿/文字页，不算「有真机图」。
+        _scanned_book = bool((_book or {}).get('scanned'))
+        if not (data.get('imgs') or []) or _scanned_book:
+            _xs = fetch_xinsheng(model, log)
+            if _xs and (_xs.get('imgs') or []) and not (data.get('imgs') or []):
+                data['imgs'] = list(_xs['imgs'])
+                if log:
+                    log("欣盛商城图 %d 张顶上" % len(data['imgs']))
+            if not (data.get('imgs') or []):
+                # 中关村图兜底（只图不参；懒 import 避免环，运行期 kitset 必已加载或可独立加载）
+                try:
+                    import kitset as _ks
+                    _zi, _zp = _ks._zol_data(model, str(data.get('brand') or ''), log)
+                except Exception:
+                    _zi = []
+                if _zi:
+                    data['imgs'] = [u for u in _zi if u]
+                    if log:
+                        log("中关村图 %d 张顶上" % len(data['imgs']))
+            _xs = _xs or {}
+            if data['source'] == '无数据' and _xs.get('pname'):
+                data['source'] = '欣盛商城'
+                data['pname'] = _xs['pname']
+                data['price'] = str(_xs.get('price') or '')
     # 蓝底参数直给（2026-11-17 用户令「不是抓不到时才兜底，直接把蓝底 set.json 的
     # 真实参数给聚光，不要我去抓了」）：聚光文案的参数源固定为蓝底 set.json 快照——
     # 有就直接用（覆盖官网/欣盛抓来的），抓取链只补价格/图，不再决定参数有没有。
@@ -1731,18 +2242,33 @@ def generate(model, kind='l', force=0, log=None):
     if ai is None:
         ai = glm_copy(model, kk, data, log)
     mdir = os.path.join(copy_root(), nm)
-    # 图片合并：官网图在前、欣盛图在后，URL 去重后全部落盘
-    pairs, _seen = [], set()
-    for u in (data.get('imgs') or []):
-        if u and u not in _seen:
-            _seen.add(u)
-            pairs.append((u, '官网'))
-    if xs:
-        for u in (xs.get('imgs') or []):
+    if kind == 'z':
+        # 图片合并（婷老链 v3.0.87 原版）：官网图在前、欣盛图在后，URL 去重后全部落盘
+        pairs, _seen = [], set()
+        for u in (data.get('imgs') or []):
             if u and u not in _seen:
                 _seen.add(u)
-                pairs.append((u, '欣盛'))
-    images = dl_images(pairs, mdir, log)
+                pairs.append((u, '官网'))
+        if xs:
+            for u in (xs.get('imgs') or []):
+                if u and u not in _seen:
+                    _seen.add(u)
+                    pairs.append((u, '欣盛'))
+        images = dl_images(pairs, mdir, log)
+    else:
+        # 图片合并（2026-11-23 新链）：官网图在前；官网无图时说明书图顶上（标签「说明书」）；
+        # 官网有图时把说明书的尺寸线稿追加在尾部（官网详情页没有线稿，用户令「尺寸图也在说明书找」）
+        pairs, _seen = [], set()
+        _pair_src = '说明书' if data.get('_book_imgs') else '官网'
+        for u in (data.get('imgs') or []):
+            if u and u not in _seen:
+                _seen.add(u)
+                pairs.append((u, _pair_src))
+        for u in (data.get('_book_size') or []):
+            if u and u not in _seen:
+                _seen.add(u)
+                pairs.append((u, '说明书'))
+        images = dl_images(pairs, mdir, log)
     # 2026-10-24 用户令：0_主图_卖点拼版.jpg 所有的都不用做，自动合成已停
     # 卖点：AI 从真实参数提炼的加厚条优先（2026-10-13 用户定稿，官网 sellpoint 是
     # 「智能生活新选择」类空洞口号不要）；AI 全被剔才拿官网卖点兜底
@@ -2015,7 +2541,11 @@ def enrich(model, kind, force, style="", log=None):
         import pubwork as _pw
         import pei_core as _pc
         _info = _pw.load_info(model)
-        if not _info or not (_info.get("props") or []):
+        # 2026-11-23 用户令「参数只抓说明书网站的」+「文案写的慢」：宝链（l/s/x）只
+        # 复用本地 peiwork 缓存，绝不起 pubwork 网络爬取链（新爬虫→必应旧检索→兴达——
+        # C8U12G3 实锤旧检索一卡 480+ 秒，就是文案慢的元凶）。本地缓存没有就用
+        # generate() 自产结果（官网→说明书口径）；婷宝版（kind=z）老链照旧。
+        if kind == 'z' and (not _info or not (_info.get("props") or [])):
             try:
                 _info = _pw.work(model, prog=lambda p, m: log(m))
             except Exception as _we:

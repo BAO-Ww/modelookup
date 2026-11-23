@@ -7108,6 +7108,54 @@ function openKitView(k){
         + ' · 建议「挑主图」换一张清晰的再重出';
     }
   }
+  /* 2026-11-23 用户令「四层都没有就给我一个上传主图的按键」：失败面板统一在这里画。
+     图源全空（报错带 机图/主图/塞图/图源 字样）时多给一颗「上传主图」——选中即
+     POST /api/kitmain 落 官网/主图.png，成功自动 force 重出（_manual_overrides 当主图）。 */
+  function paintFail(msg){
+    var _emsg = String(msg || '');
+    var _noimg = /机图|主图|塞图|图源/.test(_emsg);
+    var h = '<div style="padding:50px 20px;text-align:center;color:#b42318;font-size:14px;line-height:1.9">'
+      + '<div style="font-weight:600">生成失败</div>'
+      + '<div style="color:#8a929e;font-size:12px;margin-top:6px;word-break:break-all">' + esc(_emsg) + '</div>'
+      + '<div style="margin-top:14px;display:flex;gap:10px;justify-content:center;align-items:center">'
+      + '<button id="kv_retry" style="border:1px solid #f0b9b3;background:#fff;color:#b42318;border-radius:9px;padding:7px 18px;font-size:13px;cursor:pointer">重试一次</button>'
+      + (_noimg ? '<button id="kv_upbtn" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;border-radius:9px;padding:7px 18px;font-size:13px;cursor:pointer">上传主图</button>' : '')
+      + '</div>'
+      + (_noimg ? '<div style="color:#8a929e;font-size:11.5px;margin-top:8px">选一张你的实拍图 → 自动存进图片库当主图 → 自动重新生成四张</div>' : '')
+      + '</div>';
+    wrap.querySelector('#kv_body').innerHTML = h;
+    var _rb = wrap.querySelector('#kv_retry');
+    if (_rb) _rb.onclick = function(){ load(true); };
+    var _ub = wrap.querySelector('#kv_upbtn');
+    if (_ub){
+      var inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = 'image/*'; inp.style.display = 'none';
+      wrap.appendChild(inp);
+      _ub.onclick = function(){ inp.click(); };
+      inp.onchange = function(){
+        var f = inp.files && inp.files[0];
+        if (!f) return;
+        _ub.disabled = true; _ub.textContent = '上传中…';
+        var rd = new FileReader();
+        rd.onload = function(){
+          fetch('/api/kitmain', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({model:k, data:rd.result})})
+            .then(function(r){ return r.json(); })
+            .then(function(j){
+              if (!j || !j.ok) throw new Error((j && j.msg) || '保存失败');
+              wrap.querySelector('#kv_msg').textContent = '主图已收到，自动重新生成…';
+              load(true);
+            })
+            .catch(function(e){
+              _ub.disabled = false; _ub.textContent = '上传主图';
+              wrap.querySelector('#kv_msg').textContent = '塞图失败：' + (e.message || e);
+            });
+        };
+        rd.readAsDataURL(f);
+      };
+    }
+    wrap.querySelector('#kv_msg').textContent = '';
+  }
   function load(force){
     wrap.querySelector('#kv_msg').textContent = '正在抓参数/机图并渲染…（首次约 1-2 分钟）';
     wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#8a929e;font-size:14px;line-height:2">正在生成套图：爬虫 → 官网 → 欣盛 抓参数与机图，再渲染四张 1080×1080…<br>第一次跑这个型号要 1-2 分钟，生成过一次秒开。</div>';
@@ -7124,8 +7172,7 @@ function openKitView(k){
           if (!res.cached){ fetch('/api/kitset?model=' + encodeURIComponent(k) + '&open=1'); }
           render();
         }, function(err){
-          wrap.querySelector('#kv_body').innerHTML = '<div style="padding:60px 20px;text-align:center;color:#b42318;font-size:14px">生成失败：' + esc(String(err.message || err)) + '</div>';
-          wrap.querySelector('#kv_msg').textContent = '';
+          paintFail(String(err.message || err));
         }, function(sec, j){
           /* 当前步骤实时显示（2026-10-30 用户令「只看计时没啥用」）：后端各阶段 prog 打点，
              顶栏短句 + 正文大字（成品渲染后正文被 render() 覆盖，不再打扰） */
@@ -7149,17 +7196,11 @@ function openKitView(k){
         var _emsg = String((err && err.message) || err || '');
         var _why = '其他原因';
         if (/timeout|timed out|connection|Load failed|max retries/i.test(_emsg)) _why = '网络没通（接口超时/连不上）';
-        else if (/机图/.test(_emsg)) _why = '图源没货（官网/欣盛/中关村都没这台机器的图）';
+        else if (/机图|主图|塞图|图源/.test(_emsg)) _why = '图源没货（官网/说明书/欣盛/中关村都没有这台机器的图）';
         else if (/字体/.test(_emsg)) _why = '缺字体文件（安装包不完整，重装一次）';
         else if (/权限|permission|WinError 5/i.test(_emsg)) _why = '没写权限（图片库目录被占/只读）';
         else if (/401|key|invalid|quota/i.test(_emsg)) _why = 'AI 接口 key 失效或额度用完';
-        wrap.querySelector('#kv_body').innerHTML = '<div style="padding:50px 20px;text-align:center;color:#b42318;font-size:14px;line-height:1.9">'
-          + '<div style="font-weight:600">生成失败 · ' + esc(_why) + '</div>'
-          + '<div style="color:#8a929e;font-size:12px;margin-top:6px;word-break:break-all">' + esc(_emsg) + '</div>'
-          + '<button id="kv_retry" style="margin-top:14px;border:1px solid #f0b9b3;background:#fff;color:#b42318;border-radius:9px;padding:7px 18px;font-size:13px;cursor:pointer">重试一次</button></div>';
-        var _rb = wrap.querySelector('#kv_retry');
-        if (_rb) _rb.onclick = function(){ load(force); };
-        wrap.querySelector('#kv_msg').textContent = '';
+        paintFail(_why + '：' + _emsg);
       });
     })();
   }

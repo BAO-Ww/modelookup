@@ -10,3 +10,5 @@ pyinstaller==6.22.2
 Pillow>=11
 # websocket-client：xy_cdp 走 WebView2 CDP（快速进入自动点/菜单路由探测，2026-10-17）
 websocket-client>=1.8
+# PyMuPDF：说明书站 PDF 整本说明书解析（参数文本/内嵌图/尺寸页渲染，2026-11-23）
+PyMuPDF>=1.24
