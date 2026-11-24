@@ -454,7 +454,11 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
     except Exception:
         _lum = 0
     _white_machine = _lum > 240
-    C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
+    # 白机底色跟聚光同款纸感白（2026-11-24 用户实锤「聚光的就很完美，蓝底的机图还是有」）：
+    # 纯白底 255 和白机渐变末端 255 零对比融底；聚光底 paper_bg=纸感白 248，亮部对比
+    # 7 个灰阶天然出轮廓。非白机照旧纯白底。水印开着时两个入口烘的水印一致。
+    C = (wm_paper.paper_bg_wm(1080, 1080, "blue") if _white_machine
+         else wm_paper.white_bg_wm(1080, 1080, "blue"))   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     # 左上角品牌 logo（2026-11-13 用户令「左上角海尔品牌就加海尔的logo」）：
     # 海尔/卡萨帝/统帅一律贴 logo 图（本家蓝底也贴），其他品牌退回原文字
