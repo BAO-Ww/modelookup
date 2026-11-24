@@ -242,7 +242,8 @@ jobs:
           python -m pip install --upgrade pip
           # Pillow 必须带：spec hiddenimports 点名 PIL，缺装只警告不报错，
           # 结果包里没 PIL → 套图/文案/蓝底/聚光在 Mac 全炸（2026-10-29 CI 实锤）
-          pip install "pywebview==6.2.1" "openpyxl==3.1.5" "pyinstaller==6.22.2" pyobjc "websocket-client>=1.8" "Pillow>=11" "PyMuPDF>=1.24" "rapidocr_onnxruntime>=1.3" "onnxruntime>=1.20" "numpy>=1.26"
+          # rapidocr>=1.3 在 Python3.13 无解（1.3.x Requires-Python<3.12），放宽到本机同款 1.2.3（v3.0.89 mac 实锤）
+          pip install "pywebview==6.2.1" "openpyxl==3.1.5" "pyinstaller==6.22.2" pyobjc "websocket-client>=1.8" "Pillow>=11" "PyMuPDF>=1.24" "rapidocr_onnxruntime>=1.2.3" "onnxruntime>=1.20" "numpy>=1.26"
           python -c "import openpyxl, webview, PyInstaller, PIL; print('deps ok:', openpyxl.__version__, PyInstaller.__version__, PIL.__version__)"
 
       - name: 生成 icon.icns
