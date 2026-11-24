@@ -1,0 +1,48 @@
+name: haier-waf-test
+
+# 一次性探测（2026-11-24）：本机出口 IP 被海尔官网 WAF 拉黑（curl/python/Edge 全
+# 403 Invalid Request，实锤 IP 级封锁），验证 GitHub 云 runner（Azure IP）能否放行。
+# 纯 .github 改动不触发 build-installer（paths-ignore 兜着）。
+# 结论出来后此 yml 可删或改造成正式的官网云抓通道。
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "要探测的官网详情页 URL"
+        required: false
+        default: "https://www.haier.com/cooling/20240611_239183.shtml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Probe haier.com with cloud IP
+        shell: bash
+        run: |
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+          URL='${{ inputs.url }}'
+          echo "== 直连探测 =="
+          code=$(curl -s -o /tmp/p.html -w "%{http_code}" --max-time 40 \
+            -A "$UA" -H "Accept-Language: zh-CN,zh;q=0.9" "$URL" || echo CURLFAIL)
+          echo "HTTP $code, bytes $(wc -c < /tmp/p.html 2>/dev/null || echo 0)"
+          if [ -f /tmp/p.html ]; then
+            echo "== 能效等级出现次数: $(grep -c '能效等级' /tmp/p.html || echo 0)"
+            echo "== 前 200 字节 =="
+            head -c 200 /tmp/p.html
+            echo
+            echo "== 详情图 URL 样例 =="
+            grep -oE 'https?://[^"'"'"' )]+\.(jpg|png|webp)' /tmp/p.html | head -8 || echo none
+          fi
+      - name: Upload page html (for inspection)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: haier-page
+          path: /tmp/p.html
+          if-no-files-found: ignore
+          retention-days: 1
