@@ -1152,12 +1152,23 @@ def gen_style(model, style, sell_price=None, version="N", entry_title=None, only
             src = os.path.join(info["dir"], "官网")
             os.makedirs(src, exist_ok=True)
             out = _ks.spot_dir(model)
+            # 2026-11-23 用户令「上传首图」：用户手工传过首图（.manual_1 标记）→
+            # 整套重出跳过首图槽，绝不覆盖用户放的图；单张重出 only=1 时同样跳过。
+            _slots = SLOTS6
+            if os.path.isfile(os.path.join(out, ".manual_1")):
+                _slots = [s for s in (slots or SLOTS6) if s != 1]
+                if only == 1:
+                    _job_end(True)
+                    _logf()("首图是用户手工传的，跳过重出（删掉 聚光/.manual_1 可恢复自动）")
+                    return
+                _logf()("首图手工标记在，跳过首图槽重出")
         else:
             src = info["dir"]
             out = os.path.join(src, STYLE_DIRS.get(style, style))
         paths = pei_ai9.generate(info, src, out, version=version, sell_price=sell_price,
                                  api_key=_ai_key(), progress=_job_prog, style=style,
-                                 slots=SLOTS6, overview=False, only=only)
+                                 slots=_slots if style == "spot" else SLOTS6,
+                                 overview=False, only=only)
         _last_set(model, paths, out, style)
         _logf()("发布图·%s 生成完成：%d 张 -> %s" % (name, len(paths), out))
         # 2026-10-30 用户实锤「图一直出不来」：先收尾让前端立刻亮图，复检挪后台线程。

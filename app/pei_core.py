@@ -844,7 +844,17 @@ def sellpoints(info, exclude=None):
         if "热水器" in cat:
             add(vol + "升容量")
         elif "洗衣机" in cat or "干衣机" in cat:
-            add(vol + "kg 洗涤容量")
+            # 2026-11-23 双筒口径：上筒4kg+下筒8kg 相加=12（C8U12G3「4kg 洗涤容量」实锤）
+            _kcv = ""
+            for _nk in ("洗涤容量", "额定容量", "容量"):
+                for _pk, _pv in pd.items():
+                    if _nk in str(_pk):
+                        _kcv = kg_cap(_pv)
+                        if _kcv:
+                            break
+                if _kcv:
+                    break
+            add(("%skg 洗涤容量" % _kcv) if _kcv else (vol + "kg 洗涤容量"))
         elif "洗碗机" in cat:
             # 2026-11-22 CWC16-B07BK 实锤：「装载容量 8套/每抽屉」是抽屉口径，
             # 双子抽屉 8×2=16 跟标题 16套 打架——每抽屉值不进容量胶囊
@@ -1049,6 +1059,19 @@ def title_points(info):
     return uniq[:3]
 
 
+def kg_cap(vs):
+    """容量值里的公斤数（2026-11-23 C8U12G3 实锤）：
+    单值「8 kg」→ 8；双筒「上筒4 kg+下筒8 kg」→ 相加 = 12（总容量口径）。
+    必须带 kg/公斤 单位才算，防止「容量范围 4-8」这类被误加。
+    剥数字拼接会把 4+8 拼成 48（标题「48公斤大容量」元凶），禁用。"""
+    nums = re.findall(r"(\d+(?:\.\d+)?)\s*(?:kg|公斤)", str(vs), re.I)
+    if not nums:
+        return None
+    vals = [float(x) for x in nums]
+    total = sum(vals) if len(vals) > 1 else vals[0]
+    return int(total) if total == int(total) else total
+
+
 def capacity_str(info):
     """容量（带单位），从真实参数提，没有则 ''。例：'243升' / '12L' / '10kg'"""
     pd = prop_dict(info.get("props") or [])
@@ -1065,7 +1088,15 @@ def capacity_str(info):
     if not val:
         return ""
     m = re.search(r"(\d+(?:\.\d+)?)\s*(升|L|kg|公斤|m³|立方米)", val)
-    return (m.group(1) + (m.group(2).replace("公斤", "kg"))) if m else ""
+    if not m:
+        return ""
+    unit = m.group(2).replace("公斤", "kg")
+    # 2026-11-23 双筒口径：上筒4kg+下筒8kg 相加=12kg（C8U12G3「4kg」实锤）
+    if unit == "kg":
+        _kc = kg_cap(val)
+        if _kc:
+            return "%skg" % _kc
+    return m.group(1) + unit
 
 
 def core_feature(info):
@@ -2976,10 +3007,19 @@ def defringe_white(im, lo=236):
     官网原图机身端面是 245 左右的浅灰白，官网底色同为灰白看不出，
     贴到纸感白/纯白底上就显出一圈色块。这里做白场提拉——把 >=lo 的
     浅灰白像素推向 255（只动 RGB 不动 alpha），端面渐变与任意白底融合；
-    机身深色轮廓/黄胶囊/黑面板全在 lo 以下，不受影响。"""
+    机身深色轮廓/黄胶囊/黑面板全在 lo 以下，不受影响。
+    2026-11-24 LES60H-AC5 实锤（蓝底/聚光通用）：官方透明渲染图（alpha
+    通道抠好、边缘干净）没有色圈，拉白反把白机仅剩的机身渐变洗掉
+    （≥250 像素 60%→69%），机器和白底融成一片——透明像素占比 >5%
+    判为透明渲染图，原样返回不拉白；白底照片类照旧净化。"""
     try:
         im = im.convert("RGBA")
-        r, g, b, a = im.split()
+        a = im.split()[3]
+        _ah = a.histogram()
+        _at = sum(_ah)
+        if _at and _ah[0] / float(_at) > 0.05:
+            return im
+        r, g, b = im.split()[:3]
         lut = []
         for v in range(256):
             if v >= lo:

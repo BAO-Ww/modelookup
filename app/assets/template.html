@@ -6211,7 +6211,8 @@ function openWhiteView(k){
   /* 开窗自动生成（2026-11-03 用户令「点进来直接生成」）：缺哪套补哪套，
      两种色调 job key 分开（kitwhite:<型号>:<tone>）可并行，互不抢锁 */
   ['blue', 'purple'].forEach(function(tone){
-    fetch(wvImg(tone, 1), {method: 'HEAD'}).then(function(r){
+    /* 2026-11-23：HEAD 在本服务一律 501，会导致每次开窗都误判缺图重跑——改 GET */
+    fetch(wvImg(tone, 1), {cache: 'no-store'}).then(function(r){
       if (!r.ok) wvStart(tone, wrap.querySelector('[data-wvregen="' + tone + '"]'));
     }).catch(function(){});
   });
@@ -6487,6 +6488,13 @@ function openBaoView(k){
       g.innerHTML = '';
       for (var n = 1; n <= 4; n++){
         (function(nn){
+          /* 2026-11-23 用户令「蓝底没有首图就直接停了后面的了，我上传图直接科科用了，
+             后面两个才跟这个生成」：科科列缺主图（img_1 没出来）→ 第一格换成
+             「上传主图」，传完自动出蓝底，蓝底好了再串东星斑/文案三。 */
+          if (tid === 'k' && nn === 1 && K_MISS){
+            g.appendChild(upMainTile());
+            return;
+          }
           g.appendChild(cell('k', kImg(nn), nn, KLAB[nn], '蓝底 · ' + KLAB[nn],
             function(){ zoom(kImg(nn), '蓝底 · ' + KLAB[nn]); },
             function(){ regenKOne(nn); }));
@@ -6494,6 +6502,57 @@ function openBaoView(k){
       }
     });
     refit();
+  }
+  /* 科科列「上传主图」格子（同一个文件框全局复用，showK 反复重画不堆积 input） */
+  function upMainTile(){
+    var d = document.createElement('div');
+    d.style.cssText = 'position:relative;width:100%;height:100%;background:#fbfcfe;border:1px dashed #5b8def;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px';
+    d.innerHTML = '<button id="bao_up_k" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;border-radius:9px;padding:7px 16px;font-size:12.5px;font-weight:600;cursor:pointer">上传主图</button>'
+      + '<div style="color:#8a929e;font-size:10.5px;text-align:center;line-height:1.5;padding:0 6px">传一张实拍图当主图<br>蓝底出图后自动串聚光/文案三</div>';
+    var btn = d.querySelector('#bao_up_k');
+    btn.onclick = function(ev){
+      ev.stopPropagation();
+      var inp = wrap._mainUpInp;
+      if (!inp){
+        inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = 'image/*'; inp.style.display = 'none';
+        wrap.appendChild(inp);
+        wrap._mainUpInp = inp;
+      }
+      inp.onchange = function(){
+        var f = inp.files && inp.files[0];
+        if (!f) return;
+        btn.disabled = true; btn.textContent = '上传中…';
+        var rd = new FileReader();
+        rd.onload = function(){
+          fetch('/api/kitmain', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({model:k, data:rd.result, kind:'main'})})
+            .then(function(r){ return r.json(); })
+            .then(function(j){
+              if (!j || !j.ok) throw new Error((j && j.msg) || '保存失败');
+              K_MISS = false;
+              msg('k', '主图已收到，开始出图…');
+              showK();
+              genK(true, null, function(){ chainAfterK(); });
+            })
+            .catch(function(e){
+              btn.disabled = false; btn.textContent = '上传主图';
+              msg('k', '✗ 上传失败：' + (e.message || e), true);
+            });
+        };
+        rd.readAsDataURL(f);
+      };
+      inp.click();
+    };
+    return d;
+  }
+  /* 科科好 → 东星斑 → 文案三（2026-11-23 用户令「生成顺序是文案科科好了再到东星斑
+     再到文案三；图也是科科生成好了主图尺寸都选好了，东星斑和文案三直接用」） */
+  var K_MISS = false;
+  function chainAfterK(){
+    genS(wrap.querySelector('[data-baogen="s"]'), function(){
+      loadXCopy(false);
+    });
   }
   /* 聚光单张重出（2026-11-17 双击）：/api/pubgen style=spot only=槽位号（文件名前缀数字），
      走 pubwork 串行槽 + pollPub 轮询，完成重画（src 带 ?t= 自动破缓存） */
@@ -6516,8 +6575,9 @@ function openBaoView(k){
   function showS(){
     var g = wrap.querySelector('#bao_grid_s'); if (!g) return;
     g.innerHTML = '';
+    /* 2026-11-23 用户令：上传入口放科科列（蓝底缺主图时），聚光列不再单设上传按键 */
     if (!SFILES.length){
-      g.innerHTML = '<div style="grid-column:1/-1;color:#b4b9c2;font-size:12px;padding:18px 0">还没生成——点栏头「重新生成」出一套</div>';
+      g.innerHTML = '<div style="grid-column:1/-1;color:#b4b9c2;font-size:12px;padding:18px 0">还没生成——点栏头「重新生成」出一套<br><span style="font-size:11px;color:#c0c4cc">（有主图后科科出图，聚光自动跟）</span></div>';
       return;
     }
     SFILES.forEach(function(f, i){
@@ -6597,7 +6657,7 @@ function openBaoView(k){
     if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
     failMsg('s', e);   /* 2026-11-14：失败记档，重开窗不再自动重跑；已取消灰显不红 */
   }
-  function genS(btn){
+  function genS(btn, done){
     if (sGen){ msg('s', '聚光已在生成中…'); return; }
     sGen = true;
     setCancelVis('s', true); clearFail('s');
@@ -6647,6 +6707,7 @@ function openBaoView(k){
                   setCancelVis('s', false); clearFail('s');
                   if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
                   msg('s', '✓ 生成完成 · AI 后台复检中');
+                  if (done) done(true);
                 } else startGen();
               });
             });
@@ -6664,9 +6725,10 @@ function openBaoView(k){
             } else if (String(jb.err || '').indexOf('已取消') >= 0){
               msg('s', '已取消');
             } else msg('s', '✗ ' + (jb.err || '聚光生成失败'), true);
+            if (done) done(jb && jb.ok);   /* 2026-11-23 串联：聚光收工（无论成败）放行文案三 */
           });
         })
-        .catch(function(e){ failS(btn, e); });
+        .catch(function(e){ failS(btn, e); if (done) done(false); });
     }
     grabPub();
   }
@@ -6960,33 +7022,41 @@ function openBaoView(k){
      页签点击只切显示。Pro 页本身独立存在，这里不挂它、也不改它 */
   sMounted = true;
   loadSCopy(false);
-  loadXCopy(false);   /* 文案三开窗自动出（2026-11-17 第三种文案） */
+  /* 2026-11-23 用户令「文案科科好了再到东星斑再到文案三」：文案三不再开窗就抢跑，
+     等蓝底出图 + 聚光收工后再出（缓存齐全时直接出，见 loadLib 末尾）。 */
   loadLib(function(){
     /* 开窗自动补缺（跟婷窗同规矩）：蓝底缺→补蓝底，聚光缺→补聚光。
        2026-11-04 用户令「跑一个就够了」：两套都缺时聚光等蓝底抓完再跑，
        别两条爬虫同时爬同一台机器（后端也会等蓝底素材复用，双保险）。
        2026-11-14 用户令「跑失败了再点进来又接着跑」：上次失败过的不再自动重跑——
-       提示「上次生成失败」，想跑点「重新生成」（点的时候自动清失败记录）。 */
+       提示「上次生成失败」，想跑点「重新生成」（点的时候自动清失败记录）。
+       2026-11-23：链路统一走 chainAfterK（科科→东星斑→文案三）。 */
     var sNeed = !SFILES.length;
     var kAuto = !failedBefore('k'), sAuto = !failedBefore('s');
-    function _sStart(){ genS(wrap.querySelector('[data-baogen="s"]')); }
+    function _sStart(){ chainAfterK(); }
     try {
-      fetch(kImg(1), {method: 'HEAD'}).then(function(r){
+      /* 2026-11-23 实锤：本服务没实现 do_HEAD，HEAD 一律 501 → 永远判「缺主图」，
+         图明明在却弹上传占位（C8U12G3 主图已传仍要上传）。改 GET 判存在。 */
+      fetch(kImg(1), {cache: 'no-store'}).then(function(r){
+        K_MISS = !r.ok;
         if (!r.ok){
+          showK();          /* 缺主图 → 科科第一格换「上传主图」 */
           if (!kAuto){
-            msg('k', '上次生成失败——点「重新生成」再试', true);
+            msg('k', '上次生成失败——点「重新生成」或「上传主图」再试', true);
             if (sNeed && sAuto) _sStart();   /* 蓝底不自动跑，聚光不受牵连 */
             return;
           }
           genK(false, wrap.querySelector('[data-baogen="k"]'), function(){
-            if (sNeed && sAuto) _sStart();
+            if (sNeed && sAuto) _sStart(); else loadXCopy(false);
           });
         } else if (sNeed){
-          if (!sAuto){ msg('s', '上次生成失败——点「重新生成」再试', true); return; }
+          if (!sAuto){ msg('s', '上次生成失败——点「重新生成」再试', true); loadXCopy(false); return; }
           _sStart();
+        } else {
+          loadXCopy(false);
         }
-      }).catch(function(){ if (sNeed && sAuto) _sStart(); });
-    } catch (e) { if (sNeed && sAuto) _sStart(); }
+      }).catch(function(){ if (sNeed && sAuto) _sStart(); else loadXCopy(false); });
+    } catch (e) { if (sNeed && sAuto) _sStart(); else loadXCopy(false); }
     if (!sNeed) msg('s', '缓存秒出');
   });
 }

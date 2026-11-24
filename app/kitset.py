@@ -353,8 +353,54 @@ def _crop_prod(img):
     return out
 
 
+def _enhance_white_machine(img):
+    """2026-11-24 用户选定「对真机图做局部增强」（AI 重绘路线已否——机器会变样，
+    货不对板）：不重画，只把过曝白机的高光压下来 + 边缘灰线拉开 + 锐化——
+    轮廓从白底里自己出来。分段曲线实测定参（LES60H-AC5 左端 32 万像素纯 255、
+    边缘灰线在 230-238）：≥248 压到 246（机身脱离纯白底）、200-248 拉向 170
+    （边缘线对比放大 3 倍）、<200 不动（深色端盖不受影响）；再 UnsharpMask(4,140)
+    把微弱明暗过渡变锐。保留原 alpha，形状零改动。
+    2026-11-24 用户令「找好的机图直接铺上去」：加过曝闸——机身不透明区里
+    纯白(≥253)占 bbox 面积 <50% 的算干净官方图，原样返回不加工。闸线实测
+    （2026-11-24 LES60H-AC5 全素材普查）：官网白底图（白机糊白底、必须增强）
+    纯白占 88-97%，欣盛官方渲染图（干净机图、不该动）0-37%——旧闸 25% 卡错位，
+    把欣盛 05（36.6%，机身自带软渐变高光带）也当脏图增强：高光被压平成均匀
+    246、周边机身拉灰，软渐变反光变成「一块死白」（用户截图红框实锤）。50% 居中。"""
+    im = img.convert("RGBA")
+    a = im.split()[3]
+    flat = Image.new("RGB", im.size, (255, 255, 255))
+    flat.paste(im.convert("RGB"), mask=a)
+    try:
+        _g = flat.convert("L")
+        _h = _g.getextrema() and _g.histogram()
+        _box = a.getbbox()
+        if _box:
+            _g = _g.crop(_box)
+            _hh = _g.histogram()
+            _tot = sum(_hh)
+            _blown = sum(_hh[253:])
+            if _tot and _blown / float(_tot) < 0.50:
+                return img
+    except Exception:
+        pass
+    lut = []
+    for v in range(256):
+        if v >= 248:
+            lut.append(246)
+        elif v >= 200:
+            lut.append(int(170 + (v - 200) / 48.0 * 76))
+        else:
+            lut.append(v)
+    r, g, b = flat.split()
+    out = Image.merge("RGB", (r.point(lut), g.point(lut), b.point(lut)))
+    out = out.filter(ImageFilter.UnsharpMask(4, 140, 2)).convert("RGBA")
+    out.putalpha(a)
+    return out
+
+
 def _paste_product(C, img, cx, bottom_y, target_h, max_w=1080):
-    img = pei_core.defringe_white(_crop_prod(img))   # 端面浅灰拉白，贴白底不显色圈
+    # defringe_white 自带透明渲染图判定（2026-11-24 下沉进 pei_core，蓝底/聚光通用）
+    img = pei_core.defringe_white(_crop_prod(img))
     w, h = img.size
     if h < 10:
         return
@@ -398,6 +444,16 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
     else:
         _pill_fill = (46, 107, 230, 242)
         _accent = BLUE
+    # 2026-11-24 用户令二改「不要底色的情况下显得机器明显」：渐变底撤掉，
+    # 白机也回归纯白底；机器的「明显」改由投影承担（_white_machine 时画柔焦
+    # 深投影，替代原来的浅椭圆），轮廓靠影子与机身明暗差撑起来
+    try:
+        # 透明 PNG 直接 convert("L") 透明区变黑、平均亮度被拉低（2026-11-24 实锤
+        # 白机检测永不触发）——先垫白再算，白机垫白后整图 ≈250+ 必触发
+        _lum = sum(_flat_white(prod).convert("L").resize((48, 48)).getdata()) / 2304.0
+    except Exception:
+        _lum = 0
+    _white_machine = _lum > 240
     C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
     # 左上角品牌 logo（2026-11-13 用户令「左上角海尔品牌就加海尔的logo」）：
@@ -417,6 +473,9 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
     # 大方块（洗碗机等高宽都大的深色机身）再整体缩到 680 高，别顶页眉别压字（CWY15 实锤）
     # 预算用裁完边的内容尺寸（2026-10-28）：原图透明边距会让预算高偏小、机器顶到页眉
     prod = _crop_prod(prod)
+    if _white_machine:
+        # 2026-11-24 用户选定：真机图局部增强（高光压平+边缘灰线+锐化），形状零改动
+        prod = _enhance_white_machine(prod)
     try:
         _pw, _ph = prod.size
         sc = min(th / float(_ph), 960.0 / _pw)
@@ -449,7 +508,17 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
         d.text((74, 142), cfg.get("model") or "", font=_font(F_BOLD, 26), fill=INK, anchor="lm")
     # 2026-11-03 旧令「胶囊必超机图」已作废（2026-11-04 用户令：方块贴字、可以小，
     # 机器要露出来）——不再按机图宽反推最小宽和字号。
-    d.ellipse([540 - 280, bottom - 28, 540 + 280, bottom + 2], fill=(238, 240, 243))
+    if _white_machine:
+        # 2026-11-24 用户令「首图一定要看得出机型长什么样」→ 白机画真投影：
+        # 蓝灰柔焦椭圆，机器落在影子上立体、轮廓跳出来；纯白底上影子是
+        # 唯一的对比来源，比渐变底时代再加重一档（alpha 130→165）
+        _sh = Image.new("RGBA", (720, 110), (0, 0, 0, 0))
+        _sd = ImageDraw.Draw(_sh)
+        _sd.ellipse([50, 30, 670, 86], fill=(74, 94, 130, 165))
+        _sh = _sh.filter(ImageFilter.GaussianBlur(14))
+        C.paste(_sh, (int(540 - 360), int(bottom - 52)), _sh)
+    else:
+        d.ellipse([540 - 280, bottom - 28, 540 + 280, bottom + 2], fill=(238, 240, 243))
     _paste_product(C, prod, 540, bottom, h_act, max_w=960)
     ov = Image.new("RGBA", C.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(ov)
@@ -2666,6 +2735,27 @@ def _gather_info(model, log):
             info.setdefault("props", []).extend(_add)
             if log:
                 log("说明书补缺参数 %d 条（合计 %d 条）" % (len(_add), len(info.get("props") or [])))
+    # 品类以说明书为权威（2026-11-23 用户令「品类我说过文案所有都按说明书来」）：
+    # 说明书规格页的「产品类型/类别」认出品类词就覆盖旧值——C8U12G3（卡萨帝双子
+    # 滚筒洗衣机）被写成「储水式电热水器」实锤，就是没人拿说明书校正。
+    try:
+        import pei_core as _pcc2
+        for _k2, _v2 in (info.get("props") or []):
+            _ks2 = str(_k2)
+            if not any(w in _ks2 for w in ("产品类型", "产品类别", "类别", "品类", "产品品类")):
+                continue
+            for _w in _pcc2.CAT_WORDS:
+                if _w and _w in str(_v2):
+                    if str(info.get("cat") or "").strip() != _w:
+                        if log:
+                            log("品类按说明书校正：%s → %s（%s=%s）"
+                                % (info.get("cat") or "空", _w, _ks2, _v2))
+                        info["cat"] = _w
+                    break
+            if str(info.get("cat") or "").strip() not in ("", "电器", "家电"):
+                break
+    except Exception:
+        pass
     # 图片兜底两层（2026-11-23 用户令「图片加一个中关村的，参数只抓说明书网站的」）：
     # 参数只走 官网→说明书（欣盛读参/中关村补参全不抓——欣盛详情长图视觉读参一张 30 秒
     # 起步，是文案慢的大头，用户明令砍）；欣盛/中关村只补图。
@@ -2701,7 +2791,15 @@ def _gather_info(model, log):
         _bn = re.sub(r"说明书\s*$", "", str(book.get("root") or "")).strip()
         if _bn and norm_model(_bn) == (norm_model(model) or ""):
             _bookview = {"pname": _bn, "brand": str(book.get("brand") or "")}
-        if _bookview and not (info.get("brand") or "") and book.get("brand"):
+        # 2026-11-23 C8U12G3 实锤：说明书 brand 取 URL 品牌段=「海尔」先塞进 info，
+        # 后面「从标题认卡萨帝」的兜底就没机会跑了 → 聚光 logo 画成 Haier 海尔。
+        # 品牌词（卡萨帝/统帅/Leader）在标题/品名里认出来就最优先，说明书品牌段只兜底。
+        _btw = str(info.get("title") or "") + " " + str(book.get("root") or "")
+        _bwin = "卡萨帝" if "卡萨帝" in _btw else (
+            "统帅" if ("统帅" in _btw or "Leader" in _btw) else "")
+        if _bwin:
+            info["brand"] = _bwin
+        elif _bookview and not (info.get("brand") or "") and book.get("brand"):
             info["brand"] = book["brand"]
         if book.get("url") and not (info.get("url") or ""):
             info["url"] = book["url"]
@@ -2915,6 +3013,70 @@ def _vision_key():
         return (_cw._load_glm_key() or "").strip() or None
     except Exception:
         return None
+
+
+def _ocr_dims3(fp, log=None):
+    """本地 OCR 读尺寸图上的 宽/高/深（2026-11-24）：
+    只认**带标签**的数字（宽 370 / 高 960 / 深 370），读不出返回 None。
+    为什么不用 AI：图注条是 a/b/c/d 字母，没有宽高深语义，AI 也只能瞎猜方位
+    （CWC16 实锤宽 599 读成 616），还一等等三分钟（LES60H-AC5 45s→180s+ 实锤）。
+    宁可 pill 不印数字——官方图上本来就印着 a=960mm 那行图注。"""
+    t = _ocr_img_text(fp)
+    if not t:
+        return None
+    flat = re.sub(r"\s+", "", t)
+    v = {}
+    for k, pat in (("w", r"[宽W]\s*[：:=]?\s*(\d{2,4})"),
+                   ("h", r"[高H]\s*[：:=]?\s*(\d{2,4})"),
+                   ("d", r"[深D]\s*[：:=]?\s*(\d{2,4})")):
+        m = re.search(pat, flat)
+        if m:
+            v[k] = int(m.group(1))
+    if len(v) >= 2 and any(80 <= x <= 3000 for x in v.values()):
+        if log:
+            log("尺寸数字本地 OCR（带宽高深标签）：%s" % v)
+        return (v.get("w") or 0, v.get("h") or 0, v.get("d") or 0)
+    return None
+
+
+def _dims_from_book_table(tables, model):
+    """说明书数值表（字母 a/b/c/d 列）→ (宽,高,深)。2026-11-24 用户令「都读出尺寸了
+    为什么不加长宽高」：图注是官方字母（跟线稿 a1/b1/d1 一一对应），没有宽/高/深
+    字样，_ocr_dims3 读不出 → img_3 尺寸行/img_4 pill 全空「以实物为准」。
+    按工程图惯例映射：表首列=主视图横向（宽）、第二列=主视图纵向（高）、
+    末列 ≥300 的=端面深（中间 <300 的小值是安装间距 c=100，不进宽高深）。
+    LES60H-AC5 实锤 a=960 b=370 c=100 d=380 → 宽960 高370 深380。"""
+    for _tb in tables or ():
+        _vv = _tb.get("vals") or {}
+        row = None
+        _nm_p = norm_model(model) or model
+        if _nm_p in _vv:
+            row = _vv[_nm_p]
+        else:
+            _skl = re.sub(r"[0-9.\-]", "", _nm_p or "")
+            for _mk, _rv in _vv.items():
+                if _skl and _skl == re.sub(r"[0-9.\-]", "", norm_model(_mk) or _mk or ""):
+                    row = _rv
+                    break
+        if not row or len(row) < 3:
+            continue
+        labels = [str(l) for l in (_tb.get("labels") or [])]
+        _alpha = sum(1 for l in labels if re.fullmatch(r"[a-zA-Z]{1,3}\d?", l))
+        if labels and _alpha >= max(1, len(labels) - 1):
+            _tail = [int(v) for v in row[2:] if 300 <= int(v) <= 3000]
+            _d = _tail[-1] if _tail else int(row[-1])
+            return (int(row[0]), int(row[1]), _d)
+        v = {}
+        for l, x in zip(labels, row):
+            if "宽" in l:
+                v["w"] = int(x)
+            elif "高" in l:
+                v["h"] = int(x)
+            elif "深" in l or "厚" in l:
+                v["d"] = int(x)
+        if len(v) >= 2:
+            return (v.get("w") or 0, v.get("h") or 0, v.get("d") or 0)
+    return None
 
 
 def _ai_read_size_nums(path, log=None):
@@ -3231,21 +3393,15 @@ def _try_save_sizeimg(u, sizeimg, log, prod_path=None, ai_budget=None):
     im = _fetch_img(u)
     if im is None:
         return False
-    # 2026-10-31 用户令「让 AI 去选图」：像素特征通过也要 AI 点头才算；
-    # 像素没通过时才用 AI 捞回手绘风线稿（预算 1 张，只对 AI 真回答过的扣额度）
+    # 2026-11-24 用户令「就算是问 AI 也是拼一张图问，别一张一张问」：像素像线框图时
+    # 先本地 OCR 读毫米数字（0 次 AI，_accept_sizeimg 内含），读到直接收；读不出才
+    # 问一次 AI 兜底（手绘风线稿数字太小的漏网情况）。
     ok = _looks_like_sizeimg(im)
     if ok:
-        v = _ai_is_sizeimg(im, log)
-        # 2026-11-04 HP-35 实锤：官网详情页的「保修/安装收费」服务表像素上像线框
-        # （满页表格线），AI 又刚好限流答不上（v=None）→ 被当尺寸图收进，
-        # 聚光/蓝底尺寸图全错。收紧：AI 不是明确点头（True）一律不收——
-        # 拒了顶多走手绘线稿（真实 dims），收错是把保修表贴上产品图。
-        if v is not True:
-            if log and v is False:
-                log("详情页候选 %s 像素像线框图但 AI 否掉，跳过" % u.split("/")[-1])
-            if log and v is None:
-                log("详情页候选 %s AI 没给准话（限流/无应答），宁可不用" % u.split("/")[-1])
-            return False
+        # 像素已经是线框图 → 直接走「落盘 + 读毫米数字」（内部 OCR 优先、AI 兜底一次），
+        # 不再额外跑一遍 _ai_is_sizeimg「是不是尺寸图」——那是多一次调用。
+        # 2026-11-04 HP-35 的教训（保修表冒充尺寸图）由「读不出数字就删盘」兜住。
+        return _accept_sizeimg(im, sizeimg, prod_path, log, u)
     elif ai_budget is not None and ai_budget[0] > 0:
         v = _ai_is_sizeimg(im, log)
         if v is not None:
@@ -3552,11 +3708,80 @@ def _ai_montage_size_screen(paths_, log=None):
         return None
 
 
-def _nums_gate(sizeimg, log, tag):
+_OCRA = {"eng": None, "tried": False, "txt": {}}
+
+
+def _ocr_img_text(fp):
+    """本地 OCR 单图取文本（RapidOCR，纯本地、不烧 AI 配额）。没装/失败返回 ""。
+    结果按（路径 + mtime）缓存，同一张图重跑不重复推理。"""
+    try:
+        _k = (fp, os.path.getmtime(fp))
+    except Exception:
+        return ""
+    if _k in _OCRA["txt"]:
+        return _OCRA["txt"][_k]
+    t = ""
+    try:
+        if not _OCRA["tried"]:
+            _OCRA["tried"] = True
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+                _OCRA["eng"] = RapidOCR()
+            except Exception:
+                _OCRA["eng"] = None
+        if _OCRA["eng"] is not None:
+            _res, _ = _OCRA["eng"](fp)
+            t = " ".join(str(x[1]) for x in (_res or []))
+    except Exception:
+        t = ""
+    _OCRA["txt"][_k] = t
+    return t
+
+
+def _ocr_size_nums(fp, log=None):
+    """本地 OCR 读尺寸图上的毫米数（2026-11-24 用户令「我不是写了个代码去识别尺寸图嘛」）：
+    OCR 认图代码之前只接在扫描版 PDF 挑页那条路上，H5 电子说明书的每张线稿还在逐个问
+    视觉 AI，十几张排队 = 半小时（LES60H-AC5 实锤）——本地 3.6s/张就能读出来。
+
+    判定：带「产品尺寸/外形尺寸/整机尺寸/安装尺寸」字样 **或** 出现 ≥2 个两位数以上的
+    mm/毫米数字（宽高深/间距都算）。返回读到的数字列表，读不出返回 []。"""
+    t = _ocr_img_text(fp)
+    if not t:
+        return []
+    flat = re.sub(r"\s+", "", t)
+    mm = [int(x) for x in re.findall(r"(\d{2,4})(?:mm|毫米|MM|Mm)", flat)]
+    if not mm:
+        # 有些线稿 mm 在数字前面或单独一行：只认有尺寸语义标签的 3~4 位数
+        if any(k in flat for k in ("产品尺寸", "外形尺寸", "整机尺寸", "安装尺寸", "尺寸示意")):
+            mm = [int(x) for x in re.findall(r"(?<!\d)(\d{3,4})(?!\d)", flat)
+                  if 50 <= int(x) <= 2500]
+    if len(mm) >= 2:
+        return mm
+    return []
+
+
+def _nums_gate(sizeimg, log, tag, allow_ai=True):
     """2026-11-11 用户令「这个都能当尺寸图的」：AI 点头还不够——官方尺寸图必须
-    **读得出毫米数字**（_ai_read_size_nums）。JSQ31-16FET7FRTPGU1 实锤：产品场景照
-    （浅蓝水纹底）把 GLM-4V 骗到答「是」，贴进 img4 一张没标注的照片。
+    **读得出毫米数字**。JSQ31-16FET7FRTPGU1 实锤：产品场景照（浅蓝水纹底）把 GLM-4V
+    骗到答「是」，贴进 img4 一张没标注的照片。
+    2026-11-24 改：**本地 OCR 先读**，读到就通过（0 次 AI 调用，3.6s）；OCR 读不出
+    才问 AI（allow_ai=False 时直接判否，说明书线稿链走这条——官方线稿+数值表本来就是
+    权威源，问十几遍 AI 只会把任务拖到半小时）。
     读不出数字 = 不是尺寸图，删掉刚落的盘、返回 False；读出 = True。"""
+    _mm = _ocr_size_nums(sizeimg)
+    if _mm:
+        if log:
+            log("%s 复核通过（本地 OCR 读到尺寸数字 %s）"
+                % (tag, "/".join(str(x) for x in _mm[:4])))
+        return True
+    if not allow_ai:
+        try:
+            os.remove(sizeimg)
+        except Exception:
+            pass
+        if log:
+            log("%s 本地 OCR 读不出尺寸数字，弃用（不追问 AI）" % tag)
+        return False
     nums = _ai_read_size_nums(sizeimg, log)
     if nums:
         if log:
@@ -3935,26 +4160,29 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                     if log:
                         log("候选%d 与已选机图同图，是产品照不是尺寸图，跳过" % n)
                     continue
-                # 2026-10-31 用户令「让 AI 去选图，找出尺寸图然后使用」：
-                # 像素特征只当初筛。2026-11-04 HP-37 二次实锤：AI 限流（None）时服务表
-                # 钻「AI 不可用按像素采用」的空子又进来——收紧成跟 _try_save_sizeimg 同一口径：
-                # AI 不是明确点头（True）一律不收，拒了顶多走手绘线稿（真实 dims）。
-                _verdict = _ai_is_sizeimg(im, log)
-                if _verdict is not True:
-                    _ai_rej.add(fp if kind == "url" else u)
+                # 2026-11-23 用户实锤「跑半个小时什么都下不下来」：说明书尺寸节点线稿
+                # （_book_size_urls 强信号清单）以前每张都丢给 AI 三通道问一遍，Qwen
+                # 限流→GLM→商汤一路退，十几张排队就是半小时。官方线稿+数值表本身就是
+                # 尺寸图权威源（下面 size_urls 合成块直接采用）——这里不问 AI，跳过。
+                if kind == "url" and u in set(size_urls or ()):
                     if log:
-                        log("候选%d 像素像线框图，但 AI %s，弃用"
-                            % (n, "判定不是尺寸图" if _verdict is False
-                                  else "没给准话（限流/无应答），宁可不用"))
-                else:
-                    _flat_white(im).save(sizeimg, quality=92)
-                    # 2026-11-11：AI 点头还不够，必须读得出毫米数字（场景照会骗过 GLM）
-                    if _nums_gate(sizeimg, log, "候选%d" % n):
-                        have_size = True
-                        if log:
-                            log("候选%d 判定为官网尺寸图（AI 确认），img4 直接用它" % n)
-                        continue
-                    _ai_rej.add(fp if kind == "url" else u)
+                        log("候选%d 是说明书尺寸节点线稿，走官方合成路径（不问 AI）" % n)
+                    continue
+                # 2026-11-24 用户令「就算是问 AI 也是把全部图拼在一张上面去问，别一张一张问」：
+                # 这里原来逐张 _ai_is_sizeimg（Qwen 限流→GLM→商汤三通道轮，一张几十秒），
+                # 24 张候选每张都问 = 半小时（LES60H-AC5 4.2s 卡死实锤，栈就停在这行）。
+                # 现在：本地 OCR 读毫米数字，读到直接用（0 次 AI）；读不到就退候选池，
+                # 由循环后的**拼图 1 次调用**批量判，不再单张问。
+                _flat_white(im).save(sizeimg, quality=92)
+                if _ocr_size_nums(sizeimg):
+                    have_size = True
+                    if log:
+                        log("候选%d 本地 OCR 读到毫米数字，判定为尺寸图，img4 直接用它" % n)
+                    continue
+                try:
+                    os.remove(sizeimg)
+                except Exception:
+                    pass
             # 启发式没认出：先记进 AI 复核候选（本地路径，循环结束后商汤/GLM 看图定夺）
             # 2026-11-12：字节级去重（JSQ31-16FET7FRTPGU1 实锤：官网同图存两份，
             # 22 候选 12 格被复制图占掉一半）。只按 md5 判重——感知去重（墨迹 IoU/
@@ -4045,7 +4273,10 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
         _rescue_prod(best[1], log).save(picked)
         if best[2]:
             picked_url = best[2]
-    if not have_size and _ai_cand:
+    if not have_size and _ai_cand and not size_urls:
+        # 2026-11-23 用户令「跑半个小时」根治：有官方尺寸线稿（_book_size_urls）时
+        # 直接走下面合成/采用路径，跳过这轮最多 12 张 AI 单张终审——官方线稿是
+        # 权威源，AI 只能帮倒忙还烧半小时（LES60H-AC5 实锤）。
         # 启发式全军覆没 → AI 视觉复核（2026-10-26 用户令：加了AI识别图就让它找图）。
         # 先按彩色占比升序：官方线稿近零彩色排前，产品照排后省预算
         def _color_ratio(p):
@@ -4069,24 +4300,40 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             _ordered = []           # 粗筛全否：省掉全部单张调用
         elif _shortlist:
             _ordered = _shortlist   # 粗筛通过的张才进单张终审
+        # 2026-11-24 用户令「就算是问 AI 也是把全部图拼在一张上面去问，别一张一张问」：
+        # 拼图粗筛通过的格子先本地 OCR 读毫米数（3.6s/张、0 次 AI 调用），命中即用；
+        # OCR 全读不出才取第一张问**一次** AI 读数字（不再逐张 _ai_is_sizeimg 终审，
+        # 那正是十几张排队烧半小时的老根）。
+        _cand_ok = []
         for pth in _ordered:
             try:
                 im2 = Image.open(pth)
             except Exception:
                 continue
-            r = _ai_is_sizeimg(im2, log)
-            if r:
+            _flat_white(im2).save(sizeimg, quality=92)
+            if _ocr_size_nums(sizeimg):
+                have_size = True
+                if log:
+                    log("拼图粗筛 + 本地 OCR 确认官方尺寸图：%s" % os.path.basename(pth))
+                break
+            _cand_ok.append(pth)
+        if not have_size and _cand_ok:
+            try:
+                im2 = Image.open(_cand_ok[0])
+            except Exception:
+                im2 = None
+            if im2 is not None and _ai_is_sizeimg(im2, log):
                 _flat_white(im2).save(sizeimg, quality=92)
-                # 2026-11-11：同主循环，点头后还要读得出毫米数字才算数
-                if _nums_gate(sizeimg, log, "AI 视觉复核 %s" % os.path.basename(pth)):
+                if _nums_gate(sizeimg, log, "AI 复核 %s" % os.path.basename(_cand_ok[0])):
                     have_size = True
                     if log:
-                        log("AI 视觉认出官方尺寸图：%s" % os.path.basename(pth))
-                    break
-            if r is None:
-                if log:
-                    log("视觉 AI 不可用，尺寸图复核跳过")
-                break
+                        log("AI 复核确认官方尺寸图：%s" % os.path.basename(_cand_ok[0]))
+        if not have_size and os.path.isfile(sizeimg):
+            # 候选试完整张没命中，别把最后那张错图留在盘上（后面「有没有尺寸图」会误判）
+            try:
+                os.remove(sizeimg)
+            except Exception:
+                pass
     if not have_size and size_urls and mdir and not _neg_get(mdir, "sizeimg_book", ttl_days=2):
         # 说明书尺寸线稿兜底（2026-11-23 用户令「尺寸图也在说明书找」）：节点名是强信号
         # （「产品尺寸及安装要求/安装方法」页线稿带毫米间距标注），AI 终审全否也直接试
@@ -4119,21 +4366,34 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 return None
             return None
 
+        # 2026-11-24 用户令「我不是写了个代码去识别尺寸图嘛」：先本地 OCR 原图（不问 AI），
+        # 读到 ≥2 个毫米数就直接采用。以前这里对每张合成后的 sizeimg 调 _nums_gate→AI 视觉
+        # 读数字，8 张线稿排队 = 半小时（LES60H-AC5 实锤）。现在一张 3.6s，且顺带把 OCR
+        # 文本留给下面表格合成挑「真线稿」（带 a/b/c/d 字母标注的那张）。
+        _ocr_seen = []          # [(原图路径, 像不像尺寸线稿)]
         for _su in size_urls[:8]:   # 扫描版 PDF 页 32 张起（C8U12G3），4 席不够摸到尺寸页
             _sfp = _size_fp(_su)
             if not _sfp:
                 continue
+            _txt = _ocr_img_text(_sfp)
+            _flat = re.sub(r"\s+", "", _txt or "")
+            # 「像尺寸线稿」：有 a1/b1/c1/d1 这类字母标注，或有尺寸字样；但排除
+            # 有害物质表/保修收费表这类满页文字的表格（G1020378 实锤被误认成线稿）
+            _looks = (not any(w in _flat for w in ("有害物质", "多溴", "邻苯", "保修", "收费", "三包"))) \
+                and (len(re.findall(r"(?<![a-z0-9])[abcdABCD][0-9](?![0-9a-z])", _flat)) >= 2
+                     or bool(re.search(r"(产品尺寸|外形尺寸|整机尺寸|安装尺寸|尺寸示意)", _flat)))
+            _ocr_seen.append((_sfp, _looks))
+            if not _ocr_size_nums(_sfp):
+                continue
             try:
-                im2 = Image.open(_sfp)
-                _flat_white(im2).save(sizeimg, quality=92)
-                if _nums_gate(sizeimg, log, "说明书线稿 %s" % os.path.basename(_sfp)):
-                    have_size = True
-                    if log:
-                        log("说明书尺寸线稿兜底采用：%s（节点名强信号 + 毫米数字核对通过）"
-                            % os.path.basename(_sfp))
-                    break
+                _flat_white(Image.open(_sfp)).save(sizeimg, quality=92)
             except Exception:
                 continue
+            have_size = True
+            if log:
+                log("说明书尺寸线稿采用：%s（本地 OCR 读到毫米数字，未问 AI）"
+                    % os.path.basename(_sfp))
+            break
         if not have_size and size_table:
             # 表格合成：数值表里找本型号行（先全码、再同系列骨架放行——LES60H 双容量实锤）
             _nm_p = norm_model(model) or model
@@ -4154,10 +4414,11 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 if _row:
                     break
             if _row and _labels:
-                for _su in size_urls[:8]:   # 扫描版 PDF 页 32 张起（C8U12G3），4 席不够摸到尺寸页
-                    _sfp = _size_fp(_su)
-                    if not _sfp:
-                        continue
+                # 2026-11-24：优先「OCR 判定像尺寸线稿」的那张（带产品尺寸/安装尺寸字样或
+                # ≥2 个 a/b/c/d 字母标注），避免拿安装间距图冒充外观尺寸图；最多试 3 张
+                _line_cand = [p for p, _lk in _ocr_seen if _lk] \
+                    or [p for p, _lk in _ocr_seen]
+                for _sfp in _line_cand[:3]:
                     try:
                         im2 = _flat_white(Image.open(_sfp)).convert("RGB")
                         # 图注条：白底黑字「a=825mm b=370mm …」，附在线稿下方
@@ -4172,7 +4433,7 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                         _dr.text(((im2.width - _tw) // 2, im2.height + _fnt.size // 2),
                                  _lb, font=_fnt, fill=(20, 20, 20))
                         _tmp.save(sizeimg, quality=92)
-                        if _nums_gate(sizeimg, log, "说明书线稿+表格图注"):
+                        if _nums_gate(sizeimg, log, "说明书线稿+表格图注", allow_ai=False):
                             have_size = True
                             if log:
                                 log("说明书尺寸线稿+数值表图注合成采用（%s）" % _lb)
@@ -4406,9 +4667,10 @@ def _kit_titles(brand, model, pd, info, sp):
                 caps.append((True, int(n), "套"))
         if "洗涤容量" in ks and "kg" in vs.lower():
             # 洗衣机公斤容量也是大容量卖点（XQS100「10公斤大容量」漏收实锤）
-            n = re.sub(r"[^0-9.]", "", vs)
-            if n:
-                caps.append((True, int(float(n)), "公斤"))
+            # 2026-11-23 双筒口径：上筒4kg+下筒8kg 要相加=12，剥数字会拼成 48（C8U12G3 实锤）
+            _n = _kg_cap(vs)
+            if _n:
+                caps.append((True, int(_n), "公斤"))
         if "干燥方式" in ks and vs and vs not in ("无", "否", "不支持"):
             _add(str(vs)[:7])  # 智能开门速干
         if "消毒方式" in ks and vs and vs not in ("无", "否", "不支持"):
@@ -4536,6 +4798,10 @@ def _kit_titles(brand, model, pd, info, sp):
     return out
 
 
+# 双筒容量解析（上筒4kg+下筒8kg → 12），实现在 pei_core.kg_cap（C8U12G3 实锤）
+_kg_cap = pei_core.kg_cap
+
+
 def _hard_points(info, pd, sp):
     """卖点一话一行（2026-10-23 用户拍板样板口径）：每行具体硬货
     （双动力双电机反向旋洗/床单被罩一次洗完/电费不到一度），
@@ -4566,7 +4832,9 @@ def _hard_points(info, pd, sp):
     for k, v in pd.items():
         ks, vs = str(k), str(v)
         if cap_kg is None and "洗涤容量" in ks and "kg" in vs.lower():
-            cap_kg = num(vs)
+            # 2026-11-23 双筒口径：上筒4kg+下筒8kg 相加=12（C8U12G3「4公斤」实锤）
+            _kc = _kg_cap(vs)
+            cap_kg = str(_kc) if _kc else num(vs)
         if cap_set is None and ("洗涤容量" in ks or "套数" in ks or "装载容量" in ks) and ("套" in vs or "件" in vs):
             cap_set = num(vs)
         if cap_l is None and ("总容积" in ks or ("容积" in ks and "L" in vs.upper())):
@@ -4842,11 +5110,16 @@ def _short_feats(pd, info):
         # 只出一次「N公斤大容量」（洗涤容量优先，其次最大值），绝不当 L（XQG110 实锤）
         if ("容量" in ks and ("kg" in ks.lower() or "kg" in vs.lower())) \
                 or re.search(r"(洗涤|烘干|脱水|洗衣)容量", ks):
-            n = re.sub(r"[^0-9.]", "", vs)
-            if n:
+            # 2026-11-23 双筒口径：上筒4kg+下筒8kg 相加=12，剥数字会拼成 48（C8U12G3 实锤）
+            # 值不带 kg 单位（key=洗涤容量(kg)，值=11）时退回首数
+            _kn = _kg_cap(vs)
+            if _kn is None and "kg" not in vs.lower():
+                _m2 = re.search(r"\d+(?:\.\d+)?", vs)
+                _kn = float(_m2.group(0)) if _m2 else None
+            if _kn:
                 _kg["wash" if "洗涤" in ks or "洗衣" in ks else "max"] = \
                     max(_kg.get("wash" if "洗涤" in ks or "洗衣" in ks else "max", 0),
-                        int(float(n)))
+                        int(_kn))
             continue   # kg 容量不再走下面的容积/L 判定（洗烘一体/烘干方式已在上面 add 过）
         # 洗碗机/容量类（CWY15 实锤：底部只剩「大容量」一个词）；容量单位 件/套
         if ("套" in vs or "件" in vs) and ("容量" in ks or "套数" in ks or "容积" in ks):
@@ -5352,7 +5625,7 @@ def sync_blue4_size(model, info, log=None):
         info = info if (info and (info.get("props") or [])) else _load_pub_info(model)
         if not (info and (info.get("props") or [])):
             return
-        ai_dims = _ai_read_size_nums(si, log)
+        ai_dims = _ocr_dims3(si, log)   # 2026-11-24：本地 OCR，别再为两个数字问一次视觉 AI
         cfg = _build_cfg(info, mdir=kd, ai_dims=ai_dims, log=log)[0]   # 2026-11-11 修：_build_cfg 返回 5 元组，取 cfg（原来整包传给 _render_img4 必炸、被 except 吞成静默不重出）
         _render_img4(cfg, b4, prod)
         log("官方尺寸图后到，蓝底参数图已自动重出（img_4 换官方图版）")
@@ -5640,8 +5913,17 @@ def generate(model, force=0, log=None, chain="book"):
             except Exception:
                 pass
     log("组装套图数据…")
-    _ai_dims = _ai_read_size_nums(os.path.join(mdir, "sizeimg.jpg"), log) if (
+    # 2026-11-24 用户令「别一张一张问 AI」：这里原来为给 img4 印「宽×高×深」两个数字，
+    # 每次出图都问一次视觉 AI（Qwen 限流时 45s→180s+ 卡死实锤）。改成纯本地 OCR：
+    # 只认带「宽/高/深」标签的数字；读不出就不印 pill（官方尺寸图上本来就有图注）。
+    _ai_dims = _ocr_dims3(os.path.join(mdir, "sizeimg.jpg"), log) if (
         mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg"))) else None
+    if not _ai_dims:
+        # 图注是官方字母（a/b/c/d）没有宽高深字样 → 按数值表映射（工程图惯例：
+        # 首列主视图横向=宽、第二列纵向=高、末列 ≥300=端面深；LES60H-AC5 实锤）
+        _ai_dims = _dims_from_book_table((info or {}).get("_book_dim_table") or (), model)
+        if _ai_dims and log:
+            log("尺寸数字取说明书数值表（宽×高×深）：%s" % "×".join(str(x) for x in _ai_dims))
     cfg, titles, points, aftersale, aftersales = _build_cfg(info, mdir=mdir, ai_dims=_ai_dims, log=log)
     log("渲染四张 1080×1080…")
 

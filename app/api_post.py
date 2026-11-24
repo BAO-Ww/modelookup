@@ -371,22 +371,44 @@ class ApiPostMixin:
                 return
             try:
                 import kitset as _ks
-                dd = os.path.join(_ks.model_dir(model), "官网")
-                os.makedirs(dd, exist_ok=True)
-                _stem = "尺寸图" if kind == "size" else "主图"
-                # 清掉旧变体（主图.jpg/主图_2.png 之类），只留刚传的这张，避免 override 挑错
-                for _f in os.listdir(dd):
-                    _st, _ex = os.path.splitext(_f)
-                    if _st == _stem or _st.startswith(_stem + "_"):
-                        try:
-                            os.remove(os.path.join(dd, _f))
-                        except Exception:
-                            pass
-                fp = os.path.join(dd, _stem + ".png")
-                with open(fp, "wb") as fh:
-                    fh.write(base64.b64decode(m.group(1)))
-                state.LOG.append("手动塞图：%s ← 官网/%s.png（%d KB）"
-                                 % (model, _stem, len(m.group(1)) // 1370))
+                if kind == "spot1":
+                    # 2026-11-23 用户令「没有首图的给我一个按键上传首图」：聚光首图
+                    # 直落 kitset/<型号>/聚光/1_首图.jpg + .manual_1 标记——整套重出
+                    # 时 gen_style 看到标记就跳过首图槽，不覆盖用户传的图。
+                    dd = _ks.spot_dir(model)
+                    os.makedirs(dd, exist_ok=True)
+                    _stem = "1_首图"
+                    for _f in os.listdir(dd):
+                        _st, _ex = os.path.splitext(_f)
+                        if _st == "1_首图" and _ex.lower() in (".jpg", ".jpeg", ".png"):
+                            try:
+                                os.remove(os.path.join(dd, _f))
+                            except Exception:
+                                pass
+                    fp = os.path.join(dd, "1_首图.jpg")
+                    with open(fp, "wb") as fh:
+                        fh.write(base64.b64decode(m.group(1)))
+                    try:
+                        open(os.path.join(dd, ".manual_1"), "w").write("1")
+                    except Exception:
+                        pass
+                else:
+                    dd = os.path.join(_ks.model_dir(model), "官网")
+                    os.makedirs(dd, exist_ok=True)
+                    _stem = "尺寸图" if kind == "size" else "主图"
+                    # 清掉旧变体（主图.jpg/主图_2.png 之类），只留刚传的这张，避免 override 挑错
+                    for _f in os.listdir(dd):
+                        _st, _ex = os.path.splitext(_f)
+                        if _st == _stem or _st.startswith(_stem + "_"):
+                            try:
+                                os.remove(os.path.join(dd, _f))
+                            except Exception:
+                                pass
+                    fp = os.path.join(dd, _stem + ".png")
+                    with open(fp, "wb") as fh:
+                        fh.write(base64.b64decode(m.group(1)))
+                state.LOG.append("手动塞图：%s ← %s（%d KB）"
+                                 % (model, os.path.basename(fp), len(m.group(1)) // 1370))
                 self._send(200, json.dumps({"ok": True, "saved": fp}, ensure_ascii=False))
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))

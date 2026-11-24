@@ -11,6 +11,8 @@
 """
 import os
 
+from PyInstaller.utils.hooks import collect_data_files
+
 HERE = os.path.abspath(os.path.dirname(SPEC))          # noqa: F821
 A = os.path.join(HERE, "assets")
 
@@ -41,6 +43,11 @@ datas = [
     (os.path.join(A, "logos", "leader_white.png"), "assets/logos"),
 ]
 
+# 扫描版说明书 OCR 挑尺寸页（2026-11-23 用户拍板「打进 exe」）：
+# rapidocr_onnxruntime 自带 ch_PP-OCRv3 检测/识别 onnx 模型 + config.yaml，
+# 必须整包当数据带进去，否则运行时找不到模型文件。
+datas += collect_data_files("rapidocr_onnxruntime")
+
 a = Analysis(
     ["main.py"],
     pathex=[HERE],
@@ -58,12 +65,22 @@ a = Analysis(
         "PIL.ImageFilter", "PIL.ImageStat", "PIL.ImageChops", "PIL.ImageEnhance",
         # goofish 内嵌自动化（xy_cdp，2026-10-17）：CDP 自动点「快速进入」+ 菜单路由探测
         "websocket",
+        # 扫描版说明书 OCR（2026-11-23）：RapidOCR + onnxruntime 推理后端
+        # ⚠ pyclipper/shapely/cv2 是 rapidocr 检测后处理要用的，PyInstaller 扫不到动态导入，
+        #   必须点名，否则打包后 OCR 一调就 ImportError（2026-11-23 本地打包实锤）
+        "rapidocr_onnxruntime", "rapidocr_onnxruntime.rapid_ocr_api",
+        "rapidocr_onnxruntime.ch_ppocr_v3_det.utils",
+        "rapidocr_onnxruntime.ch_ppocr_v3_rec.utils",
+        "onnxruntime", "onnxruntime.capi._pybind_state",
+        "pyclipper", "shapely", "shapely.geometry", "cv2", "yaml",
+        "numpy",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     # 图像数据是预先烤好的 dataURL；PIL 只给文案生成器拼促销首图用（2026-10-13 起要带）
-    excludes=["numpy", "scipy", "pandas", "matplotlib",
+    # ⚠ numpy 不能排：onnxruntime（OCR 挑尺寸页）依赖它，排掉 import 直接失败
+    excludes=["scipy", "pandas", "matplotlib",
               "PyQt5", "PyQt6", "PySide2", "PySide6", "IPython", "pytest",
               "setuptools", "pkg_resources", "wheel",
               "tkinter", "unittest", "pydoc_data",

@@ -12,3 +12,8 @@ Pillow>=11
 websocket-client>=1.8
 # PyMuPDF：说明书站 PDF 整本说明书解析（参数文本/内嵌图/尺寸页渲染，2026-11-23）
 PyMuPDF>=1.24
+# 扫描版说明书 OCR 挑尺寸页（2026-11-23 用户拍板打进 exe）：
+# rapidocr 自带中文 det/rec onnx 模型，onnxruntime 是推理后端，numpy 是它的硬依赖
+rapidocr_onnxruntime>=1.3
+onnxruntime>=1.20
+numpy>=1.26

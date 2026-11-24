@@ -14,6 +14,8 @@
 """
 import os
 
+from PyInstaller.utils.hooks import collect_data_files
+
 HERE = os.path.abspath(os.path.dirname(SPEC))          # noqa: F821
 A = os.path.join(HERE, "assets")
 ICNS = os.path.join(A, "icon.icns")
@@ -44,6 +46,9 @@ datas = [
     (os.path.join(A, "logos", "leader_white.png"), "assets/logos"),
 ]
 
+# 扫描版说明书 OCR 挑尺寸页（2026-11-23）：RapidOCR 的 onnx 模型 + config.yaml 必须当数据带
+datas += collect_data_files("rapidocr_onnxruntime")
+
 a = Analysis(
     ["main.py"],
     pathex=[HERE],
@@ -58,12 +63,21 @@ a = Analysis(
         "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont",
         "PIL.ImageFilter", "PIL.ImageStat", "PIL.ImageChops", "PIL.ImageEnhance",
         "websocket",   # goofish 自动化（xy_cdp）：CDP 自动点选号/菜单路由探测（2026-10-17）
+        # 扫描版说明书 OCR（2026-11-23）：RapidOCR + onnxruntime
+        # ⚠ pyclipper/shapely/cv2 是检测后处理依赖，必须点名（PyInstaller 扫不到动态导入）
+        "rapidocr_onnxruntime", "rapidocr_onnxruntime.rapid_ocr_api",
+        "rapidocr_onnxruntime.ch_ppocr_v3_det.utils",
+        "rapidocr_onnxruntime.ch_ppocr_v3_rec.utils",
+        "onnxruntime", "onnxruntime.capi._pybind_state",
+        "pyclipper", "shapely", "shapely.geometry", "cv2", "yaml",
+        "numpy",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     # 图像是预先烤好的 dataURL；Windows 后端一律不要
-    excludes=["numpy", "scipy", "pandas", "matplotlib",
+    # ⚠ numpy 不能排：onnxruntime（OCR 挑尺寸页）依赖它
+    excludes=["scipy", "pandas", "matplotlib",
               "PyQt5", "PyQt6", "PySide2", "PySide6", "IPython", "pytest",
               "setuptools", "pkg_resources", "wheel",
               "tkinter", "unittest", "pydoc_data",

@@ -809,11 +809,80 @@ def _book_pdf(model, url, pcode, log):
                         % "；".join("%s=%s" % (a, v) for a, v in _mm))
     finally:
         doc.close()
+    if _scanned:
+        # 2026-11-23 用户令「视觉挑页做好，还是老样子，拼成一张大的让视觉去找」+
+        # 「写文案的数据全部用说明书的数据，连保修时间也可以获取」：扫描版没有文字层，
+        # 只能靠视觉——全部页拼大图挑出「产品尺寸示意图」页和「规格表」页，尺寸页进
+        # size_imgs（+读毫米数字），规格页读出参数行（品类/容量/保修）当 props。
+        try:
+            _v_sz, _v_dt, _v_rows = _book_scanned_vision(imgs, mdir, model, log)
+            if _v_sz:
+                size_imgs.extend(_v_sz)
+                imgs.extend(_v_sz)     # 尺寸页也进图池（_book_size_urls 强信号）
+            if _v_dt:
+                dts.extend(_v_dt)
+            for _k, _v in (_v_rows or []):
+                if all(_k != r[0] for r in rows):
+                    rows.append((_k, _v))
+        except Exception as _ve:
+            log("扫描版视觉挑页失败（不影响出图）：%s" % str(_ve)[:80])
     log("说明书 PDF 解析：参数 %d 条 / 图 %d 张（尺寸页 %d）/ 说明要点 %d 条"
         % (len(rows), len(imgs), len(size_imgs), len(manual)))
     return {"rows": rows, "imgs": imgs, "size_imgs": size_imgs,
             "manual": manual, "dim_table": dts, "url": url, "pcode": pcode,
             "brand": "", "root": "电子说明书PDF", "scanned": _scanned}
+
+
+def _book_dump(model, imgs, size_imgs, log):
+    """说明书站图片全量落盘（2026-11-23 用户令「说明书站的下载我要的是全」）：
+    以前只在 kitset 候选循环里顺手存，拿到主图+尺寸图就 break，几十页说明书只落几张
+    （LES60H-AC5 实锤 3 张）。现在 book 抓到的每张图都存 说明书/。
+    文件名直接用站上的原始图号（image/G795446.png → G795446.png）：天然唯一，
+    重跑/并发都不会撞号重复（顺序号 src_N 两趟跑会各编一套，LES60H 实锤）；已存在跳过。"""
+    try:
+        import kitset as _ks
+        _dir = os.path.join(_ks.model_dir(model), "说明书")
+        os.makedirs(_dir, exist_ok=True)
+    except Exception as e:
+        if log:
+            log("说明书图落盘目录失败：%r" % (e,))
+        return
+    urls = []
+    for _n, u in list(imgs or []) + list(size_imgs or []):
+        if u and u not in urls:
+            urls.append(u)
+    added = 0
+    for u in urls:
+        pr = urllib.parse.urlparse(u)
+        _bn = os.path.basename(urllib.parse.unquote(pr.path)) or ""
+        _bn = re.sub(r"[^0-9A-Za-z._-]", "_", _bn)
+        if _bn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            fn = _bn
+        else:
+            import hashlib
+            fn = "img_%s%s" % (hashlib.md5(u.encode()).hexdigest()[:10],
+                               os.path.splitext(_bn)[1] or ".jpg")
+        fp = os.path.join(_dir, fn)
+        if os.path.isfile(fp) and os.path.getsize(fp) > 3000:
+            continue   # 已下过（幂等，不重下不重复）
+        hdr = {"User-Agent": _XS_UA, "Referer": "%s://%s/" % (pr.scheme, pr.netloc)}
+        try:
+            with urlopen_ssl(urllib.request.Request(u, headers=hdr), timeout=20) as r:
+                raw = r.read()
+        except Exception:
+            continue
+        if not raw or len(raw) < 3000:   # 图标/占位小图不占席位
+            continue
+        try:
+            with io.open(fp, "wb") as f:
+                f.write(raw)
+        except Exception:
+            continue
+        added += 1
+    if log:
+        log("说明书图落盘：新增 %d 张（目录现有 %d 张图）"
+            % (added, len([f for f in os.listdir(_dir)
+                           if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))])))
 
 
 def _book_fetch(model, log):
@@ -1037,6 +1106,11 @@ def _book_fetch(model, log):
             rows = []
     log("说明书全量：参数 %d 条 / 图 %d 张（尺寸线稿 %d）/ 说明要点 %d 条"
         % (len(rows), len(imgs), len(size_imgs), len(manual)))
+    # 2026-11-23 用户令「下载要全」：全部图无差别落盘（不再等主图/尺寸图够了就停）
+    try:
+        _book_dump(model, imgs, size_imgs, log)
+    except Exception as _e:
+        log("说明书图全量落盘异常：%r" % (_e,))
     return {"rows": rows, "imgs": imgs, "size_imgs": size_imgs,
             "manual": manual, "dim_table": dim_tables, "url": url, "pcode": pcode,
             "brand": brand, "root": str(tree.get("name") or "")}
@@ -1334,6 +1408,451 @@ def _vision_call_auto(data_url, prompt, log):
     return _vc(key, data_url, prompt, log=log)
 
 
+def _montage_pages(pages, cols=4):
+    """把说明书页缩略图拼成一张带页码的大图（2026-11-23 用户令「还是老样子，
+    拼成一张大的让视觉去找」）。pages=[(页码, 文件路径)]，返回 base64 dataURL 或 None。"""
+    try:
+        import base64
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return None
+    tiles = []
+    for no, fp in pages:
+        try:
+            t = Image.open(fp).convert("RGB")
+        except Exception:
+            continue
+        t.thumbnail((320, 460))
+        tiles.append((no, t))
+    if not tiles:
+        return None
+    cw = max(t.width for _n, t in tiles) + 10
+    ch = max(t.height for _n, t in tiles) + 34
+    rows = max(1, (len(tiles) + cols - 1) // cols)
+    board = Image.new("RGB", (cw * cols, ch * rows), "white")
+    dr = ImageDraw.Draw(board)
+    try:
+        fnt = ImageFont.truetype(r"C:\Windows\Fonts\arialbd.ttf", 24)
+    except Exception:
+        try:
+            fnt = ImageFont.truetype("arialbd.ttf", 24)
+        except Exception:
+            fnt = ImageFont.load_default()
+    for i, (no, t) in enumerate(tiles):
+        r, c = divmod(i, cols)
+        x, y = c * cw, r * ch
+        board.paste(t, (x + (cw - t.width) // 2, y + 30 + (ch - 30 - t.height) // 2))
+        dr.rectangle([x, y, x + 52, y + 28], fill=(200, 0, 0))
+        dr.text((x + 10, y + 2), str(no), fill="white", font=fnt)
+    buf = io.BytesIO()
+    board.save(buf, "JPEG", quality=82)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+# ------------------------------------------------ 扫描版说明书 OCR 挑页（2026-11-23）
+# 用户给的方案（tesseract + 关键词打分）实测有效：C8U12G3 的 32 页里 p30 得 80 分
+# 唯一过阈值（真尺寸图页），目录页被 -100 排除，零误判。tesseract 本机没装，换
+# RapidOCR（纯 Python + onnxruntime，中文模型自带，不用装外部二进制）。
+# 速度：实测 3.6s/页（缩图没用，瓶颈在推理；多线程更慢，ONNX 已吃满多核）。
+# 优化：尺寸页几乎都在书末（合格证/技术数据之前）→ 从末页倒着扫，命中就停，
+# 通常只 OCR 3~5 页；OCR 文本按型号缓存 30 天，同一本说明书只扫一次。
+_OCR_CATS = ("滚筒洗衣机", "波轮洗衣机", "洗衣机", "干衣机", "洗干一体机", "冰箱", "冷柜",
+             "冰吧", "空调", "热水器", "洗碗机", "油烟机", "燃气灶", "集成灶", "消毒柜",
+             "电视", "净化器", "除湿机", "电风扇")
+_OCR_W = {
+    "size": [("产品尺寸", 50), ("外形尺寸", 50), ("整机尺寸", 50), ("安装尺寸", 50)],
+    "struct": [("安装要求", 25), ("示意图", 20), ("安装间隙", 25), ("前方开阖", 20)],
+    "value": [("mm", 10), ("毫米", 10)],
+    "spec": [("技术数据", 60), ("规格表", 40), ("额定电压", 25), ("额定功率", 25), ("能效", 15)],
+}
+_OCR_NEG = [("目录", -100), ("索引", -100), ("目 录", -100)]
+
+
+def _ocr_pick(pages, mdir, model, log):
+    """边扫边判找尺寸页（命中即停）。返回 ((页码,文本,分), (规格页码,文本), 全部文本) 或 None"""
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except Exception:
+        log("OCR 挑页跳过：没装 rapidocr_onnxruntime")
+        return None
+    cache = os.path.join(mdir or "", "ocr_pages.json")
+    texts = {}
+    if mdir and os.path.isfile(cache) and os.path.getmtime(cache) > time.time() - 30 * 86400:
+        try:
+            with io.open(cache, encoding="utf-8") as f:
+                d = json.load(f)
+            if d.get("model") == model:
+                texts = {int(k): str(v) for k, v in (d.get("pages") or {}).items()}
+        except Exception:
+            texts = {}
+    _st = {"ocr": None, "n": 0}
+
+    def _tp(n, fp):
+        if n in texts:
+            return texts[n]
+        if _st["ocr"] is None:
+            try:
+                _st["ocr"] = RapidOCR()
+            except Exception as e:
+                log("OCR 初始化失败：%s" % e)
+                return ""
+        try:
+            res, _ = _st["ocr"](fp)
+            t = " ".join(x[1] for x in (res or []))
+        except Exception as e:
+            log("OCR 第%d页失败：%s" % (n, str(e)[:50]))
+            t = ""
+        texts[n] = t
+        _st["n"] += 1
+        return t
+
+    maxn = max(n for n, _ in pages)
+    # 尺寸页几乎都在书末（合格证/技术数据之前）→ 末 10 页倒着扫，其余按顺序补
+    ordered = [x for x in pages if x[0] >= maxn - 9][::-1] + [x for x in pages if x[0] < maxn - 9]
+    size_hit = spec_hit = None
+    t0 = time.time()
+    for n, fp in ordered:
+        t = _tp(n, fp)
+        if not t:
+            continue
+        sc, _h = _ocr_score(t)
+        mmnums = re.findall(r"(\d{3,4})\s*(?:mm|毫米)", t)
+        is_size = any(k in t for k in ("产品尺寸", "外形尺寸", "整机尺寸", "安装尺寸"))
+        if not size_hit and is_size and sc >= 60 and len(mmnums) >= 2:
+            size_hit = (n, t, sc)
+        if not spec_hit and ("技术数据" in t or "规格表" in t or ("型号" in t and "额定" in t)):
+            spec_hit = (n, t)
+        if size_hit and spec_hit:
+            break
+    if mdir and _st["n"] and texts:
+        try:
+            with io.open(cache, "w", encoding="utf-8") as f:
+                json.dump({"model": model, "pages": {str(k): v for k, v in texts.items()},
+                           "ts": time.time()}, f, ensure_ascii=False)
+        except Exception:
+            pass
+    log("OCR 挑页：扫 %d 页 / 尺寸页 %s / 规格页 %s（%.0fs）"
+        % (_st["n"], size_hit[0] if size_hit else 0, spec_hit[0] if spec_hit else 0, time.time() - t0))
+    return size_hit, spec_hit, texts
+
+
+def _ocr_spec_regex(t):
+    """规格页 OCR 原文 → 确定性参数（正则打底，不依赖模型，每次结果一致）"""
+    flat = re.sub(r"\s+", "", t or "")
+    out = []
+    m = re.search(r"([1-3])\s*级", flat)
+    if m:
+        out.append(("能效等级", m.group(1) + "级"))
+    m = re.search(r"(\d{3})V[～~/\-\s]*?(\d{2})Hz", flat)
+    if m:
+        out.append(("额定电压", "%sV/%sHz" % (m.group(1), m.group(2))))
+    _up = re.findall(r"上筒(\d+(?:\.\d+)?)kg", flat)
+    _dn = re.findall(r"下筒(\d+(?:\.\d+)?)kg", flat)
+    if _up or _dn:
+        _p = (["上筒%s kg" % _up[0]] if _up else []) + (["下筒%s kg" % _dn[0]] if _dn else [])
+        out.append(("洗涤容量", "+".join(_p)))
+    m = re.search(r"(\d\.\d{1,2})[-~](\d\.\d{1,2})", flat)
+    if m:
+        out.append(("进水水压", "%s-%s MPa" % (m.group(1), m.group(2))))
+    _db = sorted(int(x) for x in re.findall(r"(\d{2})\s*dB", flat, re.I))
+    if len(_db) >= 2:
+        out.append(("洗涤噪音", "%ddB" % _db[0]))
+        out.append(("脱水噪音", "%ddB" % _db[-1]))
+    m = re.search(r"(\d{3,4})\s*(?:rpm|转)", flat, re.I)
+    if m:
+        out.append(("转速", m.group(1) + " rpm"))
+    return out
+
+
+def _ocr_spec_rows(spec_t, log):
+    """说明书「技术数据」页 OCR 原文 → 参数行。
+    用文本模型抽取（不花视觉钱），并且**每条值的数字/字母必须能在原文里找到**——
+    找不到就丢掉，防止 AI 把参数表读成编造。返回 [(参数名, 值)]"""
+    if not spec_t or len(spec_t) < 40:
+        return []
+    rows = _ocr_spec_regex(spec_t)   # 确定性打底：能效/电压/容量/水压/噪音/转速
+    try:
+        out = _chat(
+            "下面是一份家电说明书「技术数据」页的 OCR 原文（表格按行扫出来，顺序可能错乱、"
+            "列头和数据会交叉）。请只把原文里真实存在的产品规格抄出来，格式严格为「参数名=参数值」，"
+            "一行一条。优先抄这些项：产品类型 / 型号 / 能效等级 / 额定电压 / 额定频率 / 额定功率 / "
+            "洗涤容量 / 脱水容量 / 容量 / 转速 / 噪音 / 净重 / 毛重 / 产品尺寸 / 进水水压 / 加热功率 / 保修。"
+            "绝对不许推断、不许补齐、不许把两个数拼成一个；原文没有的项一条都不要写。不要输出任何解释。\n\n"
+            "【OCR 原文】\n" + spec_t[:2500])
+    except Exception as e:
+        log("说明书规格 OCR 抽参数失败：%s" % str(e)[:60])
+        return rows
+    flat = re.sub(r"\s+", "", spec_t)
+    for ln in str(out or "").splitlines():
+        mm = re.match(r"\s*([\u4e00-\u9fa5A-Za-z（）()·／/]{2,14})\s*[=:：]\s*(.{1,40}?)\s*$", ln)
+        if not mm:
+            continue
+        k, v = mm.group(1).strip(), mm.group(2).strip()
+        if not v or len(v) > 40:
+            continue
+        if not any(w in k for w in ("产品类型", "型号", "能效", "电压", "频率", "功率", "容量", "容积",
+                                    "转速", "噪音", "噪声", "净重", "毛重", "重量", "尺寸", "水压",
+                                    "保修", "耗电", "洗净", "脱水", "加热")):
+            continue
+        # 型号行一律不收：一本说明书覆盖多个型号（C8U12G3 这本表里第一个是 C8 U12W3），
+        # 抽出来必串型号；标题/尺寸图本来就用请求型号全码，不缺这一项
+        if "型号" in k:
+            log("跳过说明书里的型号行（%s）——防串型号" % v)
+            continue
+        # 抗编造硬门：值里的数字/英文字母必须真在 OCR 原文里出现过
+        _tok = re.findall(r"[A-Za-z0-9]+", v)
+        if _tok and not all(t.lower() in flat.lower() for t in _tok):
+            log("丢弃说明书里查不到的参数：%s=%s" % (k, v))
+            continue
+        if all(k != r[0] for r in rows) and all(v.strip() != r[1].strip() for r in rows):
+            rows.append((k, v))
+    # 表头和数据列错位是 OCR 常态：洗涤噪音 < 脱水噪音（物理常识），读反了就换回来
+    _wn = _dn = None
+    for i, (k, v) in enumerate(rows):
+        mm = re.search(r"(\d{1,2})", v)
+        if not mm:
+            continue
+        if "洗涤噪音" in k:
+            _wn = (i, int(mm.group(1)))
+        elif "脱水噪音" in k:
+            _dn = (i, int(mm.group(1)))
+    if _wn and _dn and _wn[1] > _dn[1]:
+        i1, v1 = rows[_wn[0]]
+        i2, v2 = rows[_dn[0]]
+        rows[_wn[0]] = (i1, v2)
+        rows[_dn[0]] = (i2, v1)
+        log("噪音串位已纠正：洗涤%s / 脱水%s" % (v2, v1))
+    # 键名规范：容量（kg) 这类带单位的列头统一成 洗涤容量
+    rows = [("洗涤容量" if ("容量" in k and ("kg" in k.lower() or "公斤" in k)) else k, v)
+            for k, v in rows]
+    # 垃圾行剔除：「产品尺寸=见"产品尺寸"」这种交叉引用、以及重复的容量单筒行
+    rows = [r for r in rows if not re.match(r"^见", str(r[1]).strip())]
+    if any("+" in str(v) for k, v in rows if "容量" in k):
+        rows = [r for r in rows if "容量" not in r[0] or "+" in str(r[1])]
+    # 键名去掉括号单位后去重（进水水压 / 进水水压(MPa) 只留一条）
+    _seen, _out2 = set(), []
+    for k, v in rows:
+        _nk = re.sub(r"[（(].*?[)）]", "", str(k)).strip()
+        if _nk in _seen:
+            continue
+        _seen.add(_nk)
+        _out2.append((_nk, v))
+    return _out2
+
+
+def _ocr_rows(size_t, spec_t):
+    """从 OCR 文本里取品类（说明书权威）和保修期"""
+    rows = []
+    blob = (spec_t or "") + " " + (size_t or "")
+    for c in _OCR_CATS:
+        if c in blob:
+            rows.append(("产品类型", c))
+            break
+    m = re.search(r"(?:保修|包修)[^。；\n]{0,24}?(\d{1,2})\s*年", blob)
+    if m:
+        rows.append(("保修期", m.group(1) + "年"))
+    return rows
+
+
+def _ocr_score(t):
+    s, hits = 0, []
+    for cat in _OCR_W.values():
+        for w, wt in cat:
+            if w in t:
+                s += wt
+                hits.append(w)
+    for w, wt in _OCR_NEG:
+        if w in t:
+            s += wt
+            hits.append("[排]" + w)
+    return s, hits
+
+
+def _ocr_dims(t, model):
+    """从尺寸页 OCR 文本里读尺寸数字：优先 宽/高/深 标签，其次 W/H/D 字母；读不准不编"""
+    vals, labels = {}, []
+    for lab, pat in (("W", r"[宽W]\s*[:：]?\s*(\d{3,4})"), ("H", r"[高H]\s*[:：]?\s*(\d{3,4})"),
+                     ("D", r"[深D]\s*[:：]?\s*(\d{3,4})")):
+        m = re.search(pat, t)
+        if m:
+            vals[lab] = int(m.group(1))
+            labels.append(lab)
+    if len(vals) >= 2:
+        return [{"node": "说明书PDF 尺寸页", "labels": labels, "vals": {model: [vals[k] for k in labels]}}]
+    return []
+
+
+def _book_scanned_vision(imgs, mdir, model, log):
+    """扫描版说明书视觉挑页 + 读参数（2026-11-23 用户令「视觉挑页做好，还是老样子，
+    拼成一张大的让视觉去找」「写文案的数据全部用说明书的数据，连保修时间都可以获取」）。
+
+    做法：全部页拼成一张带页码的大图 → 一次问出「产品尺寸示意图页」和「产品规格表页」
+    （严格 A:/B: 两行格式）→ 尺寸页必须读出 ≥2 个毫米数才算（毫米数字硬门，防误认）→
+    规格页逐行读「参数名=值」，只收真规格项（安装距离之类丢掉）。结果缓存
+    kitset/<型号>/说明书/book_vision.json，同一本只问一次（30 天）。
+    返回 (size_imgs, dim_table, rows)。全部失败返回空，不影响出图。"""
+    pages = []
+    for name, fp in (imgs or []):
+        m = re.search(r"第(\d+)页", str(name))
+        if not m or not os.path.isfile(fp):
+            continue
+        pages.append((int(m.group(1)), fp))
+    if len(pages) < 3:
+        return [], [], []
+    cache = os.path.join(mdir or "", "book_vision.json")
+    if mdir and os.path.isfile(cache) and os.path.getmtime(cache) > time.time() - 30 * 86400:
+        try:
+            with io.open(cache, encoding="utf-8") as f:
+                d = json.load(f)
+            if d.get("model") == model:
+                return d.get("size_imgs") or [], d.get("dim_table") or [], d.get("rows") or []
+        except Exception:
+            pass
+    size_imgs, dims, rows = [], [], []
+    page_fp = dict(pages)
+
+    # ⓿ OCR 优先（2026-11-23 用户方案实测：C8U12G3 32 页里 p30 得 80 分唯一过阈值，
+    #    零误判，还顺带读出品类「滚筒洗衣机」；比视觉挑页快且准）→ 命中即返回，视觉兜底
+    try:
+        _picked = _ocr_pick(pages, mdir, model, log)
+    except Exception as _e:
+        _picked = None
+        log("OCR 挑页异常：%s" % str(_e)[:80])
+    if _picked:
+        _sh, _ph, _tx = _picked
+        if _sh and page_fp.get(_sh[0]):
+            size_imgs.append(("说明书PDF 尺寸图 第%d页" % _sh[0], page_fp[_sh[0]]))
+            dims = _ocr_dims(_sh[1], model)
+            log("OCR 挑页：尺寸页 = 第 %d 页（%d 分）" % (_sh[0], _sh[2]))
+        for _r in _ocr_rows(_sh[1] if _sh else "", _ph[1] if _ph else ""):
+            if all(_r[0] != x[0] for x in rows):
+                rows.append(_r)
+        # 规格页 OCR 原文再抽一轮真参数（品类有了、容量/能效/电压/噪音全靠它）
+        if _ph:
+            for _r in _ocr_spec_rows(_ph[1], log):
+                if all(_r[0] != x[0] for x in rows):
+                    rows.append(_r)
+        if rows:
+            log("OCR 读参数：%s" % "，".join("%s=%s" % r for r in rows))
+        if size_imgs:
+            if mdir:
+                try:
+                    with io.open(cache, "w", encoding="utf-8") as f:
+                        json.dump({"model": model, "size_imgs": size_imgs, "dim_table": dims,
+                                   "rows": rows, "src": "ocr", "ts": time.time()},
+                                  f, ensure_ascii=False)
+                except Exception:
+                    pass
+            log("扫描版 OCR 挑页完成：尺寸页 %d / 参数 %d 条" % (len(size_imgs), len(rows)))
+            return size_imgs, dims, rows
+
+    def _page_du(fp, maxw=1500):
+        try:
+            import base64
+            from PIL import Image as _PI
+            im = _PI.open(fp).convert("RGB")
+            if im.width > maxw:
+                im = im.resize((maxw, int(im.height * maxw * 1.0 / im.width)), _PI.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=86)
+            return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:
+            return None
+
+    _t0 = time.time()
+    # ① 一张大图找页（用户令「拼成一张大的让视觉去找」）：6 列，格子上标真实页码
+    du = _montage_pages(pages, cols=6)
+    txt = None
+    if du:
+        txt = _vision_call_auto(
+            du,
+            "这张大图是一本家电说明书的全部页面缩略图，每格左上角红底白字是页码。请找两类页：\n"
+            "A = 产品尺寸示意图页：画着整机外形线稿，带尺寸标注线和毫米数字，或带 W/H/D 字母+数字表格；\n"
+            "B = 产品规格表页：表格列出能力/容量、电压、功率、产品尺寸、净重、能效等级之类的技术参数。\n"
+            "只输出两行，严格按下面格式（页码用格子上的红底数字，多个用逗号分隔，没有就写 0）：\n"
+            "A: 30\nB: 31\n不要输出任何其他文字。", log)
+    a_list, b_list = [], []
+    for ln in str(txt or "").splitlines():
+        ln = ln.replace("：", ":")
+        m = re.match(r"\s*([AB])\s*[:：]\s*(.+)$", ln, re.I)
+        if not m:
+            continue
+        nums = [int(x) for x in re.findall(r"\d{1,2}", m.group(2))]
+        if m.group(1).upper() == "A":
+            a_list = [n for n in nums if n]
+        else:
+            b_list = [n for n in nums if n]
+    log("视觉挑页初筛：尺寸页候选 %s / 规格页候选 %s（%.0fs）"
+        % (a_list or 0, b_list or 0, time.time() - _t0))
+
+    # ② 尺寸页硬门：必须读出 ≥2 个毫米数字才算（防止把部件图/封面当尺寸图）
+    for n in a_list[:3]:
+        fp = page_fp.get(n)
+        du1 = _page_du(fp) if fp else None
+        if not du1:
+            continue
+        nums = _vision_call_auto(
+            du1,
+            "这页如果画着产品尺寸示意图，读出图上字母（W/H/D/D1/D2 等）对应的毫米数；"
+            "只输出每行一条「字母=数字」，例如 W=600。没有尺寸标注就只输出 0。", log)
+        vals = {}
+        for ln in str(nums or "").splitlines():
+            mm = re.match(r"\s*([A-Za-z]\d?)\s*[=:：]\s*(\d{2,4})", ln)
+            if mm:
+                vals[mm.group(1).upper()] = int(mm.group(2))
+        if len(vals) >= 2:
+            size_imgs.append(("说明书PDF 尺寸图 第%d页" % n, fp))
+            dims.append({"node": "说明书PDF 第%d页" % n,
+                         "labels": list(vals.keys()),
+                         "vals": {model: [vals[k] for k in vals]}})
+            log("视觉挑页：尺寸示意图 = 第 %d 页（%s）"
+                % (n, "，".join("%s=%d" % (k, v) for k, v in vals.items())))
+            break
+        log("第 %d 页读不出毫米数，不当尺寸页" % n)
+
+    # ③ 规格表读参数（品类/容量/能效/保修），只收真规格项
+    _SPEC_KEYS = ("产品类型", "产品类别", "类别", "型号", "额定电压", "额定功率", "功率",
+                  "容量", "容积", "能效", "洗净比", "水压", "净重", "毛重", "重量",
+                  "尺寸", "保修", "噪音", "耗电", "加热", "转速", "脱水")
+    for n in b_list[:2]:
+        fp = page_fp.get(n)
+        du2 = _page_du(fp) if fp else None
+        if not du2:
+            continue
+        out = _vision_call_auto(
+            du2,
+            "这是家电说明书的规格/技术参数表页。把表格里属于产品规格的项逐行输出，"
+            "格式严格为「参数名=参数值」，参数名照原文（如 产品类型/型号/额定电压/额定功率/容量/"
+            "能效等级/产品尺寸/净重/保修年限）。安装距离、注意事项、符号说明一律不要。"
+            "只输出表里真有的内容，没有的不要编，一行一条。", log)
+        got = []
+        for ln in str(out or "").splitlines():
+            mm = re.match(r"\s*([\u4e00-\u9fa5A-Za-z（）()·／/]{2,14})\s*[=:：]\s*(.{1,40}?)\s*$", ln)
+            if not mm:
+                continue
+            k, v = mm.group(1).strip(), mm.group(2).strip()
+            if not v or len(v) > 40:
+                continue
+            if not any(w in k for w in _SPEC_KEYS):
+                continue
+            if all(k != r[0] for r in got):
+                got.append((k, v))
+        if got:
+            rows = got
+            log("视觉挑页：规格表 = 第 %d 页，读出 %d 条参数" % (n, len(got)))
+            break
+    if mdir and (size_imgs or rows):
+        # 只缓存成功结果（2026-11-23 C8U12G3 实锤：视觉挑页失败也落缓存会把
+        # 空结果锁 30 天，以后永远挑不到）
+        try:
+            with io.open(cache, "w", encoding="utf-8") as f:
+                json.dump({"model": model, "size_imgs": size_imgs, "dim_table": dims,
+                           "rows": rows, "ts": time.time()}, f, ensure_ascii=False)
+        except Exception:
+            pass
+    log("扫描版视觉挑页完成：尺寸页 %d / 规格参数 %d 条（共 %.0fs）"
+        % (len(size_imgs), len(rows), time.time() - _t0))
+    return size_imgs, dims, rows
 # ---------------------------------------------------------------- GLM 文案
 def _chat(prompt):
     k = _api_key()

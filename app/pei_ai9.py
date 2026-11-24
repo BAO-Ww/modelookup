@@ -1092,7 +1092,13 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
         ai_dims = None
         if os.path.isfile(_si):
             try:
-                ai_dims = kitset._ai_read_size_nums(_si, lambda s: None)
+                # 2026-11-24：本地 OCR 读「宽/高/深」标签数字；读不出退说明书数值表映射
+                # （图注 a/b/c/d 无宽高深字样，AI 读数一等等三分钟，LES60H-AC5 实锤）
+                ai_dims = kitset._ocr_dims3(_si, lambda s: None)
+                if not ai_dims:
+                    ai_dims = kitset._dims_from_book_table(
+                        (info or {}).get("_book_dim_table") or (),
+                        (P.get('model') or '').strip())
             except Exception:
                 ai_dims = None
         # 2026-11-20 leader 335/400 实锤（手工录入机型）：壳页/外源图捞来的「尺寸图」
@@ -1160,9 +1166,12 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
             tw = max(1, int(g.width * sc))
             th = max(1, int(g.height * sc))
             g = g.resize((tw, th), Image.LANCZOS)
-            alpha = g.point(lambda v: min(255, max(0, (225 - v) * 255 // 150)))
-            alpha = alpha.point(lambda v: min(255, int(v * 1.45)))
-            white = Image.new("RGBA", g.size, (47, 53, 64, 0) if _SPOT_LIGHT else (238, 242, 248, 0))  # 浅底深线稿
+            # 2026-11-23 用户令「尺寸图线条太浅，最好改红色」→ 首版 MaxFilter 加粗
+            # 被用户实锤「红的都糊了」：加粗晕边 + 硬阈值太低只逮到深线。
+            # 终版（源图灰度实锤：线体 150~235、AA 235~250、背景 250+）：
+            # 阈值 238 全线拉实 + 窄幅渐变（14 级）保锐利边缘，不加粗不晕
+            alpha = g.point(lambda v: 255 if v < 238 else (max(0, (252 - v) * 255 // 45)))
+            white = Image.new("RGBA", g.size, (186, 22, 22, 0))   # 官方线稿统一红线
             white.putalpha(alpha)
             cv.alpha_composite(white, ((W - tw) // 2, 170 + max(0, (600 - th) // 2)))
         except Exception:
