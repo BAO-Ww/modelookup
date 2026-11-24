@@ -2712,8 +2712,10 @@ def _gather_info(model, log, force=0):
     # BCD-243WGHC2E7SW 实锤：dms 官网抓的全是电子说明书页（开门标注图/安装线稿/
     # 禁忌图标），关门整机实拍一张没有，AI 拼版 8 格全是示意图首图只能选错；欣盛库
     # 明明有这台（album_urls 7 张 2000px，第 5/7 张就是干净关门整机照）。
-    # 有欣盛子目录不重复抓（与官网同口径）。
-    if not _src_has("欣盛"):
+    # 有欣盛子目录不重复抓（与官网同口径）；force=1 例外（2026-11-24 283 实锤：
+    # 欣盛/ 目录旧候选图把 _src_has 短路，重抓时欣盛 2000px 关门照永远进不了
+    # 候选——force 透传与官网层同口径）。
+    if (not _src_has("欣盛")) or force:
         try:
             xs = fetch_xinsheng(model, log)
             if xs and xs.get("imgs"):
@@ -3435,21 +3437,39 @@ def _hunt_sizeimg_page(page_url, sizeimg, log, skip_urls=(), prod_path=None):
     return False
 
 
-def _fetch_img(u, timeout=20):
-    """下载官网图并过最小尺寸闸，返回 PIL Image 或 None。"""
+def _haier_1200(u):
+    """海尔系 CDN 缩略变体升级 _600 → _1200（2026-11-24 用户令「官网图不可能这么糊」）：
+    官网详情页 HTML 详情图只引 _600 缩略（283 页 5 张详情图全是 _600），而 W020 资产的
+    _1200 同图 CDN 全系存在（283 详情页 6/6 实测 600→1200 同图）——不升级 = 首图/机图/
+    尺寸线稿永远 600px 发糊。只改 URL 不验活：调用方（_fetch_img/主循环）对 403/404
+    自有「回落原 URL」兜底——规格图等单尺寸资产 _1200 会 403（283 规格 W020…58539.jpg
+    官方只有 540×360 一档），回落即可绝不丢图。"""
     try:
-        raw = fetch(u, extra_headers={
-            "Referer": u.split("/")[0] + "//" + u.split("/")[2] + "/"},
-            binary=True, timeout=timeout)
-        if len(raw) < 3000:
-            return None
-        im = Image.open(io.BytesIO(raw))
-        if min(im.size) < 250:
-            return None
-        im.load()
-        return im
+        if "image." not in str(u):
+            return u
+        return re.sub(r'_600(\.(?:png|jpe?g))$', r'_1200\1', str(u), flags=re.I)
     except Exception:
-        return None
+        return u
+
+
+def _fetch_img(u, timeout=20):
+    """下载官网图并过最小尺寸闸，返回 PIL Image 或 None。
+    2026-11-24：海尔系 _600 缩略先试 _1200 大变体（_haier_1200），失败回落原 URL。"""
+    for _u in dict.fromkeys((_haier_1200(u), u)):
+        try:
+            raw = fetch(_u, extra_headers={
+                "Referer": _u.split("/")[0] + "//" + _u.split("/")[2] + "/"},
+                binary=True, timeout=timeout)
+            if len(raw) < 3000:
+                continue
+            im = Image.open(io.BytesIO(raw))
+            if min(im.size) < 250:
+                continue
+            im.load()
+            return im
+        except Exception:
+            continue
+    return None
 
 
 def _accept_sizeimg(im, sizeimg, prod_path=None, log=None, url=""):
@@ -3789,6 +3809,46 @@ def _ai_montage_size_screen(paths_, log=None):
 
 
 _OCRA = {"eng": None, "tried": False, "txt": {}, "items": {}}
+
+
+def _norm_dark_lineart(fp, log=None):
+    """深底/透明底白线 CAD 线稿归一化成白底黑线（2026-11-24 BCD-283WLHC357SW 实锤）：
+    海尔 H5 电子说明书大量线稿是 CAD 导出的**白线图**——RGBA 几乎全透明（alpha 均值
+    7、RGB 全白，看图软件垫深底才显形）或 RGB 深底白线+青标注。convert('L') 全白、
+    _flat_white 垫白也全白；RapidOCR 靠内部合成读得出数字 → 渲染端却拿不到墨迹，
+    1689×1350 高清线稿被漏、退官网 540×360 小图（聚光尺寸图糊根源）。
+    三态处理：①RGBA 大面积透明（alpha 均值<30）→ alpha 通道反相当墨迹（白线/青
+    标注都是内容，颜色归一成黑，AA 边保留）；②RGB 深底（亮度均值<110）→ 整图
+    反相 + ≥200 归纯白（反相背景 220~235，不归一会在保真换色 alpha 里留下 5 成
+    红晕罩满卡片）；③浅底图原路径返回。落 <原名>_norm.png；OCR 毫米数闸仍是
+    唯一收编关：归一化后读不出毫米数照样拒，黑机身照片反相也进不来。"""
+    try:
+        im = Image.open(fp)
+        out = re.sub(r"\.(jpg|jpeg|png|webp)$", "_norm.png", fp, flags=re.I)
+        if out == fp:
+            out = fp + "_norm.png"
+        has_a = im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+        if has_a:
+            a = im.convert("RGBA").getchannel("A")
+            apx = list(a.resize((64, 64)).getdata())
+            if sum(apx) / float(len(apx)) < 30:
+                # 全透明白线稿：alpha 即墨迹（255 线 / 0 底），反相 → 白底黑线
+                Image.eval(a, lambda v: 255 - v).convert("RGB").save(out)
+                if log:
+                    log("透明底白线稿归一化：%s → %s（alpha 反相当墨迹）"
+                        % (os.path.basename(fp), os.path.basename(out)))
+                return out
+        rgb = im.convert("RGB")
+        px = list(rgb.convert("L").resize((64, 64)).getdata())
+        if sum(px) / float(len(px)) >= 110:
+            return fp
+        inv = Image.eval(rgb, lambda v: 255 - v).point(lambda v: 255 if v >= 200 else v)
+        inv.save(out)
+        if log:
+            log("深底线稿反相归一化：%s → %s" % (os.path.basename(fp), os.path.basename(out)))
+        return out
+    except Exception:
+        return fp
 
 
 def _ocr_img_items(fp):
@@ -4166,6 +4226,7 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
     best = None   # (score, PIL image)
     _trans_fallback = [None]   # 透明底小图暂存路径（等更大的变体）
     _trans_lock = [None]       # (面积, crop, url) 透明底大图候选——循环后与泛洪 best 同走 AI 把关
+    _xs_cands = []             # (面积, RGBA 原图, url) 欣盛候选——形状闸豁免，AI 把关层拦开门/背面图
     _ai_cand = []   # 尺寸图 AI 复核候选（本地路径，启发式漏判时商汤/GLM 兜底认）
     _cand_md5 = set()  # 候选去重（2026-11-12：官网同图两份会占满 12 格/双倍额度）
     _ai_rej = set()  # 2026-10-31：已由 AI 明确否掉的图，别在兜底循环里再烧一次额度
@@ -4182,9 +4243,21 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
         seen.add(u); n += 1
         try:
             if kind == "url":
-                raw = fetch(u, extra_headers={"Referer": u.split("/")[0] + "//" + u.split("/")[2] + "/"},
+                # 2026-11-24 官网大图升级（用户令「官网图不可能这么糊」）：详情页 HTML
+                # 只引 _600 缩略、CDN _1200 同图全系存在（283 详情页 6/6 实测）——先试
+                # _1200，失败回落 _600 原样，升级绝不丢图。
+                raw = None
+                for _u in dict.fromkeys((_haier_1200(u), u)):
+                    try:
+                        raw = fetch(_u, extra_headers={
+                            "Referer": _u.split("/")[0] + "//" + _u.split("/")[2] + "/"},
                             binary=True, timeout=20)
-                if len(raw) < 3000:
+                        if raw and len(raw) >= 3000:
+                            break
+                        raw = None
+                    except Exception:
+                        raw = None
+                if raw is None or len(raw) < 3000:
                     continue
                 # 2026-10-31 用户令：下载图按来源进子文件夹，型号根目录不再散落 src_N
                 _sdir = os.path.join(mdir, _srctag if _srctag in _SRC_TAG_DIRS else "其他")
@@ -4204,7 +4277,11 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             im.load()
             # 官网尺寸线框图判定放最前：官方线稿也是透明 PNG，不能被下面的
             # 透明底机图锁定抢走；判定/落盘全用垫白合成图（隐藏填充不暴露）
-            if not have_size and _looks_like_sizeimg(im):
+            # 2026-11-24 二修（BCD-283WLHC357SW 实锤）：说明书强信号清单在场时主循环
+            # 启发式不得抢跑——否则官网 540×360 小线稿 OCR 一中就收编，have_size 置位
+            # 把后面 1689×1350 高清说明书线稿整个跳过（尺寸图糊根源之一）。让位给
+            # size_urls 官方合成路径；说明书链全败仍有官网 hunt（4656）兜底，不漏图。
+            if not have_size and not size_urls and _looks_like_sizeimg(im):
                 # 已有机图时，候选若与机图同图（缩略图 vs 官网大图），它是产品照不是尺寸图
                 if have_prod and os.path.isfile(picked) and _same_img(im, Image.open(picked)):
                     if log:
@@ -4267,7 +4344,10 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                                 % (n, _fill * 100))
                         continue
                     crop = rgba.crop(bbox)
-                    if min(w, h) >= 800:
+                    # 2026-11-24 283 实锤：1127x4411 官网详情长图切片，锁定用原图尺寸
+                    # min=1127≥800 通过，crop 后内容才 252px——超分 4.3 倍硬拉=糊。
+                    # 锁定必须用 crop 后真实内容尺寸。
+                    if min(crop.size) >= 800:
                         _sc = crop.size[0] * crop.size[1]
                         if not _trans_lock[0] or _sc > _trans_lock[0][0]:
                             _trans_lock[0] = (_sc, crop, u if kind == "url" else "")
@@ -4280,9 +4360,18 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                         crop.save(tp)
                         _trans_fallback[0] = tp
                         if log:
-                            log("候选%d 透明底图只有 %dpx，先记着等更大的" % (n, min(w, h)))
+                            log("候选%d 透明底图只有 %dpx，先记着等更大的" % (n, min(crop.size)))
                     continue
             if have_prod:
+                continue
+            # 2026-11-24 BCD-283WLHC357SW 实锤：欣盛实拍图（灰底/场景底）全被形状闸
+            # 「背景不统一」毙掉 → 机图候选只剩官网 600px 白底开门图，AI 把关还把
+            # 装食物开门照误判「整机照」——关门照根本没进候选。欣盛是商品图集语义，
+            # 跳过形状闸整图记候选（面积竞争取大），开门/背面/海报在 AI 把关层拦。
+            if _srctag == "欣盛":
+                _xs_cands.append((w * h, im.convert("RGBA"), u if kind == "url" else ""))
+                if log:
+                    log("候选%d 欣盛商品图 %dx%d，记候选待 AI 把关" % (n, w, h))
                 continue
             cut = _cut_border_bg(im)
             if cut is None:
@@ -4315,11 +4404,18 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
         # 标注图（BCD-243WGHC2E7SW 实锤）与嵌门示意线框都在这被拦下。
         # None=模型不可用：不拦照走（与既有行为一致）。
         _cand = None           # (PIL 图, url, 来源名)
+        # 受审队列（2026-11-24）：官方透明底 → 欣盛商品图（面积降序逐个）→ 泛洪 best
+        # ——欣盛 2000px 关门照终于有资格进候选（形状闸豁免后），开门食物照被 AI
+        # 把关 false 时退试下一张，不再直接跳海选（283 实锤开门照误判整机当 front）
+        _xs_cands.sort(key=lambda t: -t[0])
         if _trans_lock[0]:
             _cand = (_trans_lock[0][1], _trans_lock[0][2], "官方透明底")
+        elif _xs_cands:
+            _c0 = _xs_cands[0]
+            _cand = (_c0[1], _c0[2], "欣盛商品图")
         elif best:
             _cand = (best[1], best[2], "泛洪抠底")
-        # 依次受审：透明底被毙退泛洪 best，泛洪也被毙才拼图海选
+        # 依次受审：被毙退下一候选，全毙才拼图海选
         while _cand is not None:
             try:
                 import pubwork as _pwk
@@ -4331,10 +4427,21 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 break
             if log:
                 log("代码候选（%s）AI 判不对，弃用" % _cand[2])
-            if _cand[2] == "官方透明底" and best:
-                _cand = (best[1], best[2], "泛洪抠底")   # 透明底被毙，退试泛洪
-            else:
-                _cand = None                             # 全毙 → 走拼图海选
+            _nxt = None
+            if _cand[2] == "官方透明底":
+                if _xs_cands:
+                    _c0 = _xs_cands[0]
+                    _nxt = (_c0[1], _c0[2], "欣盛商品图")
+                elif best:
+                    _nxt = (best[1], best[2], "泛洪抠底")
+            elif _cand[2] == "欣盛商品图":
+                _xs_cands.pop(0)
+                if _xs_cands:
+                    _c0 = _xs_cands[0]
+                    _nxt = (_c0[1], _c0[2], "欣盛商品图")
+                elif best:
+                    _nxt = (best[1], best[2], "泛洪抠底")
+            _cand = _nxt             # 全毙 → None 走拼图海选
         if _cand:
             _rescue_prod(_cand[0], log).save(picked)
             if _cand[1]:
@@ -4535,6 +4642,10 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             _sfp = _size_fp(_su)
             if not _sfp:
                 continue
+            # 2026-11-24 深底白线 CAD 线稿先反相归一化再 OCR/落盘（BCD-283WLHC357SW
+            # 实锤：H5 说明书 G1095461.png 1689×1350 高清线稿是深底白线，OCR 读不出
+            # 判死 → 退官网 540×360 小图，聚光尺寸图糊根源）。浅底图原样过不受影响。
+            _sfp = _norm_dark_lineart(_sfp, log)
             _txt = _ocr_img_text(_sfp)
             _flat = re.sub(r"\s+", "", _txt or "")
             # 「像尺寸线稿」：有 a1/b1/c1/d1 这类字母标注，或有尺寸字样；但排除

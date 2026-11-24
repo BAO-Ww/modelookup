@@ -2301,6 +2301,28 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None, extra_dirs=()):
             _poster.add(f)
     if _poster:
         cands = [f for f in cands if f not in _poster]
+    # 2026-11-24 BCD-283WLHC357SW 实锤：官网详情「规格组合图」（三视图+能效标识+参数表
+    # +安装横幅同框）骗过铁律 prompt 被 AI 选成 front——prompt 补点名之外再加代码闸：
+    # OCR 文本框 ≥12 的图是参数表/组合图特征（实拍机图只有 0~3 行文字），不进拼版。
+    try:
+        import kitset as _ks
+        _dense = set()
+        for f in cands:
+            try:
+                _items = _ks._ocr_img_items(str(f))
+                _n = sum(1 for _it in (_items or [])
+                         if isinstance(_it, (list, tuple)) and len(_it) > 1
+                         and str(_it[1] or "").strip())
+                if _n >= 12:
+                    _dense.add(f)
+            except Exception:
+                pass
+        if _dense:
+            if log:
+                log("海选池文字密度闸：剔除参数表/组合图 %d 张" % len(_dense))
+            cands = [f for f in cands if f not in _dense]
+    except Exception:
+        pass
     if len(cands) > 20:
         # 拼版格数上限（2026-11-24）：候选池扩到 kitset 四子目录后可能 60+ 张，
         # 300px/格 AI 根本看不清、编号定位也飘。保持列表顺序截前 20 张——
@@ -2343,6 +2365,9 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None, extra_dirs=()):
         "· 二维码图片；· 品牌 logo、圆形图标、文字标（如 Haier/CASARTE/智家 字样，"
         "无论白字灰字蓝字）；· 中国能效标识/能源效率标识（白底带彩色能效等级表格或二维码的那张）；"
         "· 参数表/规格表；· 尺寸线稿图；· 纯文字公告图；"
+        "· 官网详情页的规格组合图（2026-11-24 BCD-283WLHC357SW 实锤：一张图里同时画着"
+        "尺寸三视图+能效标识+参数表格+安装提醒横幅，因为有三视图就被当成产品图选了 front"
+        "——它是信息图不是机器实拍，哪怕画着完整冰箱也绝不能选）；"
         "· 促销海报（图上带价格、折扣、补贴、优惠券、价签横幅的宣传图，"
         "哪怕整机拍得很好看也不能选，那是有字有价的广告图）；\n"
         "· 局部/部件特写图（2026-11-04 XQG110 实锤：洗涤剂抽屉特写被当成 front）："

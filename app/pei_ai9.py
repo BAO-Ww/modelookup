@@ -1160,12 +1160,15 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
             bb = Image.eval(g, lambda v: 255 - v).getbbox()
             if bb:
                 g = g.crop(bb)
-            # 2026-11-23 用户令「尺寸图线条太浅，最好改红色」。第一版 MaxFilter
-            # 加粗被实锤「红的都糊了」；第二版 238 硬阈值又被实锤「改成红色改糊了」
-            # （HRF-H57SSEDU1）：238 把 150~207 的浅灰线全部拉成满红 → 线宽膨胀、
-            # 小字糊成红团。终版**保真换色**：只把背景（≥250）压透明，线条灰阶
-            # 原样作 alpha（粗细=源图线宽、AA 边缘保留），LANCZOS 只放大 alpha
-            # ——红线锐度对齐蓝底黑线版（新旧对比图实锤 2026-11-24）。
+            # 2026-11-24 二修（BCD-283WLHC357SW 用户令「更糊了，按之前好了的」）：一版
+            # 「超分 1800→缩回 + 软 alpha 上 MaxFilter」被实锤红线全糊——LANCZOS 放大
+            # 再缩小把 JPEG 毛边摊成软裙边，MaxFilter 套在软 alpha 上只把裙边推得更宽
+            # （糊上叠糊，搁板线全成毛边粗条）。终版小源**硬朗化**：源图不放大，
+            # alpha 原生分辨率抽取 → 一次直达最终尺寸 → S 曲线把裙边重新卡硬
+            # （≥170 归实线、≤70 归透明、中段留细 AA）→ MaxFilter 只在卡硬后的
+            # alpha 上膨胀——二值蒙皮上 Max=干净加粗 1px，软蒙皮上 Max=发晕。
+            # 高清源（短边≥900）保持 11-24 保真换色定稿原样不动。
+            _small = min(g.size) < 900
             alpha = g.point(lambda v: 255 if v <= 150
                             else (0 if v >= 250 else int((250 - v) * 255 // 100)))
             # 宽高双限自适应：限宽 840 + 限高 620 取小——竖长机型（冰箱 1776mm）
@@ -1174,6 +1177,13 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
             tw = max(1, int(g.width * sc))
             th = max(1, int(g.height * sc))
             alpha = alpha.resize((tw, th), Image.LANCZOS)
+            if _small:
+                try:
+                    alpha = alpha.point(lambda v: 255 if v >= 170
+                                        else (0 if v <= 70 else int((v - 70) * 255 // 100)))
+                    alpha = alpha.filter(ImageFilter.MaxFilter(3))   # 卡硬后 1px 干净加粗（仅小源）
+                except Exception:
+                    pass
             white = Image.new("RGBA", (tw, th), (186, 22, 22, 0))   # 官方线稿统一红线
             white.putalpha(alpha)
             cv.alpha_composite(white, ((W - tw) // 2, 170 + max(0, (600 - th) // 2)))
