@@ -14,6 +14,8 @@ websocket-client>=1.8
 PyMuPDF>=1.24
 # 扫描版说明书 OCR 挑尺寸页（2026-11-23 用户拍板打进 exe）：
 # rapidocr 自带中文 det/rec onnx 模型，onnxruntime 是推理后端，numpy 是它的硬依赖
-rapidocr_onnxruntime>=1.3
+# 1.3.x 全系 Requires-Python<3.12（CI runner 3.13 无解，v3.0.89 构建失败实锤）；
+# 本机 3.13 实装 1.2.3 且尺寸 OCR 跑通（LES60H-AC5），故放宽到 >=1.2.3
+rapidocr_onnxruntime>=1.2.3
 onnxruntime>=1.20
 numpy>=1.26
