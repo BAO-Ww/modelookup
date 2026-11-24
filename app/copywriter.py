@@ -684,11 +684,23 @@ def _book_find_entry(_post, model, nm, log):
     return e or {}
 
 
+def _url_esc(u):
+    """URL 里中文等非 ASCII 字符 percent-encode（2026-11-24 EC8002-MG3U1 实锤：
+    VIP 码站 PDF 说明书地址带中文路径，Request 直接用 → http.client 对请求行
+    ascii 编码炸 UnicodeEncodeError → PDF 链整体失效、说明书文件夹空。
+    已编码的 %xx 原样保留，ASCII 部分（含保留字符）不动。"""
+    try:
+        return urllib.parse.quote(str(u), safe="%/:=&?~#+!$,;'@()*[]")
+    except Exception:
+        return u
+
+
 def _book_pdf(model, url, pcode, log):
     """PDF 整本说明书（2026-11-23 用户令「不管什么格式的全部下载下来」）：
     下载存 kitset/<型号>/说明书/电子说明书.pdf（下过不再重下，限速礼貌抓），
     PyMuPDF 解析——参数页抠「名称 值」行，内嵌位图全导出，含「尺寸」+毫米数页
     整页 2x 渲染当尺寸线稿（矢量线稿抠不出位图只能整页渲）。"""
+    url = _url_esc(url)
     try:
         import kitset as _ks
         mdir = os.path.join(_ks.model_dir(model), "说明书")
@@ -736,7 +748,7 @@ def _book_pdf(model, url, pcode, log):
         pass
     _scanned = _tot_txt < 200
     if _scanned:
-        log("说明书 PDF 是扫描版（全 32 页无文字层），整页渲染 %d 张图进图池" % doc.page_count)
+        log("说明书 PDF 是扫描版（全 %d 页无文字层），整页渲染进图池" % doc.page_count)
     try:
         for pi in range(doc.page_count):
             if _scanned:
@@ -987,6 +999,7 @@ def _book_fetch(model, log):
 
     def _get(h):
         u = h if h.startswith("http") else base + h.lstrip("./")
+        u = _url_esc(u)
         try:
             req = urllib.request.Request(u, headers=hdrs)
             with urlopen_ssl(req, timeout=15) as r:

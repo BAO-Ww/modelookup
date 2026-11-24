@@ -6711,7 +6711,7 @@ function openBaoView(k){
                   sGen = false;
                   setCancelVis('s', false); clearFail('s');
                   if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
-                  msg('s', '✓ 生成完成 · AI 后台复检中');
+                  msg('s', '✓ 生成完成');
                   if (done) done(true);
                 } else startGen();
               });
@@ -6725,7 +6725,7 @@ function openBaoView(k){
             if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
             if (jb.ok){
               clearFail('s');
-              msg('s', '✓ 生成完成 · AI 后台复检中');
+              msg('s', '✓ 生成完成');
               loadLib();
             } else if (String(jb.err || '').indexOf('已取消') >= 0){
               msg('s', '已取消');
@@ -7412,7 +7412,7 @@ function openSpotView(k){
             genning = false;
             if (jb.ok){
               /* 2026-10-30：四张落盘即收尾（图立刻显示），AI 复检转后台静默跑，不再挡画面 */
-              msg('生成完成 · AI 后台复检中'); loadLib();
+              msg('生成完成'); loadLib();
               /* 生成完自动打开图片文件夹（2026-10-28 用户令） */
               fetch('/api/pubopen', {method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({model: k, sub: '聚光'})});

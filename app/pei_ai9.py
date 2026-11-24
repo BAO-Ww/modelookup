@@ -1057,6 +1057,79 @@ def _sketch_rgba(path, color=None):
         return None
 
 
+def _trace_ink(mask, log=None):
+    """V15 小源尺寸图矢量描摹（2026-11-24 用户令「像素很低就让软件画一个一模一样的
+    高清尺寸图」）：不是 AI 重画、不是超分——轮廓 100% 从二值蒙皮描出来（几何=
+    原图一字不差），approxPolyDP 把像素阶梯切直、弧线归顺，2 倍超采样 fillPoly
+    填实心，调用方 LANCZOS 缩回后线是纯矢量边缘（放大多少倍都利落）。
+    cv2/numpy 缺失或任何异常返回 None → 调用方原样回退二值蒙皮老路（应用环境
+    rapidocr 自带 opencv 必在，此处仍兜底）。"""
+    try:
+        import numpy as np
+        import cv2
+        arr = np.asarray(mask, dtype=np.uint8)
+        if arr.max() < 128:
+            return None
+        res = cv2.findContours(arr, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+        cs, hier = res[-2], res[-1]     # cv2 各代返回元数不同，取末两位通吃
+        if not cs:
+            return None
+        hier = hier[0] if hier is not None else []
+        polys = []
+        for i, c in enumerate(cs):
+            if abs(cv2.contourArea(c)) < 24:    # JPEG 噪点斑直接弃（源尺度 <3px²）
+                continue
+            par = -1
+            try:
+                par = int(hier[i][3])
+            except Exception:
+                pass
+            polys.append((cv2.approxPolyDP(c, 0.8, True), par))
+        if not polys:
+            return None
+        rr = 2
+        h, w = arr.shape[:2]
+        canvas = np.zeros((h * rr, w * rr), np.uint8)
+        for _pass in (0, 1):    # 先填外轮廓再挖洞：洞必须盖在父轮廓之上
+            for ap, par in polys:
+                if (par == -1) == (_pass == 0):
+                    pts = (ap.astype(np.float64) * rr).round().astype(np.int32)
+                    cv2.fillPoly(canvas, [pts], 255 if _pass == 0 else 0)
+        if log:
+            log("尺寸图小源已矢量描摹：%d 轮廓 → %dx%d 超采样"
+                % (len(polys), w * rr, h * rr))
+        return Image.fromarray(canvas, mode="L")
+    except Exception:
+        return None
+
+
+def _rescue_geodesic(solid, weak, reach=180, log=None):
+    """V15.1 浅灰续线（2026-11-25 EC8002-MG3U1 用户质疑「不是按原图描的吗」实锤）：
+    旧 rescue 只收实线周围 7px，跟实线相接的长浅灰段够不着——原图圆是双环+楔形
+    支架（支架从圆右缘指到圆心），内环/楔形/交叠处环段全是浅灰，被 thr140 整体
+    丢弃，输出只剩单环还缺一口。改测地重构：solid 在 weak 约束下逐像素扩散
+    reach 距离，凡与实线连通的浅灰全部收编（几何仍 100% 来自原图墨迹，孤点
+    噪声不连通不收）。cv2 在走快速形态学（收敛即停），缺 cv2 退 PIL 逐步走。"""
+    try:
+        import numpy as np
+        import cv2
+        a = np.asarray(solid, dtype=np.uint8)
+        b = np.asarray(weak, dtype=np.uint8)
+        r = a.copy()
+        k = np.ones((3, 3), np.uint8)
+        for _ in range(max(1, int(reach))):
+            r2 = cv2.bitwise_and(cv2.dilate(r, k), b)
+            if np.array_equal(r2, r):
+                break
+            r = r2
+        return Image.fromarray(r)
+    except Exception:
+        r = solid
+        for _ in range(max(1, int(reach) // 4)):
+            r = ImageChops.darker(r.filter(ImageFilter.MaxFilter(5)), weak)
+        return r
+
+
 def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（2026-10-28 用户令）
     """聚光第 4 张：产品尺寸——底图跟首图/机器参数同款暗色聚光（prep_bg("a")），
     官方尺寸线稿垫白色圆角卡居中；**不带蓝底那排「同时支持」卖点胶囊**。
@@ -1160,33 +1233,131 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
             bb = Image.eval(g, lambda v: 255 - v).getbbox()
             if bb:
                 g = g.crop(bb)
-            # 2026-11-24 二修（BCD-283WLHC357SW 用户令「更糊了，按之前好了的」）：一版
-            # 「超分 1800→缩回 + 软 alpha 上 MaxFilter」被实锤红线全糊——LANCZOS 放大
-            # 再缩小把 JPEG 毛边摊成软裙边，MaxFilter 套在软 alpha 上只把裙边推得更宽
-            # （糊上叠糊，搁板线全成毛边粗条）。终版小源**硬朗化**：源图不放大，
-            # alpha 原生分辨率抽取 → 一次直达最终尺寸 → S 曲线把裙边重新卡硬
-            # （≥170 归实线、≤70 归透明、中段留细 AA）→ MaxFilter 只在卡硬后的
-            # alpha 上膨胀——二值蒙皮上 Max=干净加粗 1px，软蒙皮上 Max=发晕。
-            # 高清源（短边≥900）保持 11-24 保真换色定稿原样不动。
+            _bx0, _by0 = (bb[0], bb[1]) if bb else (0, 0)
+            _txt_boxes = []     # V15.2 被抠掉的数字盒（crop 空间，供卡片字体重印）
+            # 小源尺寸图硬化演进：一版「超分 1800→缩回+软 alpha 上 Max」糊上叠糊（283
+            # 实锤）；二版「直达→S 曲线 170/70→Max」中段 alpha 仍太宽（70~170 全留
+            # 半透粉晕），白卡红线照样发糊（2026-11-24 EC8002-MG3U1 用户令「改红还是
+            # 糊」）。终版**超采样硬化**：放宽 map 抽 alpha（180 全实/250 全透，细灰
+            # 延长线保住——V1/V2 严 map 下阈值一杀就断线，离线对比实锤）→ alpha 放大
+            # 2.6x → 硬阈值二值蒙皮（thr140：JPEG 粉噪全归零；thr110 实锤漏噪点进圆
+            # 面）→ LANCZOS 一次缩到最终尺寸（AA 由高分辨率硬边缘降采样产生，1px
+            # 利落）→ MaxFilter 补线厚——二值蒙皮上 Max=纯加粗不发晕。高清源（短边
+            # ≥900）维持 11-24 保真换色定稿原样不动。
             _small = min(g.size) < 900
-            alpha = g.point(lambda v: 255 if v <= 150
-                            else (0 if v >= 250 else int((250 - v) * 255 // 100)))
+            if _small:
+                alpha = g.point(lambda v: 255 if v <= 180
+                                else (0 if v >= 250 else int((250 - v) * 255 // 70)))
+            else:
+                alpha = g.point(lambda v: 255 if v <= 150
+                                else (0 if v >= 250 else int((250 - v) * 255 // 100)))
             # 宽高双限自适应：限宽 840 + 限高 620 取小——竖长机型（冰箱 1776mm）
             # 线稿按宽缩放会冲出画底（2026-10-28 用户实锤），必须同时夹高度。
             sc = min(840 / max(1, g.width), 620 / max(1, g.height))
             tw = max(1, int(g.width * sc))
             th = max(1, int(g.height * sc))
-            alpha = alpha.resize((tw, th), Image.LANCZOS)
             if _small:
+                _bin = None
                 try:
-                    alpha = alpha.point(lambda v: 255 if v >= 170
-                                        else (0 if v <= 70 else int((v - 70) * 255 // 100)))
-                    alpha = alpha.filter(ImageFilter.MaxFilter(3))   # 卡硬后 1px 干净加粗（仅小源）
+                    _up = 2.6
+                    alpha = alpha.resize((max(2, int(tw * _up)), max(2, int(th * _up))),
+                                         Image.LANCZOS)
+                    # 2026-11-24 五修（用户令「这个就是很糊啊」）：V13 的糊感三个来源
+                    # 一起修——①rescue 170 半透明红=整线深浅不均发虚 → 提 220 后
+                    # 又于 2026-11-25 V15.1 整体换测地重构（旧 rescue 只收实线周
+                    # 7px，双环/楔形支架等长浅灰段全丢，输出圆缺一口——用户质疑
+                    # 「不是按原图描的吗」实锤）；②MaxFilter 加粗放在缩回之后的
+                    # 灰阶蒙皮上=把 LANCZOS 裙边一起推宽 → 移到放大尺度纯二值蒙皮
+                    # 上做（Max5，等效最终 +2px）；③缩回后不再任何处理。
+                    _solid = alpha.point(lambda v: 255 if v >= 140 else 0)
+                    # weak=45 是实测临界：楔形支架下边缘 alpha 恰落 45-49（thr50
+                    # 整条丢、thr45 全出，EC8002 圆区三档离线实锤）；测地约束
+                    # 「与实线连通才收编」保噪不进圆面，故敢压到 45。
+                    _weak = alpha.point(lambda v: 255 if v >= 45 else 0)
+                    # 描摹路线加粗降为 Max3：测地已把晕边收进蒙皮（比 V14 宽
+                    # 1-2px），Max5 再叠就发胖发糊（2026-11-25 用户「更加糊了」）。
+                    _bin = ImageChops.lighter(
+                        _solid, _rescue_geodesic(_solid, _weak)).filter(
+                        ImageFilter.MaxFilter(3))
                 except Exception:
-                    pass
+                    alpha = alpha.point(lambda v: 255 if v >= 140 else 0)
+                if _bin is not None:
+                    # V15.2 用户令「数字不要用官方的，自己加上去」：官方小图上的
+                    # 数字描摹必糊（540px 图上仅 ~20px 高），OCR 定位数字盒 →
+                    # 蒙皮整块抠掉 → 描摹纯线稿 → 卡片同款字体原位重印（锐利度
+                    # =底部参数行同一引擎）。OCR 盒与蒙皮同源（原图坐标减 bbox
+                    # 裁剪偏移）；OCR 失败不抠不印，退回 V15.1 行为。
+                    try:
+                        _kx = _bin.width / max(1, g.width)
+                        _ky = _bin.height / max(1, g.height)
+                        for _b, _t in (kitset._ocr_img_items(si) or []):
+                            _om = re.search(r"\d{3,4}", str(_t))
+                            if not _om:
+                                continue
+                            _xs = [float(p[0]) for p in _b]
+                            _ys = [float(p[1]) for p in _b]
+                            _c = (min(_xs) - _bx0, min(_ys) - _by0,
+                                  max(_xs) - _bx0, max(_ys) - _by0)
+                            _txt_boxes.append(_c + (str(_t),))
+                            ImageDraw.Draw(_bin).rectangle(
+                                [_c[0] * _kx - 14, _c[1] * _ky - 14,
+                                 _c[2] * _kx + 14, _c[3] * _ky + 14], fill=0)
+                    except Exception:
+                        pass
+                    # V15 矢量描摹（2026-11-24 用户令「像素很低就让软件画一个一模一样
+                    # 的高清尺寸图」）：轮廓 100% 从二值蒙皮描出——几何=原图一字不差，
+                    # 不是 AI 重画也不是超分；approxPolyDP 把像素阶梯切直、弧线归顺，
+                    # 超采样填色一次缩回=纯矢量边缘。失败回退 V14 二值蒙皮。
+                    _tr = _trace_ink(_bin)
+                    alpha = _tr if _tr is not None else _bin
+                    if _tr is None:
+                        _txt_boxes = []     # 回退老路时不重印（数字还在线稿里）
+            alpha = alpha.resize((tw, th), Image.LANCZOS)
             white = Image.new("RGBA", (tw, th), (186, 22, 22, 0))   # 官方线稿统一红线
             white.putalpha(alpha)
-            cv.alpha_composite(white, ((W - tw) // 2, 170 + max(0, (600 - th) // 2)))
+            _px, _py = (W - tw) // 2, 170 + max(0, (600 - th) // 2)
+            cv.alpha_composite(white, (_px, _py))
+            # V15.2 数字重印：语义按工程图惯例定位——竖排=高、横排左=宽、横排右=深；
+            # 数值用权威 dims（与底部参数行同源），dims 缺失退 OCR 读数，再缺不印。
+            if _txt_boxes:
+                try:
+                    _kx2 = tw / max(1, g.width)
+                    _ky2 = th / max(1, g.height)
+                    _Wd = dims[0] if dims else None
+                    _Hd = dims[1] if dims else None
+                    _Dd = dims[2] if dims else None
+                    _red = (186, 22, 22, 255)
+                    for _c in _txt_boxes:
+                        _om = re.search(r"(\d{3,4})", _c[4])
+                        _val = int(_om.group(1)) if _om else None
+                        _bw = _c[2] - _c[0]
+                        _bh = _c[3] - _c[1]
+                        _cx = (_c[0] + _c[2]) / 2.0
+                        _cy = (_c[1] + _c[3]) / 2.0
+                        _vert = _bh > _bw * 1.3
+                        if _vert and _Hd:
+                            _val = _Hd
+                        elif (not _vert) and _Wd and _Dd:
+                            _val = _Wd if _cx * _kx2 < tw / 2.0 else _Dd
+                        if not _val:
+                            continue
+                        _sz = int(max(20, min(50, (_bw if _vert else _bh)
+                                                   * (_kx2 if _vert else _ky2) * 1.35)))
+                        _txt = "%dmm" % int(_val)
+                        _ccx = _px + _cx * _kx2
+                        _ccy = _py + _cy * _ky2
+                        if _vert:
+                            _tmp = Image.new("RGBA", (_sz * 6, _sz * 2), (0, 0, 0, 0))
+                            T(ImageDraw.Draw(_tmp), (_tmp.width // 2, _tmp.height // 2),
+                              _txt, _sz, _red, "mm")
+                            _tmp = _tmp.transpose(
+                                getattr(Image, "Transpose", Image).ROTATE_90)
+                            cv.alpha_composite(_tmp, (int(_ccx - _tmp.width / 2),
+                                                      int(_ccy - _tmp.height / 2)))
+                        else:
+                            T(dr, (int(_ccx), int(_ccy)), _txt, _sz, _red, "mm")
+                except Exception:
+                    pass
         except Exception:
             pass
         if dims:

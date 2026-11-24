@@ -148,6 +148,9 @@ def white_bg_wm(w, h, kind="blue", alpha=None):
 
 def stamp_save(im, out, quality=95):
     """兼容旧调用：水印已在底色阶段烘焙（paper_bg_wm/white_bg_wm），
-    这里只原样保存，绝不再叠第二遍。"""
-    im.convert("RGB").save(out, quality=quality)
+    这里只原样保存，绝不再叠第二遍。
+    subsampling=0（2026-11-25 用户「更加糊了」实锤修）：默认 4:2:0 色度抽样把
+    红细线/红字的色分辨率砍半——2px 红线边缘直接糊掉。4:4:4 全色度后红线
+    锐度=亮度同级；体积 +20~30% 换清晰，值。"""
+    im.convert("RGB").save(out, quality=quality, subsampling=0)
     return out

@@ -5949,6 +5949,11 @@ def sync_spot_size(model, info, log=None):
         if os.path.getmtime(si) <= os.path.getmtime(dst) + 2:
             return
         info = info if (info and (info.get("props") or [])) else _load_pub_info(model)
+        if not (info and (info.get("props") or [])):
+            # 2026-11-24 EC8002-MG3U1 实锤：pub 素材库缺档（peiwork 清缓存连带）时
+            # info=None 传进 img_size → _build_cfg 炸被 except 吞 → 聚光出空卡
+            # （标题+免责文案、无线稿）。退 kitset 权威参数副本（props/brand/url 齐）。
+            info = load_kinfo(model)
         import pei_ai9
         pei_ai9.P["brand"] = (info or {}).get("brand") or pei_ai9.P.get("brand") or ""
         pei_ai9.P["model"] = (info or {}).get("model") or model
