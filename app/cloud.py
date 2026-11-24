@@ -494,6 +494,79 @@ _KIT_IMG_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif")
 # 2026-11-16 用户令「所有的都抓取放到 R2 里面」：中关村也进清单（原漏，只传官网/欣盛）
 _KIT_SRC_SUBS = ("官网", "欣盛", "中关村")
 
+
+def result_push_cloud(model, log=None):
+    """成品三件套上云（2026-11-24 用户令「不是全部图，而是数据跟选好的首图跟尺寸
+    上传就好了」）：kitset/<型号>/ 的 info.json（参数数据）+ product.png（选好的
+    首图）+ sizeimg.jpg（尺寸图）→ POST /kitup 存 R2（键 <型号>/...，覆盖同键）。
+    换台电脑生成同型号：_r2_pull 从 R2 拉回三件套直接落盘，首图/尺寸图/参数全
+    现成，不再找图不烧 AI。返回 (n_ok, err|None)。"""
+    log = log or (lambda s: None)
+    try:
+        import kitset as _ks
+        md = _ks.model_dir(model)
+    except Exception as e:
+        return 0, "型号目录不可用：%r" % e
+    _nm = os.path.basename(md.rstrip("\\/"))
+    files = [
+        ("info.json", "application/json"),
+        ("product.png", "image/png"),
+        ("sizeimg.jpg", "image/jpeg"),
+    ]
+    n = 0
+    _err = None
+    for fn, ct in files:
+        fp = os.path.join(md, fn)
+        if not os.path.isfile(fp):
+            continue
+        try:
+            with io.open(fp, "rb") as f:
+                data = f.read()
+            okk, err = kit_push_cloud("%s/%s" % (_nm, fn), data, ct)
+            if okk:
+                n += 1
+                log("成品上云：%s/%s（%.1f KB）" % (_nm, fn, len(data) / 1024.0))
+            else:
+                _err = "%s: %s" % (fn, err)
+                log("⚠ 成品上云失败 %s/%s：%s" % (_nm, fn, err))
+        except Exception as e:
+            _err = "%s: %r" % (fn, e)
+            log("⚠ 成品上云异常 %s/%s：%r" % (_nm, fn, e))
+    if n == 3:
+        log("成品三件套已全部上云（换电脑生成同型号直接复用）")
+    return n, _err
+
+
+def ask_result_upload(model):
+    """生成完成弹确认条（2026-11-24 用户令「跳一个弹窗上传」）：evaluate_js 调前端
+    askResultUpload('<型号>')，用户点「上传」→ js_api.result_upload_yes →
+    result_push_cloud；点「跳过」/不理会（10 秒自动消失）→ 不传。后台线程调用，
+    不阻塞出图流程。"""
+    try:
+        import webview as _wv
+        if not _wv.windows:
+            return
+        _m = str(model or "").replace("\\", "\\\\").replace("'", "\\'")
+        _wv.windows[0].evaluate_js("window.askResultUpload && window.askResultUpload('%s');" % _m)
+    except Exception:
+        pass
+
+
+def result_upload_async(model):
+    """后台线程入口：有登录态才弹确认条（子账号无 /kitup 权限，弹了也传不了）。"""
+    import threading as _th
+
+    def _go():
+        try:
+            if _cloud_token():
+                ask_result_upload(model)
+        except Exception:
+            pass
+
+    _th.Thread(target=_go, daemon=True).start()
+
+
+
 def kit_local_images():
     """本机 kitset 里可上云的抓取图清单：每个型号的 官网/**、欣盛/**（仅图片）
     + 根级 src_*.jpg，返回 [相对键（'型号/官网/x.jpg'，即 R2 键）]。"""

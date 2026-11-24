@@ -605,6 +605,25 @@ def run_app(httpd, port, startup_xlsx=None):
             global _SUB_SEL
             _SUB_SEL = str(u or "")
 
+        def result_upload_yes(self, model=""):
+            """2026-11-24 用户令「跳一个弹窗上传到R2的选好的主图跟尺寸图」：前端确认条
+            点「上传」→ 后台线程传成品三件套（info.json+product.png+sizeimg.jpg）。"""
+            import threading as _th2
+            try:
+                import cloud as _cl2
+                _m = str(model or "").strip()
+                if _m:
+                    _th2.Thread(target=_cl2.result_push_cloud, args=(_m,),
+                                kwargs={"log": lambda s: print("[成品上云]", s)},
+                                daemon=True).start()
+            except Exception:
+                pass
+            return ""
+
+        def result_upload_no(self, model=""):
+            """确认条点「跳过」：什么都不做，前端把条收掉。"""
+            return ""
+
     _dpi()                                  # 必须在量屏幕 / 建窗前：否则算出来是缩放前的尺寸
     # 显式 AppUserModelID（2026-11-12 用户红框实锤）：进程不带 AUMID 时 Win11 任务栏
     # 按 exe 路径缓存按钮图标——安装版 exe 嵌了图标看不出来，源码版直接吃 python.exe

@@ -518,8 +518,15 @@ def fetch_official(model, log, need_imgs=False):
             continue
         if not _pagem and ('leader.com.cn' in url or 'haier.com' in url or 'casarte.com' in url):
             # 2026-11-20 补：官网通用页连「型号」行都没有（335WLLFDEDBXU1 实锤串 342 页），拒
-            log("官网[%s]页面没标型号（通用页嫌疑），弃用换下一个" % s['name'])
-            continue
+            # 2026-11-24 宽容闸（BCD-283WLHC357SW 实锤误杀）：海尔官网详情页改版后
+            # 参数表不再印「型号」行（型号在 title/JS 配置/页面文案里）——参数表没找到
+            # 不再一票拒，扫页面全文：norm 后全文含请求型号 = 页面自报吻合，放行；
+            # 全文都不含 = title/pname 命中只是搜索行数据、内容页是别家机器
+            # （335WLDPGU1 串 342 页实锤），照旧拒。
+            if nm not in norm_model(html):
+                log("官网[%s]页面没标型号（通用页/串页嫌疑），弃用换下一个" % s['name'])
+                continue
+            log("官网[%s]参数表无型号行，页面全文自报吻合放行" % s['name'])
         log("官网[%s]命中：%s / 参数 %d 组" % (s['name'], pname[:30], len(groups)))
         return {'source': '官网', 'brand': s['name'], 'pname': pname, 'price': price or '',
                 'url': url, 'groups': [[g, kv] for g, kv in groups],
@@ -2588,17 +2595,21 @@ def generate(model, kind='l', force=0, log=None):
         # 2026-11-23 用户令（宝窗口新链）：参数=官网→说明书站两层；图=官网→说明书→
         # 欣盛→中关村四层；R2 图库/pubwork/必应/GLM/欣盛读参 全下线。
         # 官网优先（need_imgs=True：云端参数库命中也要打官网拿图）；
-        # 官网缺参数或缺图（或整没命中）才打说明书站全量——官网抓到的不再重复抓。
+        # 说明书站恒打补缺（2026-11-24 用户令「官网数据跟说明书数据合并给AI」）。
         data = fetch_official(model, log, need_imgs=True)
         _book = None
         if not data:
             log("官网没命中，转说明书站兜底")
             data = {'source': '无数据', 'brand': '', 'pname': model, 'price': '',
                     'url': '', 'groups': [], 'sellpoints': [], 'imgs': []}
-        if not data.get('groups') or not (data.get('imgs') or []):
+        # 2026-11-24 用户令「把官网的数据跟说明书的数据合并给AI」（见上）：恒打说明书站
+        if True:
             _book = _book_fetch(model, log)
             if _book:
                 # 参数：官网有的键不覆盖，缺的整组追加（官网优先，说明书补缺）
+                # 2026-11-24 跨源键名归一：官网「总容积(L)」vs 说明书「总容积」字面不同
+                # 但语义相同——比对时剥掉括号段再比，参数集不养语义重复行。
+                _normk = lambda k: re.sub(r"[（(].*?[)）]", "", str(k)).replace(" ", "").strip()
                 if _book.get('rows'):
                     if not data.get('groups'):
                         data['groups'] = [("参数", _book['rows'])]
@@ -2609,8 +2620,8 @@ def generate(model, kind='l', force=0, log=None):
                         for _g, kv in (data.get('groups') or []):
                             if isinstance(kv, (list, tuple)):
                                 for k, _v in kv:
-                                    _have.add(str(k).strip())
-                        _add = [(k, v) for k, v in _book['rows'] if str(k).strip() not in _have]
+                                    _have.add(_normk(k))
+                        _add = [(k, v) for k, v in _book['rows'] if _normk(k) not in _have]
                         if _add:
                             data['groups'].append(("参数", _add))
                             if log:
@@ -2673,9 +2684,24 @@ def generate(model, kind='l', force=0, log=None):
     # 质量闸口径跟蓝底一致：真参数（含不带数字的参数词）都算数，不凭空加严。
     _bp = _blue_params(model)
     if _bp:
-        data['groups'] = [("参数", _bp)]
-        if log:
-            log("聚光文案参数直接用蓝底 set.json 的 %d 条真实参数（不依赖抓取链）" % len(_bp))
+        # 2026-11-24 用户令「把官网的数据跟说明书的数据合并给AI」：蓝底快照从「整体
+        # 覆盖」降为「补缺」——上面官网 groups（改版页闸门修复后含能效等级等 24 条）
+        # + 说明书补缺是最新真源；蓝底 set.json 只是上次蓝底抓取的老快照。覆盖会把
+        # 官网新抓的能效等级/产品尺寸全丢掉（BCD-243WGHC2E7SW 实锤），改为只补
+        # 官网+说明书合并集里没有的键（11-17 用户令「参数够用」的初衷照样保住）。
+        _normk = lambda k: re.sub(r"[（(].*?[)）]", "", str(k)).replace(" ", "").strip()
+        _have = set()
+        for _g, kv in (data.get('groups') or []):
+            if isinstance(kv, (list, tuple)):
+                for k, _v in kv:
+                    _have.add(_normk(k))
+        _add = [(k, v) for k, v in _bp if _normk(k) not in _have]
+        if _add:
+            data['groups'].append(("参数", _add))
+            if log:
+                log("蓝底快照补缺参数 %d 条（官网+说明书合并集之外）" % len(_add))
+        elif log:
+            log("蓝底快照无新增键（官网+说明书合并集已覆盖），不覆盖")
     # 品类补强（2026-11-17 HRF-H57SSEDU1 实锤「家用热水器/电器」）：info.json 的 cat
     # 常是「电器」废词，蓝底 set.json 的 cfg.cat 是抓取链认过的正经品类——直接喂文案，
     # 标题品类词跟蓝底口径一致。

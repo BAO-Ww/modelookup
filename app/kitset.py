@@ -2051,7 +2051,9 @@ def _gather_info_legacy(model, log):
 
     _low_props = len((info or {}).get("props") or []) < 5
 
-    if _miss_gw or _low_props:
+    # 2026-11-24 用户令「官网的文件夹就是放官网抓取的」：force=1 官网层强制重抓
+    #（官网/ 目录可能是旧链错位图，_src_has 只看「有图」会误判已抓）。
+    if _miss_gw or _low_props or force:
 
         try:
 
@@ -2616,7 +2618,7 @@ def _ensure_dims_legacy(info, mdir, img_urls=None, log=None):
 
 
 
-def _gather_info(model, log):
+def _gather_info(model, log, force=0):
     """宝链（2026-11-23 用户令「图片加一个中关村的，参数只抓说明书网站的」）：
     参数 = 官网三站 → 说明书站（两层，别的来源一概不抓）；
     图 = 官网三站 → 说明书站 → 欣盛商城 → 中关村（四层，中关村只补图）；
@@ -2652,7 +2654,10 @@ def _gather_info(model, log):
 
     _miss_gw = not _src_has("官网")
     _low_props = len((info or {}).get("props") or []) < 5
-    if _miss_gw or _low_props:
+    # 2026-11-24 用户令「官网的文件夹就是放官网抓取的」：force=1（完整重出）时官网层
+    # 强制重抓——官网/ 目录里躺着的可能是旧链错位图（说明书示意图，srcmap 来源≠官网），
+    # _src_has 只看「目录里有图」会误判官网已抓、官网参数（含能效等级）永远进不来。
+    if _miss_gw or _low_props or force:
         try:
             data = fetch_official(model, log, need_imgs=True)   # need_imgs：参数库命中也要抓官网图
         except Exception:
@@ -2661,12 +2666,11 @@ def _gather_info(model, log):
         # 2026-10-31 用户令：下载的图按来源分文件夹——候选带来源标签，
         # _pick_prod 落盘时进 官网\ 子目录
         imgs.extend([(u, "官网") for u in data["imgs"] if u])
-    # 说明书站全量（新链第二层）：官网缺参数或缺图、或 sizeimg 还没着落才打——
-    # 官网抓到的图/参不重复抓（2026-11-23 LES50H-AC5 实锤：官网全命中时 book 被跳过，
-    # 尺寸线稿永远进不了候选 → img4 永远手绘；尺寸图官方源头只在说明书）。
-    # _book_fetch 内已有三层防串机（树根比对/参数页型号闸/同系列放行）。
-    if not data or not (data.get("groups") or []) or not (data.get("imgs") or []) \
-            or not os.path.isfile(os.path.join(_mdir_src, "sizeimg.jpg")):
+    # 说明书站全量（新链第二层）：2026-11-24 用户令「把官网的数据跟说明书的数据合并
+    # 给AI」——官网命中也照打（纯接口秒级+本地缓存+三层防串机）：参数补缺（制冷剂/
+    # 防触电/气候类型这些说明书独有键官网参数表没有，BCD-243WGHC2E7SW 实锤 24 vs 16
+    # 各有独有）、官网有图只补尺寸线稿（官方源头只在说明书）。
+    if True:
         try:
             book = _book_fetch(model, log)
         except Exception as e:
@@ -2704,6 +2708,21 @@ def _gather_info(model, log):
             info.setdefault("_book_dim_table", []).extend(
                 t for t in book["dim_table"]
                 if (t.get("node"), tuple(t.get("labels") or ())) not in _have_dt)
+    # 欣盛图集（新链第三层）：docstring 写了四层但实现漏了欣盛——2026-11-24
+    # BCD-243WGHC2E7SW 实锤：dms 官网抓的全是电子说明书页（开门标注图/安装线稿/
+    # 禁忌图标），关门整机实拍一张没有，AI 拼版 8 格全是示意图首图只能选错；欣盛库
+    # 明明有这台（album_urls 7 张 2000px，第 5/7 张就是干净关门整机照）。
+    # 有欣盛子目录不重复抓（与官网同口径）。
+    if not _src_has("欣盛"):
+        try:
+            xs = fetch_xinsheng(model, log)
+            if xs and xs.get("imgs"):
+                imgs.extend([(u, "欣盛") for u in xs["imgs"] if u])
+                if log:
+                    log("欣盛图集 %d 张入候选（第三层）" % len(xs["imgs"]))
+        except Exception as e:
+            if log:
+                log("欣盛图集抓取失败：%r" % (e,))
     if imgs:
         # 大图变体优先（_1200 > 其他 > _600）：透明底机图锁定不比面积，先到先得，
         # 600px 小图先到会顶掉 1200px 大图导致成图发糊（2026-10-22 XQS100 用户实锤）
@@ -2722,19 +2741,24 @@ def _gather_info(model, log):
     # 官网参数并集（2026-10-28 用户令）：pubwork 先到的 props 常缺「尺寸」键
     # （EB100Z35Pro2 官网明摆着 尺寸(宽*高*深)mm=550*1030*570 却没进 props 实锤）——
     # 官网命中的键追加到 props 尾部、不动已有顺序；_parse_dims 按键名找尺寸，补上即出真尺寸
+    # 2026-11-24 用户令「把官网的数据跟说明书的数据合并给AI」：跨源键名归一（剥括号
+    # 段再比）——官网「总容积(L)」vs 说明书「总容积」语义相同不重复收。
+    def _normk(k):
+        return re.sub(r"[（(].*?[)）]", "", str(k)).replace(" ", "").strip()
+
     if (data or {}).get("groups") and info.get("props") is not None:
-        _have = {str(k).strip() for k, _ in (info.get("props") or [])}
+        _have = {_normk(k) for k, _ in (info.get("props") or [])}
         for _g, kv in (data.get("groups") or []):
             for k, v in (kv or []):
                 ks, vs = str(k).strip(), str(v).strip()
-                if ks and vs and ks not in _have:
+                if ks and vs and _normk(ks) not in _have:
                     info["props"].append((ks, vs))
-                    _have.add(ks)
+                    _have.add(_normk(ks))
     # 说明书参数补缺（新链第二层；_book_fetch 内已有防串机 + 同系列放行闸，
     # LES50H/LES60H 一本双型号的容量行已被剥掉）：
     if book and book.get("rows"):
-        _have = {str(k).strip() for k, _v in (info.get("props") or [])}
-        _add = [(str(k), str(v)) for k, v in book["rows"] if str(k).strip() not in _have]
+        _have = {_normk(k) for k, _v in (info.get("props") or [])}
+        _add = [(str(k), str(v)) for k, v in book["rows"] if _normk(k) not in _have]
         if _add:
             info.setdefault("props", []).extend(_add)
             if log:
@@ -3021,9 +3045,9 @@ def _vision_key():
 
 def _ocr_dims3(fp, log=None):
     """本地 OCR 读尺寸图上的 宽/高/深（2026-11-24）：
-    只认**带标签**的数字（宽 370 / 高 960 / 深 370），读不出返回 None。
-    为什么不用 AI：图注条是 a/b/c/d 字母，没有宽高深语义，AI 也只能瞎猜方位
-    （CWC16 实锤宽 599 读成 616），还一等等三分钟（LES60H-AC5 45s→180s+ 实锤）。
+    先认**带标签**的数字（宽 370 / 高 960 / 深 370），读不出退无标签位置分类
+    （_ocr_dims3_pos，海尔系纯数字线稿实锤）。AI 读数不用：图注条是 a/b/c/d 字母，
+    没有宽高深语义 AI 也只能瞎猜方位（CWC16 实锤宽 599 读成 616），还一等等三分钟。
     宁可 pill 不印数字——官方图上本来就印着 a=960mm 那行图注。"""
     t = _ocr_img_text(fp)
     if not t:
@@ -3040,7 +3064,59 @@ def _ocr_dims3(fp, log=None):
         if log:
             log("尺寸数字本地 OCR（带宽高深标签）：%s" % v)
         return (v.get("w") or 0, v.get("h") or 0, v.get("d") or 0)
-    return None
+    return _ocr_dims3_pos(fp, log)
+
+
+def _ocr_dims3_pos(fp, log=None):
+    """无标签位置分类读 宽/高/深（2026-11-24 用户令「每个尺寸图都要加上长宽高」）：
+    海尔系官方线稿只印 1850mm/905mm/617mm 纯数字，没有宽/高/深字样，
+    标签模式读不出 → cfg.dims/size_pills 全空，img_4/聚光尺寸行全空
+    （HRF-H57SSEDU1 实锤）。按 RapidOCR box 位置分类，工程图惯例：
+    竖排数字（box 高>宽×1.3）=高；横排两个 x 小=宽（正视图）、x 大=深（侧视图）；
+    没有竖排时最大值=高。三个全齐才返回，宁缺勿错。
+    HRF-H57SSEDU1 实测：1850mm 竖排 cx133 / 905mm 横排 cx223 / 617mm 横排 cx366。"""
+    items = _ocr_img_items(fp)
+    if not items:
+        return None
+    nums = []   # (val, cx, cy, bw, bh)
+    for box, txt in items:
+        m = re.search(r"(\d{3,4})", str(txt))
+        if not m:
+            continue
+        val = int(m.group(1))
+        if not (300 <= val <= 3000):
+            continue
+        try:
+            xs = [float(p[0]) for p in box]
+            ys = [float(p[1]) for p in box]
+        except Exception:
+            continue
+        nums.append((val, sum(xs) / 4.0, sum(ys) / 4.0,
+                     max(xs) - min(xs), max(ys) - min(ys)))
+    # 同值多框去重（同一数字印两处只算一次，保最靠上的框）
+    seen = {}
+    for v, cx, cy, bw, bh in nums:
+        if v not in seen or cy < seen[v][1]:
+            seen[v] = (cx, cy, bw, bh)
+    vlist = [(v, c[0], c[1], c[2], c[3]) for v, c in seen.items()]
+    if len(vlist) < 3:
+        return None
+    vert = [x for x in vlist if x[4] > x[3] * 1.3]
+    if vert:
+        h = max(vert, key=lambda x: x[0])[0]
+        horiz = sorted([x for x in vlist if not (x[4] > x[3] * 1.3)],
+                       key=lambda x: x[1])
+    else:
+        h = max(vlist, key=lambda x: x[0])[0]
+        horiz = sorted([x for x in vlist if x[0] != h], key=lambda x: x[1])
+    if len(horiz) < 2:
+        return None
+    w, d = horiz[0][0], horiz[-1][0]
+    if not (w and h and d):
+        return None
+    if log:
+        log("尺寸数字本地 OCR（无标签位置分类）：%s" % ((w, h, d),))
+    return (w, h, d)
 
 
 def _dims_from_book_table(tables, model):
@@ -3712,32 +3788,48 @@ def _ai_montage_size_screen(paths_, log=None):
         return None
 
 
-_OCRA = {"eng": None, "tried": False, "txt": {}}
+_OCRA = {"eng": None, "tried": False, "txt": {}, "items": {}}
+
+
+def _ocr_img_items(fp):
+    """RapidOCR 原始 items（[box四点, text]），按（路径 + mtime）缓存。
+    _ocr_img_text（拼文本）和 _ocr_dims3_pos（box 位置分类）共用同一份推理，
+    同一张图只跑一次 OCR。没装/失败返回 []。"""
+    try:
+        _k = (fp, os.path.getmtime(fp))
+    except Exception:
+        return []
+    if _k in _OCRA["items"]:
+        return _OCRA["items"][_k]
+    items = []
+    if not _OCRA["tried"]:
+        _OCRA["tried"] = True
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            _OCRA["eng"] = RapidOCR()
+        except Exception:
+            _OCRA["eng"] = None
+    if _OCRA["eng"] is not None:
+        try:
+            _res, _ = _OCRA["eng"](fp)
+            items = [(x[0], str(x[1])) for x in (_res or [])]
+        except Exception:
+            items = []
+    _OCRA["items"][_k] = items
+    return items
 
 
 def _ocr_img_text(fp):
     """本地 OCR 单图取文本（RapidOCR，纯本地、不烧 AI 配额）。没装/失败返回 ""。
-    结果按（路径 + mtime）缓存，同一张图重跑不重复推理。"""
+    结果按（路径 + mtime）缓存，同一张图重跑不重复推理（推理在 _ocr_img_items）。"""
     try:
         _k = (fp, os.path.getmtime(fp))
     except Exception:
         return ""
     if _k in _OCRA["txt"]:
         return _OCRA["txt"][_k]
-    t = ""
-    try:
-        if not _OCRA["tried"]:
-            _OCRA["tried"] = True
-            try:
-                from rapidocr_onnxruntime import RapidOCR
-                _OCRA["eng"] = RapidOCR()
-            except Exception:
-                _OCRA["eng"] = None
-        if _OCRA["eng"] is not None:
-            _res, _ = _OCRA["eng"](fp)
-            t = " ".join(str(x[1]) for x in (_res or []))
-    except Exception:
-        t = ""
+    items = _ocr_img_items(fp)
+    t = " ".join(x[1] for x in items)
     _OCRA["txt"][_k] = t
     return t
 
@@ -3755,10 +3847,22 @@ def _ocr_size_nums(fp, log=None):
     flat = re.sub(r"\s+", "", t)
     mm = [int(x) for x in re.findall(r"(\d{2,4})(?:mm|毫米|MM|Mm)", flat)]
     if not mm:
-        # 有些线稿 mm 在数字前面或单独一行：只认有尺寸语义标签的 3~4 位数
+        # 有些线稿 mm 在数字前面或单独一行：只认有尺寸语义标签的 3~4 位数。
+        # 2026-11-24 大坑：裸数字匹配必须用**未去空格**原文 t——flat 粘连后
+        # "535 602 1560"→"5356021560"，(?<!\d)(\d{3,4})(?!\d) 全串无匹配
+        # （BCD-243WGHC2E7SW 实锤：OCR 明明读到 3 条数字却被判死，尺寸图退化手绘）。
         if any(k in flat for k in ("产品尺寸", "外形尺寸", "整机尺寸", "安装尺寸", "尺寸示意")):
-            mm = [int(x) for x in re.findall(r"(?<!\d)(\d{3,4})(?!\d)", flat)
+            mm = [int(x) for x in re.findall(r"(?<!\d)(\d{3,4})(?!\d)", t)
                   if 50 <= int(x) <= 2500]
+        else:
+            # 2026-11-24 BCD-243WGHC2E7SW 实锤：peiwork 缓存的真尺寸线稿（535/602/1560）
+            # 数字裸印不带 mm、图上也没有「产品尺寸」标题——旧口径双不沾判死，直采
+            # 失败尺寸图退化手绘。补口径：≥3 个 50~2500 的独立数字也认（随机说明书页
+            # 凑不齐 3 个都落在合理尺寸区间的数字；页码/条码数字个位数多）。
+            mm = [int(x) for x in re.findall(r"(?<!\d)(\d{3,4})(?!\d)", t)
+                  if 50 <= int(x) <= 2500]
+            if len(mm) < 3:
+                mm = []
     if len(mm) >= 2:
         return mm
     return []
@@ -3957,7 +4061,7 @@ def _rescue_sizeimg_official(mdir, dims=None, log=None):
 
 
 def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=None,
-               size_urls=(), size_table=(), chain="book"):
+               size_urls=(), size_table=(), chain="book", force=0):
     """机图：①软件图库（payload imgs / 欣盛 ximg，与卡片同源）②抓取链候选做
     「边框同色+泛洪抠底」选抠出主体最大且落地的。官网尺寸线框图顺带识别存
     sizeimg.jpg 给 img4。横幅/场景图/拼图/悬浮创意图自动淘汰。"""
@@ -3973,96 +4077,30 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
     # 落盘后 sizeimg 还没出时，流程会掉进 AI/软件图库选图把 product.png 覆写。
     # 手工图一锤定音——机器图后续 AI/图库/启发式一律不再跑（尺寸图逻辑照常往下走）。
     have_prod = bool(_man_prod)
-    # ① AI 选图先行（2026-10-29 用户令「蓝底也跟聚光一样会选好的图」）：
-    # 复用聚光/发布图同款视觉选图（pei_core.zhipu_pick_images，缓存 _ai_pick_v5.json
-    # 与聚光共享——同一台机器两边不重复烧视觉额度），取 front（正面整机）抠底。
-    # 顺序教训（CWB12-27BKU1 实锤）：原来「软件图库」排在 AI 前面，图库里的开门
-    # 内部照直接当选，AI 根本轮不到——聚光用官网关门整机照、蓝底却拿开门图。
-    # 现在 AI 先挑（有缓存零成本），挑不中/AI 不可用/候选不足 → 退图库，再退启发式。
-    if not have_prod:
+    # 2026-11-24 BCD-243WGHC2E7SW 实锤：写文案链缓存的 peiwork/<型号>/sizeimg.jpg
+    # 就是真尺寸线稿，但蓝底链候选 40 席按字节排队（官网 38 张全占），75KB 的它永远
+    # 摸不到席位 → 尺寸图退化手绘兜底。强信号直采：缓存里有就先 OCR 验证，读到
+    # 毫米数直接落 kitset/sizeimg.jpg（0 次 AI）。
+    if not have_size:
         try:
-            import pubwork as _pw
-            _key = _pw._ai_key()
-            if _key:
-                import pei_core as _pc
-                _src = os.path.join(_pw.sroot(), norm_model(model) or model)
-                if os.path.isdir(_src):
-                    _pick = _pc.zhipu_pick_images(_key, _src, kind or "", log=log)
-                    # front 被把关拦掉时退 angle（prompt 契约里 angle 同样是关门整机照，
-                    # 2026-11-03 XQGL120-L732EH：front=海报被拦后启发式锁了开门透明图，
-                    # 不如 AI 选好的关门角度照）
-                    for _role in ("front", "angle"):
-                        if not (_pick and _pick.get(_role)):
-                            continue
-                        _fp = os.path.join(_src, _pick[_role])
-                        if not os.path.isfile(_fp):
-                            continue
-                        # 把关（2026-11-03 用户实锤 XQGL120-L732EH：AI 把欣盛带价签的
-                        # 促销海报选成 front 直接落 product.png，启发式根本没轮到跑）。
-                        # 判定用双条件：全图高饱和>0.08 且 底部价签条>0.4 才是海报——
-                        # 电视/广告机的彩屏壁纸会拉高全图（55A30 全图 0.31）但底条中性
-                        # （≤0.21），单看全图会误杀（该海报全图 0.162、底条 0.855，
-                        # 干净产品照全图 ≤0.001）。不过关弃用，front 拦了退 angle 再试。
-                        try:
-                            _imf = Image.open(_fp)
-                            _sf = _sat_frac(_imf)
-                            _bs = _bottom_strip_sat(_imf)
-                        except Exception:
-                            _sf, _bs = 0.0, 0.0
-                        if _sf > 0.08 and _bs > 0.4:
-                            if log:
-                                log("AI 选图 %s=%s 彩色占比 %.0f%%/底条 %.0f%%——促销海报/价签类，弃用%s"
-                                    % (_role, _pick[_role], _sf * 100, _bs * 100,
-                                       "，退试 angle" if _role == "front" else "走启发式重选"))
-                            continue
-                        # 特写把关（2026-11-04 用户令「AI选图彻底乱套了」：XQG110-HBLEU5YE1
-                        # 把洗涤剂抽屉特写当选 front——视觉模型只看「有没有 Haier 洗衣机」，
-                        # 分不清整机照和局部特写。像素判定：主体贴左/右/顶边=特写，弃用）
-                        if _closeup_frac(_imf):
-                            if log:
-                                log("AI 选图 %s=%s 主体贴满画布——局部/部件特写，不是整机照，弃用%s"
-                                    % (_role, _pick[_role],
-                                       "，退试 angle" if _role == "front" else "走启发式重选"))
-                            continue
-                        # 二次复核（像素判定对深色渐变背景特写无效——泛洪抠不透——
-                        # 把选中的图单独发一遍视觉模型问「整机/特写」，单图二分准得多；
-                        # None=模型不可用/废答案，不拦照走，行为与加复核前一致）
-                        try:
-                            import pei_core as _pc2
-                            _whole = _pc2.zhipu_verify_whole(_key, _fp, log=log)
-                        except Exception:
-                            _whole = None
-                        if _whole is False:
-                            if log:
-                                log("AI 选图 %s=%s 复核判定局部特写，弃用%s"
-                                    % (_role, _pick[_role],
-                                       "，退试 angle" if _role == "front" else "走启发式重选"))
-                            continue
-                        _rescue_prod(Image.open(_fp), log).save(picked)
-                        have_prod = True
-                        _picked_one = _pick[_role]
-                        if log:
-                            log("机图用 AI 选图（%s=%s，与聚光同源）" % (_role, _pick[_role]))
-                        break
-        except Exception as _e:
-            if log:
-                log("AI 选图跳过：%r" % (_e,))
-    # ② 软件图库兜底（与卡片同源的审过图；AI 没给出 front 时才用）。
-    # 质量门（2026-11-03 XQGL120-L732EH 实锤）：图库图常只有 400px，超分再锐化也糊；
-    # 小图先记着当备胎，让后面的启发式先挑抓取大图（欣盛 2000px 干净整机照），
-    # 启发式全军覆没才轮到小图库图（循环后 fallback）。
-    _lib_fallback = None
-    if not have_prod:
-        lib = _library_img(model)
-        if lib and min(lib.size) >= 600:
-            _rescue_prod(lib, log).save(picked)
-            have_prod = True
-            if log:
-                log("机图用软件图库（与卡片同款）")
-        elif lib:
-            _lib_fallback = lib
-            if log:
-                log("图库图只有 %dpx，先记着备胎，启发式先挑抓取大图" % min(lib.size))
+            import pubwork as _pw0
+            _psize = os.path.join(_pw0.sroot(), norm_model(model) or model, "sizeimg.jpg")
+            if os.path.isfile(_psize):
+                _flat_white(Image.open(_psize)).save(sizeimg, quality=92)
+                if _ocr_size_nums(sizeimg):
+                    have_size = True
+                    if log:
+                        log("尺寸图：写文案链缓存 sizeimg.jpg OCR 读到毫米数，直接采用")
+                else:
+                    try:
+                        os.remove(sizeimg)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    # 2026-11-24 用户令「先跑代码选图，过了那个再给 AI」：原 2026-10-29「AI 选图
+    # 先行」块整体后移到启发式循环之后（见函数尾收尾段）——代码选图（泛洪抠底/
+    # 透明底锁定）先跑，选出/选不出都轮完代码，AI 才介入（把关在先，海选兜底）。
     # ② 候选源：写文案已生成的官方图（copy/<型号>/img_*.jpg）优先入队，再接抓取链 URL。
     # 没机图就选机图；有机图只找官网尺寸线框图
     srcs = []
@@ -4116,10 +4154,18 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             return "file" if os.path.isfile(s) else "url"
         except Exception:
             return "url"
-    srcs += [(_ckind(u), u, t) for it in (img_urls or []) for u, t in
-             [(it if isinstance(it, tuple) else (it, "其他"))]]
+    # 2026-11-24 BCD-243WGHC2E7SW 实锤：img_urls（URL 候选）追加在 srcs 尾部，而
+    # 40 席按列表顺序消耗——copy 8 + 官网 38 + 说明书 8 就吃满，欣盛 2000px 关门
+    # 整机照排在尾部永远轮不到，首图只能从说明书示意图里矬子拔将军。拆两段：
+    # 欣盛（本轮抓取链强信号新源）提到最前，其余 URL 保持尾部。
+    _xs_part = [(_ckind(u), u, t) for it in (img_urls or []) for u, t in
+                [(it if isinstance(it, tuple) else (it, "其他"))] if t == "欣盛"]
+    _rest_part = [(_ckind(u), u, t) for it in (img_urls or []) for u, t in
+                  [(it if isinstance(it, tuple) else (it, "其他"))] if t != "欣盛"]
+    srcs = _xs_part + srcs + _rest_part
     best = None   # (score, PIL image)
     _trans_fallback = [None]   # 透明底小图暂存路径（等更大的变体）
+    _trans_lock = [None]       # (面积, crop, url) 透明底大图候选——循环后与泛洪 best 同走 AI 把关
     _ai_cand = []   # 尺寸图 AI 复核候选（本地路径，启发式漏判时商汤/GLM 兜底认）
     _cand_md5 = set()  # 候选去重（2026-11-12：官网同图两份会占满 12 格/双倍额度）
     _ai_rej = set()  # 2026-10-31：已由 AI 明确否掉的图，别在兜底循环里再烧一次额度
@@ -4200,21 +4246,34 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 if _fh and _fh not in _cand_md5:
                     _cand_md5.add(_fh)
                     _ai_cand.append(fp if kind == "url" else u)
-            # 官方透明底图（alpha 真透明）= 最佳机图。≥800px 直接锁；小图先记着，
-            # 后面可能有同款 _1200 大变体（XQS100 600px 先到顶掉大图导致成图糊，实锤）
+            # 官方透明底图（alpha 真透明）= 最佳机图候选。2026-11-24 BCD-243WGHC2E7SW
+            # 实锤：嵌门安装示意线框（透明 PNG 1524×1413）撞上「≥800px 直接锁定」
+            # 当了首图——透明底≠整机照。现在只记候选（面积取大），循环后与泛洪 best
+            # 同走「AI 看对不对」把关，过了才落盘；小图仍走备胎暂存
+            # （XQS100 600px 先到顶掉大图导致成图糊，实锤）。
             rgba = im.convert("RGBA")
             alo, _ = rgba.split()[3].getextrema()
             if alo < 250 and not have_prod:
                 bbox = rgba.split()[3].getbbox()
                 if bbox and (bbox[2] - bbox[0]) >= 200 and (bbox[3] - bbox[1]) >= 300:
+                    # 文档图闸（2026-11-24 BCD-243WGHC2E7SW 实锤）：官网 33.png 参数表
+                    # 是「透明底 PNG」且 bbox 铺满全页，透明底收录后 AI 把关还随机误判
+                    # 「整机照」→ 参数表当了首图。bbox 占比 >80% 的透明图是参数表/
+                    # 文档/长图特征（整机实拍照四周有留白），直接弃。
+                    _fill = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) / float(w * h)
+                    if _fill > 0.8:
+                        if log:
+                            log("候选%d 透明底内容铺满全页（%.0f%%）——参数表/文档图，弃"
+                                % (n, _fill * 100))
+                        continue
                     crop = rgba.crop(bbox)
                     if min(w, h) >= 800:
-                        _rescue_prod(crop, log).save(picked)
-                        have_prod = True
-                        if kind == "url":
-                            picked_url = u
-                        if log:
-                            log("候选%d 官方透明底图，直接锁定" % n)
+                        _sc = crop.size[0] * crop.size[1]
+                        if not _trans_lock[0] or _sc > _trans_lock[0][0]:
+                            _trans_lock[0] = (_sc, crop, u if kind == "url" else "")
+                            if log:
+                                log("候选%d 官方透明底 %dx%d，记候选待 AI 把关"
+                                    % (n, crop.size[0], crop.size[1]))
                         continue
                     if not _trans_fallback[0]:
                         tp = os.path.join(mdir, "trans_fallback.png")
@@ -4247,26 +4306,126 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
         except Exception as e:
             if log:
                 log("候选%d 处理失败：%s" % (n, e))
+    _lib_fallback = None
     if not have_prod:
-        # 启发式 best 也过一遍整机/特写复核（2026-11-04）：抽屉特写能骗过像素启发式
-        # （深灰渐变背景泛洪抠不透、bbox 不贴边），AI 复核单图二分兜住
-        if best:
+        # ① 代码选图产出的候选（透明底锁定优先、泛洪 best 次之）→ 给 AI 看对不对
+        # （2026-11-24 用户令「选出再把选出的给AI看对不对，不对就把所有的图片拼成
+        # 一张给AI选」；原 2026-10-29「AI 选图先行」作废——AI 从第一关海选退到代码
+        # 选图之后当裁判）。裁判问句（v3）含关门/标注图/线框示意判定：开门功能
+        # 标注图（BCD-243WGHC2E7SW 实锤）与嵌门示意线框都在这被拦下。
+        # None=模型不可用：不拦照走（与既有行为一致）。
+        _cand = None           # (PIL 图, url, 来源名)
+        if _trans_lock[0]:
+            _cand = (_trans_lock[0][1], _trans_lock[0][2], "官方透明底")
+        elif best:
+            _cand = (best[1], best[2], "泛洪抠底")
+        # 依次受审：透明底被毙退泛洪 best，泛洪也被毙才拼图海选
+        while _cand is not None:
             try:
                 import pubwork as _pwk
                 import pei_core as _pck
-                _w = _pck.zhipu_verify_whole(_pwk._ai_key(), im=best[1], log=log)
+                _w = _pck.zhipu_verify_whole(_pwk._ai_key(), im=_cand[0], log=log)
             except Exception:
                 _w = None
-            if _w is False:
+            if _w is not False:      # 通过 或 模型不可用（不拦照走，与既有行为一致）
+                break
+            if log:
+                log("代码候选（%s）AI 判不对，弃用" % _cand[2])
+            if _cand[2] == "官方透明底" and best:
+                _cand = (best[1], best[2], "泛洪抠底")   # 透明底被毙，退试泛洪
+            else:
+                _cand = None                             # 全毙 → 走拼图海选
+        if _cand:
+            _rescue_prod(_cand[0], log).save(picked)
+            if _cand[1]:
+                picked_url = _cand[1]
+            if log:
+                log("机图用代码选图（%s），AI 把关通过" % _cand[2])
+        # ② 代码选图无果/全被毙 → 所有的图片拼成一张给 AI 选（zhipu_pick_images
+        #    拼版点名，与聚光同源、缓存 _ai_pick_v7.json 共享不重复烧额度）。
+        #    把关三道原样保留：海报双条件、特写像素判定、二次复核；front 拦了退 angle
+        #    （2026-11-03 XQGL120-L732EH 教训：front=海报被拦后不如 AI 选好的关门照）。
+        if not have_prod and not _cand:
+            try:
+                import pubwork as _pwa
+                _key = _pwa._ai_key()
+                if _key:
+                    import pei_core as _pca
+                    _src = os.path.join(_pwa.sroot(), norm_model(model) or model)
+                    if os.path.isdir(_src):
+                        # 2026-11-24：海选候选池扩到 kitset 四子目录（官网/欣盛/中关村/
+                        # 说明书）——欣盛 2000px 关门整机照在 kitset/欣盛/ 里，只看
+                        # peiwork 的拼版根本见不到它（BCD-243WGHC2E7SW 实锤）。
+                        _extra_dirs = tuple(os.path.join(mdir, _d) for _d in _SRC_TAG_DIRS)
+                        _pick = _pca.zhipu_pick_images(_key, _src, kind or "", log=log,
+                                                       extra_dirs=_extra_dirs)
+                        for _role in ("front", "angle"):
+                            if not (_pick and _pick.get(_role)):
+                                continue
+                            _fp = os.path.join(_src, _pick[_role])
+                            if not os.path.isfile(_fp):
+                                continue
+                            # 海报把关（2026-11-03 XQGL120-L732EH：带价签促销海报被选成
+                            # front——双条件：全图高饱和>0.08 且 底部价签条>0.4；
+                            # 55A30 彩屏壁纸全图 0.31 但底条中性 ≤0.21，单看全图会误杀）
+                            try:
+                                _imf = Image.open(_fp)
+                                _sf = _sat_frac(_imf)
+                                _bs = _bottom_strip_sat(_imf)
+                            except Exception:
+                                _sf, _bs = 0.0, 0.0
+                            if _sf > 0.08 and _bs > 0.4:
+                                if log:
+                                    log("AI 拼图海选 %s=%s 彩色 %.0f%%/底条 %.0f%%——海报/价签类，弃用%s"
+                                        % (_role, _pick[_role], _sf * 100, _bs * 100,
+                                           "，退试 angle" if _role == "front" else ""))
+                                continue
+                            # 特写把关（2026-11-04 XQG110-HBLEU5YE1 洗涤剂抽屉特写实锤）
+                            if _closeup_frac(_imf):
+                                if log:
+                                    log("AI 拼图海选 %s=%s 主体贴满画布——局部/部件特写，弃用%s"
+                                        % (_role, _pick[_role],
+                                           "，退试 angle" if _role == "front" else ""))
+                                continue
+                            # 二次复核（像素判定对深色渐变背景特写无效——泛洪抠不透——
+                            # 单独发一遍问「整机/特写」；None=模型不可用不拦照走）
+                            try:
+                                _whole = _pca.zhipu_verify_whole(_key, _fp, log=log)
+                            except Exception:
+                                _whole = None
+                            if _whole is False:
+                                if log:
+                                    log("AI 拼图海选 %s=%s 复核判定局部特写，弃用%s"
+                                        % (_role, _pick[_role],
+                                           "，退试 angle" if _role == "front" else ""))
+                                continue
+                            _rescue_prod(Image.open(_fp), log).save(picked)
+                            have_prod = True
+                            if log:
+                                log("机图用 AI 拼图海选（%s=%s，与聚光同源）" % (_role, _pick[_role]))
+                            break
+            except Exception as _e:
                 if log:
-                    log("启发式机图（%s）复核判定局部特写，弃用，走备胎" % (best[2] or "本地候选"))
-                best = None
-        if not best:
+                    log("AI 选图跳过：%r" % (_e,))
+        # ③ 图库兜底（启发式+AI 都无果才轮到；与卡片同源的审过图）。
+        # 质量门（2026-11-03 XQGL120-L732EH 实锤）：图库图常只有 400px，超分再锐化也糊
+        if not have_prod:
+            lib = _library_img(model)
+            if lib and min(lib.size) >= 600:
+                _rescue_prod(lib, log).save(picked)
+                have_prod = True
+                if log:
+                    log("机图用软件图库（与卡片同款）")
+            elif lib:
+                _lib_fallback = lib
+                if log:
+                    log("图库图只有 %dpx，记备胎" % min(lib.size))
+        # ④ 备胎链（透明底小图 → 图库小图 → 预置成品）
+        if not have_prod:
             if _trans_fallback[0]:
                 _rescue_prod(Image.open(_trans_fallback[0]), log).save(picked)
                 return picked
             if _lib_fallback is not None:
-                # 启发式没挑到大图，才轮到小图库图备胎（超分救清晰度）
                 _rescue_prod(_lib_fallback, log).save(picked)
                 if log:
                     log("启发式无果，机图回退软件图库小图（%dpx）" % min(_lib_fallback.size))
@@ -4274,9 +4433,6 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             if os.path.isfile(picked):
                 return picked      # 预置机图（人工救回的成品），直接用
             return None
-        _rescue_prod(best[1], log).save(picked)
-        if best[2]:
-            picked_url = best[2]
     if not have_size and _ai_cand and not size_urls:
         # 2026-11-23 用户令「跑半个小时」根治：有官方尺寸线稿（_book_size_urls）时
         # 直接走下面合成/采用路径，跳过这轮最多 12 张 AI 单张终审——官方线稿是
@@ -4483,6 +4639,15 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
         import cloud as _cl
         if getattr(_cl, "_cloud_token", lambda: "")():
             _th.Thread(target=_cl.kit_push_model, args=(model, log), daemon=True).start()
+    except Exception:
+        pass
+    # 2026-11-24 用户令「跳一个弹窗上传到R2的选好的主图跟尺寸图，换台电脑生成就
+    # 可以直接用了，不要找图」：出图完成弹前端确认条（有登录态才弹），用户点头
+    # 才传成品三件套（info.json/参数 + product.png/首图 + sizeimg.jpg/尺寸图），
+    # 不传抓取过程图。换台电脑 _r2_pull 拉回三件套直接复用，不再找图。
+    try:
+        import cloud as _cl2
+        _cl2.result_upload_async(model)
     except Exception:
         pass
     return picked
@@ -5249,15 +5414,36 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
     # 跟官方「整机外形尺寸(宽x深x高)」行同卡打架——带标签行在场时猜序行不进参数卡
     _labeled_in = any("外形尺寸" in str(k) and "宽" in str(k) and "高" in str(k)
                       for k, _ in (info.get("props") or []))
+    # 2026-11-24 用户令「文案里要有能效等级」：官网+说明书合并后 props 是「缓存在前、
+    # 官网键追加在尾」，傻取前 8 条全是说明书键——能效等级/变频/风冷这些核心卖点
+    # 参数永远挤不进参数卡（BCD-243WGHC2E7SW 实锤重出后 params 还是纯说明书 8 条）。
+    # 改两段式：核心卖点键（能效/变频/风冷/压缩机/控温/气候…）先挑出来排最前，
+    # 其余按原序补到 8 条。
+    _PRIORITY_KEYS = ("能效", "变频", "定频", "风冷", "制冷方式", "控温方式",
+                      "压缩机", "气候类型", "防触电")
+    _pool = []
     for k, v in (info.get("props") or []):
         ks, vs = str(k), str(v)
         if not vs or any(x in ks for x in _SKIP_KEYS):
             continue
         if _labeled_in and ks in ("宽度", "高度", "深度", "宽", "高", "深"):
             continue
-        rows.append((ks, vs))
+        _pool.append((ks, vs))
+    _seen_k = set()
+    for pk in _PRIORITY_KEYS:
         if len(rows) >= 8:
             break
+        for k, v in _pool:
+            if pk in k and k not in _seen_k:
+                rows.append((k, v))
+                _seen_k.add(k)
+                break
+    for k, v in _pool:
+        if len(rows) >= 8:
+            break
+        if k not in _seen_k:
+            rows.append((k, v))
+            _seen_k.add(k)
     # 尺寸：参数没有时查多方核实过的已知库（360WDCL=宽630×高1905×深680，ZOL/太平洋/天马三源一致）；
     # 都没有就不标数字——瞎标 (500,800,500) 是造假（2026-10-22 自查砍掉）
     dims = _parse_dims(pd) or _KNOWN_DIMS.get(model) or _KNOWN_DIMS.get(norm_model(model) or "")
@@ -5868,7 +6054,7 @@ def generate(model, force=0, log=None, chain="book"):
         info, img_urls = _ensure_dims_legacy(info, mdir, img_urls, log)
     else:
         log("抓参数/机图（官网→说明书）…")
-        info, img_urls = _gather_info(model, log)
+        info, img_urls = _gather_info(model, log, force=1 if force else 0)
         # 尺寸补漏（2026-10-29 用户令「一个机器怎么可能没有尺寸」；2026-11-23 新链：
         # 中关村下线，缺尺寸键改问说明书站——详见 _ensure_dims）。
         info, img_urls = _ensure_dims(info, mdir, img_urls, log)
@@ -5881,7 +6067,8 @@ def generate(model, force=0, log=None, chain="book"):
                       kind=(info or {}).get("kind") or (info or {}).get("cat") or "",
                       want_dims=_want,
                       size_urls=tuple((info or {}).get("_book_size_urls") or ()),
-                      size_table=tuple((info or {}).get("_book_dim_table") or ()))
+                      size_table=tuple((info or {}).get("_book_dim_table") or ()),
+                      force=1 if force else 0)
     if not prod and zimgs:
         log("中关村图单独再试一轮…")
         prod = _pick_prod(model, zimgs, mdir, log, want_dims=_want, chain="legacy")

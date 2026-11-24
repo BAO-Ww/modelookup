@@ -1160,18 +1160,21 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
             bb = Image.eval(g, lambda v: 255 - v).getbbox()
             if bb:
                 g = g.crop(bb)
+            # 2026-11-23 用户令「尺寸图线条太浅，最好改红色」。第一版 MaxFilter
+            # 加粗被实锤「红的都糊了」；第二版 238 硬阈值又被实锤「改成红色改糊了」
+            # （HRF-H57SSEDU1）：238 把 150~207 的浅灰线全部拉成满红 → 线宽膨胀、
+            # 小字糊成红团。终版**保真换色**：只把背景（≥250）压透明，线条灰阶
+            # 原样作 alpha（粗细=源图线宽、AA 边缘保留），LANCZOS 只放大 alpha
+            # ——红线锐度对齐蓝底黑线版（新旧对比图实锤 2026-11-24）。
+            alpha = g.point(lambda v: 255 if v <= 150
+                            else (0 if v >= 250 else int((250 - v) * 255 // 100)))
             # 宽高双限自适应：限宽 840 + 限高 620 取小——竖长机型（冰箱 1776mm）
             # 线稿按宽缩放会冲出画底（2026-10-28 用户实锤），必须同时夹高度。
             sc = min(840 / max(1, g.width), 620 / max(1, g.height))
             tw = max(1, int(g.width * sc))
             th = max(1, int(g.height * sc))
-            g = g.resize((tw, th), Image.LANCZOS)
-            # 2026-11-23 用户令「尺寸图线条太浅，最好改红色」→ 首版 MaxFilter 加粗
-            # 被用户实锤「红的都糊了」：加粗晕边 + 硬阈值太低只逮到深线。
-            # 终版（源图灰度实锤：线体 150~235、AA 235~250、背景 250+）：
-            # 阈值 238 全线拉实 + 窄幅渐变（14 级）保锐利边缘，不加粗不晕
-            alpha = g.point(lambda v: 255 if v < 238 else (max(0, (252 - v) * 255 // 45)))
-            white = Image.new("RGBA", g.size, (186, 22, 22, 0))   # 官方线稿统一红线
+            alpha = alpha.resize((tw, th), Image.LANCZOS)
+            white = Image.new("RGBA", (tw, th), (186, 22, 22, 0))   # 官方线稿统一红线
             white.putalpha(alpha)
             cv.alpha_composite(white, ((W - tw) // 2, 170 + max(0, (600 - th) // 2)))
         except Exception:

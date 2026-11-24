@@ -6598,7 +6598,12 @@ function openBaoView(k){
       setCancelVis('k', false); clearFail('k');
       if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
       msg('k', res && res.cached ? '缓存秒出' : '✓ 蓝底四张完成');
-      showK();
+      /* 2026-11-24 用户问「怎么又要我上传」：生成中途开窗时 img_1 未出 → K_MISS=true，
+         之后 img_1 出来了窗口还停在「上传主图」（完成回调只重画不重判）。
+         完成回调重探一次 img_1 再画，图在就自动换回正常格子。 */
+      fetch(kImg(1), {cache: 'no-store'})
+        .then(function(r){ K_MISS = !r.ok; showK(); })
+        .catch(function(){ showK(); });
       KB = res; renderKCopy(res);   // 蓝底跑完文案同步刷（2026-11-04 两套文案回归）
       if (done) done();
     }, function(err){
@@ -10712,6 +10717,46 @@ if (DATA){
 }
 });
 })();
+
+/* 2026-11-24 用户令「跳一个弹窗上传到R2的选好的主图跟尺寸图」：出图完成后后端
+   evaluate_js 调 askResultUpload('<型号>')，底部弹确认条。点头传三件套
+   （info.json 参数 + product.png 首图 + sizeimg.jpg 尺寸图）上 R2，换台电脑
+   生成同型号直接复用不再找图；跳过/10 秒不理会就不传。 */
+window.askResultUpload = function(model){
+  try {
+    var old = document.getElementById('_r2up_bar');
+    if (old) old.remove();
+    var bar = document.createElement('div');
+    bar.id = '_r2up_bar';
+    bar.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);'
+      + 'background:#1b2431;color:#fff;padding:12px 18px;border-radius:12px;z-index:10001;'
+      + 'box-shadow:0 8px 28px rgba(0,0,0,.3);display:flex;align-items:center;gap:12px;'
+      + 'font-size:13px;max-width:92vw';
+    var txt = document.createElement('div');
+    txt.innerHTML = '<b>' + String(model || '').replace(/[<>&]/g, '') + '</b>&nbsp;出图完成 — 把参数+选好的首图+尺寸图上传云端？'
+      + '<div style="opacity:.65;font-size:12px;margin-top:3px">传完换台电脑生成这台直接用，不用再找图</div>';
+    var bok = document.createElement('button');
+    bok.textContent = '上传';
+    bok.style.cssText = 'background:#2f7df6;color:#fff;border:none;border-radius:8px;'
+      + 'padding:7px 18px;font-size:13px;cursor:pointer;font-weight:600';
+    var bno = document.createElement('button');
+    bno.textContent = '跳过';
+    bno.style.cssText = 'background:transparent;color:#9aa7bd;border:1px solid #3a465a;'
+      + 'border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer';
+    bok.onclick = function(){
+      bar.remove();
+      toastMsg('正在上传成品到云端…');
+      try { window.pywebview && pywebview.api.result_upload_yes && pywebview.api.result_upload_yes(model); } catch(e){}
+    };
+    bno.onclick = function(){
+      bar.remove();
+      try { window.pywebview && pywebview.api.result_upload_no && pywebview.api.result_upload_no(model); } catch(e){}
+    };
+    bar.appendChild(txt); bar.appendChild(bok); bar.appendChild(bno);
+    document.body.appendChild(bar);
+    setTimeout(function(){ if (bar.parentNode) bar.remove(); }, 10000);
+  } catch (e) {}
+};
 </script>
 </body>
 </html>

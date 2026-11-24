@@ -1598,7 +1598,10 @@ def _build_contact_sheet(cands, cols=4):
         cv.paste(im, (x + (thumb - im.width) // 2, y + (thumb - im.height) // 2))
         dr.rectangle([x, y, x + 46, y + 40], fill=(206, 54, 44))
         dr.text((x + 23, y + 20), str(i + 1), fill=(255, 255, 255), anchor="mm", font=font(26, True))
-        dr.text((x + 4, y + thumb + pad), f.name, fill=(24, 24, 24), anchor="la", font=font(15, False))
+        # 2026-11-24 用户令「首图跟尺寸图都没选对」：拼版格子上不再印文件名——
+        # 上一轮链路把开门标注图存成 product.png，AI 看到格子下方印着「product.png」
+        # 名字就天然当产品图选 front（名字偏置实锤：BCD-243WGHC2E7SW 开门标注图
+        # 被选 front 就是它）。编号已经足够定位，文件名信息反而带偏。
     buf = io.BytesIO()
     cv.save(buf, "JPEG", quality=88)
     return buf.getvalue()
@@ -2183,9 +2186,10 @@ def zhipu_verify_whole(api_key, img_path=None, log=None, im=None):
             p = Path(img_path)
             if not p.is_file():
                 return None
-            # 结果缓存到同目录 _ai_verify_v2.json：{文件名: bool}，同一张图只问一次
-            # （v2：2026-11-14 问法升级+垫边裁切实锤，v1 旧答案作废）
-            cch = p.parent / "_ai_verify_v2.json"
+            # 结果缓存到同目录 _ai_verify_v3.json：{文件名: bool}，同一张图只问一次
+            # （v3：2026-11-24 问句加严「开门/标注图/示意图也算否」——BCD-243WGHC2E7SW
+            # 开门功能标注图被旧问句判「整机」放行实锤，v2 旧答案作废）
+            cch = p.parent / "_ai_verify_v3.json"
             key = p.name
             try:
                 obj = json.loads(cch.read_text(encoding="utf-8"))
@@ -2202,9 +2206,9 @@ def zhipu_verify_whole(api_key, img_path=None, log=None, im=None):
         im.convert("RGB").save(buf, "JPEG", quality=88)
         data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
         prompt = (
-            "判断这张家电商品图是不是【完整机器】的产品照。唯一标准：机器自身的外形轮廓"
-            "是否完整无缺——每个该有的部位都看得到（热水器的两个圆弧端盖、冰箱/洗衣机的"
-            "完整箱体等），机器与背景相接的边缘是机器真实的轮廓收边。\n"
+            "判断这张家电商品图是不是【完整机器、门盖关着、无任何标注】的产品照。"
+            "唯一标准：机器自身的外形轮廓是否完整无缺，且门/盖处于关闭状态，"
+            "机器与背景相接的边缘是机器真实的轮廓收边。\n"
             "以下都算【局部特写】，whole 必须填 false：\n"
             "· 只拍到机器一段/一角：机身中段、面板区域、旋钮按键、抽屉、内筒、端盖局部；\n"
             "· 机器任何部位被画面切断：左右端被裁、顶部或底部被切平（圆筒机身两端看不出"
@@ -2212,6 +2216,11 @@ def zhipu_verify_whole(api_key, img_path=None, log=None, im=None):
             "· 【重点】有些裁切图会被垫上背景边框再摆回画面中央，机器四周留有背景空隙——"
             "四周有留白≠机器完整。要看机器本身的形状：机器边缘是平直切断线而不是该有的"
             "圆弧/收边，就是裁切图，whole=false。\n"
+            "以下虽然机器完整，whole 也必须填 false（2026-11-24 BCD-243WGHC2E7SW 实锤：\n"
+            "开门功能标注图被当成 front 选出，把关三道全过）：\n"
+            "· 门/盖开着的照片（能看到内胆/内部结构/门体翻转）——首图必须是关门整机照；\n"
+            "· 带功能标注线、数字圆标、箭头指向部件的说明图/导购图；\n"
+            "· 线框示意图/安装示意图/嵌入式嵌入示意（白线框、剖面、橱柜里嵌机器那种）。\n"
             "只回答一个 JSON，不要解释：{\"whole\":true} 或 {\"whole\":false}"
         )
         # 废答案自动重试一次：复核原来只有一发，冷启动/抽风返回 None 就静默不拦
@@ -2244,16 +2253,41 @@ def zhipu_verify_whole(api_key, img_path=None, log=None, im=None):
         return None
 
 
-def zhipu_pick_images(api_key, src_dir, kind, log=None):
+def zhipu_pick_images(api_key, src_dir, kind, log=None, extra_dirs=()):
     """用 GLM-4V 看候选图，按角色（正面/角度/开门/实景）选图。返回 dict：
     front/angle/open/scene = 相对 src_dir 的文件路径（新抓图可能带 官网/ 子目录）或 None；
     scene_label/scene_sub = 实景页标题。
     结果缓存到 <src_dir>/_ai_pick.json，避免每次点发布图都调视觉模型。
-    拿不到 key / 调用失败 / 候选太少 → 返回 None（调用方回退规则选图）。"""
+    拿不到 key / 调用失败 / 候选太少 → 返回 None（调用方回退规则选图）。
+    extra_dirs（2026-11-24 BCD-243WGHC2E7SW 实锤）：海选候选池原来只有 peiwork 缓存
+    （8 张全是说明书示意图，关门整机照一张没有）——AI 在示意图里矬子拔将军选错图。
+    调用方把 kitset 官网/欣盛/中关村/说明书目录传进来，图并进拼版（路径去重），
+    欣盛 2000px 关门整机照才有机会被选中。"""
     if not api_key or not str(api_key).strip():
         return None
     p = Path(src_dir)
     cands_all = _src_cands(p)
+    for _ed in (extra_dirs or ()):
+        try:
+            _edp = Path(_ed)
+            if not _edp.is_dir():
+                continue
+            _have_p = {str(f2.resolve()) for f2, _r in cands_all}
+            for f2 in sorted(_edp.iterdir()):
+                if not f2.is_file() or f2.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                    continue
+                try:
+                    _im2 = Image.open(f2)
+                    _w2, _h2 = _im2.size
+                except Exception:
+                    continue
+                if _w2 < 220 or _h2 < 220 or _w2 / _h2 < 0.18 or _w2 / _h2 > 5.5:
+                    continue
+                if str(f2.resolve()) in _have_p:
+                    continue
+                cands_all.append((f2, f2.name))
+        except Exception:
+            pass
     _rel = {f: r for f, r in cands_all}     # 路径 → 相对路径
     cands = [f for f, _r in cands_all]
     # 2026-10-24：废图（二维码/logo/能效标识/白幽灵）根本不进拼版 —— AI 只看真图，
@@ -2267,6 +2301,11 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
             _poster.add(f)
     if _poster:
         cands = [f for f in cands if f not in _poster]
+    if len(cands) > 20:
+        # 拼版格数上限（2026-11-24）：候选池扩到 kitset 四子目录后可能 60+ 张，
+        # 300px/格 AI 根本看不清、编号定位也飘。保持列表顺序截前 20 张——
+        # _src_cands 官网/欣盛审图在前，extra 并入在后。
+        cands = cands[:20]
     if len(cands) < 3:
         return None
     # 2026-11-03 修错位：names 原来按【未过滤】的 cands_all 建，而拼版用的是过滤后的
@@ -2312,6 +2351,9 @@ def zhipu_pick_images(api_key, src_dir, kind, log=None):
         "特别注意（2026-11-14 ES80H-D2S 实锤）：有些特写是机身中段裁切后垫了背景边框的，"
         "四周有留白但机器本身不完整——机器边缘是平直切断线、缺圆弧端盖/缺顶底的都是裁切图，"
         "照样绝不能选。\n"
+        "· 【2026-11-24 BCD-243WGHC2E7SW 实锤】带功能标注线、数字圆标、箭头指向部件的"
+        "开门/结构说明图，以及线框示意图/安装示意图（白线框、剖面图、橱柜里嵌机器），"
+        "都不是产品图，front/angle 绝不能选——front 只要是【门关着的干净整机实拍】。\n"
         "只回答一个 JSON，每个编号值必须是【单个数字】（如 \"front\":3），"
         "绝不要输出数组/列表：\n"
         "{\"front\":编号,\"angle\":编号,\"open\":编号,\"scene\":编号或null,"
