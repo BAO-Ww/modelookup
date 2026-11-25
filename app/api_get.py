@@ -99,6 +99,8 @@ class ApiGetMixin:
             model = (q.get("model") or [""])[0].strip()
             force = (q.get("force") or ["0"])[0] in ("1", "true")
             openfolder = (q.get("open") or ["0"])[0] in ("1", "true")
+            # 2026-11-25 用户令「重新生成只对文案有用」：copyonly=1 只重文案不渲染图
+            copyonly = (q.get("copyonly") or ["0"])[0] in ("1", "true")
             if not model:
                 self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
                 return
@@ -146,7 +148,8 @@ class ApiGetMixin:
                         if jobman.is_cancelled(_kk):
                             raise jobman.CancelledError("已取消")
                     try:
-                        res = kitset.generate(model, force, log=_log)
+                        res = kitset.generate(model, force, log=_log,
+                                              copyonly=1 if copyonly else 0)
                         res["dir"] = kitset.model_dir(model)
                         return res
                     except Exception as e:
@@ -174,7 +177,8 @@ class ApiGetMixin:
             try:
                 import kitset
                 res = kitset.generate(model, force,
-                                      log=lambda s: state.LOG.append("[蓝底] " + s))
+                                      log=lambda s: state.LOG.append("[蓝底] " + s),
+                                      copyonly=1 if copyonly else 0)
                 res["dir"] = kitset.model_dir(model)
                 self._send(200, json.dumps(res, ensure_ascii=False))
             except Exception as e:

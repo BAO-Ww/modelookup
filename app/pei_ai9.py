@@ -724,38 +724,43 @@ def _grad_scrim(cv, y0, y1, a=170, col=(6, 7, 10)):
     cv.alpha_composite(layer)
 
 def _spot_param_items():
-    """聚光参数页数据（2026-10-28 样张定稿 C1v2）：官网真参数优先
-    （kitset set.json params，跳过「尺寸」——尺寸图有专门一张），兜底 build_text
-    的 specs/cards。返回 [(标签, 值)]，最多 6 条，绝不瞎编。"""
+    """聚光参数页数据（2026-10-28 样张定稿 C1v2；2026-11-25 用户令「参数卡全是尺寸
+    有点过分」）：多源合并（set.json params → kitset info.json props → 本次 info.props
+    → specs/cards 兜底）后统一走 kitset._curate_param_rows 精选——W1/D1/H1 预留口径
+    一票否决，真参数（能效/容量/噪音…）优先、W/D/H 三围殿后补位（尺寸图有专门一张），
+    最多 6 条，绝不瞎编。set.json 是旧口径（尺寸占满）时 info.json 真参数也能救回。"""
+    merged, seen = [], set()
+
+    def _add(pairs):
+        for k, v in (pairs or []):
+            k, v = str(k).strip(), str(v).strip()
+            if (k and v and v not in ("暂无数据", "暂无", "无", "-")
+                    and k not in seen):
+                seen.add(k)
+                merged.append((k, v))
+
     try:
         import json as _json
         import kitset
         sp = os.path.join(kitset.model_dir((P.get('model') or '').strip()), "set.json")
         if os.path.isfile(sp):
             with open(sp, encoding="utf-8") as f:
-                pr = (_json.load(f).get("params") or {})
-            out = [(str(k), str(v).strip()) for k, v in pr.items()
-                   if k != "尺寸" and str(v).strip()]
-            if out:
-                return out
+                _add((_json.load(f).get("params") or {}).items())
+        # set.json 只由蓝底套图落盘，可能是旧口径——info.json props 并进来一起精选
+        ki = kitset.load_kinfo((P.get('model') or '').strip()) or {}
+        _add(ki.get("props") or [])
+        cu = kitset._curate_param_rows(merged, 6)
+        return cu or merged[:6]
     except Exception:
         pass
-    # 2026-11-12 ES60H-Q3白 实锤：set.json 只由蓝底套图落盘——只跑聚光/套图没跑成的
-    # 型号没有它，旧兜底 P['specs'] 是机器展示图卖点（就 1 条），参数页只剩「款式 横式」。
-    # 补两级：kitset 权威参数副本（info.json props）→ 本次任务抓到的 info.props。
-    try:
-        import kitset as _ks
-        ki = _ks.load_kinfo((P.get('model') or '').strip())
-        out = [(str(k), str(v).strip()) for k, v in ((ki or {}).get("props") or [])
-               if str(k).strip() and str(v).strip() and str(k) != "尺寸"]
-        if out:
-            return out
-    except Exception:
-        pass
-    out = [(str(k), str(v).strip()) for k, v in (P.get('props') or [])
-           if str(k).strip() and str(v).strip() and str(k) != "尺寸"]
-    if out:
-        return out
+    _add(P.get('props') or [])
+    if merged:
+        try:
+            import kitset as _ks
+            cu = _ks._curate_param_rows(merged, 6)
+            return cu or merged[:6]
+        except Exception:
+            return merged[:6]
     out = [(str(k), str(v)) for v, k in (P.get('specs') or [])]
     if not out:
         out = [(str(k), str(v)) for v, k, _ in (P.get('cards') or [])]
@@ -1298,7 +1303,13 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
                             _ys = [float(p[1]) for p in _b]
                             _c = (min(_xs) - _bx0, min(_ys) - _by0,
                                   max(_xs) - _bx0, max(_ys) - _by0)
-                            _txt_boxes.append(_c + (str(_t),))
+                            # 2026-11-25 用户令「聚光的图这里都没有注明那个是那个的」
+                            # 实锤：合成图注盒（W=580mm 这种带字母前缀）被当官方数字
+                            # 语义重印成裸数字条（字母全丢）。改：带字母/中文的数值盒
+                            # 只抠不印——图注由卡片字体在稿下统一重印（见下方 _cap）；
+                            # 纯数字/数字mm（官方印在稿上的）照旧 V15.2 语义重印。
+                            if re.fullmatch(r"\d{3,4}(?:mm)?", str(_t).strip(), re.I):
+                                _txt_boxes.append(_c + (str(_t),))
                             ImageDraw.Draw(_bin).rectangle(
                                 [_c[0] * _kx - 14, _c[1] * _ky - 14,
                                  _c[2] * _kx + 14, _c[3] * _ky + 14], fill=0)
@@ -1360,6 +1371,30 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
                     pass
         except Exception:
             pass
+        # 图注字母对号行（2026-11-25 用户令「聚光的图这里都没有注明那个是那个的」）：
+        # 合成图注描摹必糊、带字母的数值盒上面已只抠不印——这里用卡片字体在稿下
+        # 重印「W=580mm  W1=620mm …」，线稿上每个字母都能对到数字；无数值表不画。
+        # 复令（23:11「可以再大一点字，蓝底都有胶囊了，聚光也可以加啊」）：字号
+        # 24→26，跟蓝底同款浅灰胶囊底，红字保留——两卡口径对齐。
+        try:
+            _cap = kitset._dims_pair_text((P.get('model') or '').strip(), info) or ""
+            if _cap:
+                # 2026-11-25 EC8005 实锤：稿底误用 _px（水平坐标）——横长拼图（正视图+
+                # 侧视图 th 只有 ~300）时对号行叠进线稿内部。稿底=垂直 _py + th。
+                _csz = 26
+                while _csz > 17 and dr.textlength(_cap, font=font(_csz, True)) > 960:
+                    _csz -= 1
+                _capy = min(870, _py + th + 30)
+                _cph = _csz + 26
+                dr.rounded_rectangle(
+                    [W / 2 - dr.textlength(_cap, font=font(_csz, True)) / 2 - 30,
+                     _capy - _cph / 2,
+                     W / 2 + dr.textlength(_cap, font=font(_csz, True)) / 2 + 30,
+                     _capy + _cph / 2],
+                    radius=_cph / 2, fill=(240, 242, 246, 255))
+                T(dr, (W // 2, _capy), _cap, _csz, (186, 22, 22), "mm")
+        except Exception:
+            pass
         if dims:
             Wd, Hd, Dd = dims
             T(dr, (W // 2, 918), "%s %s" % (P['brand'], P['model']), 30, _t1, "mm")
@@ -1405,8 +1440,10 @@ def img_size(info, front, out):       # 聚光·尺寸图：深色同色系（20
                                  outline=(150, 156, 168, 230) if _SPOT_LIGHT else (225, 232, 242, 230), width=3)
             _dl(fx, fy - 46, fx + fw, fy - 46, "%s mm" % Wd)
             _dl(fx + fw + 46, fy, fx + fw + 46, fy + fh, "%s mm" % Hd, vert=True)
+        # 2026-11-25 用户令「聚光的也是跟蓝底的一样」：深度一句话改成完整三围行
+        # （官方线稿分支 1390 同款文案），铁律宽高深必须完整印卡底
         T(dr, (W // 2, fy + fh + 72) if sk is None else (W // 2, 862),
-          "深 %s mm · 外形尺寸以实物为准" % Dd, 27, _t2b, "mm")
+          "宽 %s mm · 高 %s mm · 深 %s mm" % (Wd, Hd, Dd), 27, _t2b, "mm")
         # 2026-10-29 用户令「官网那么多参数又不会写」：手绘卡别光秃秃仨数字，
         # 底部对齐官方线稿分支版式（918 品牌型号 / 972 真参数行，只挑真参数绝不编）
         _kv = []

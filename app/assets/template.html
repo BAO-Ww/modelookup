@@ -1158,11 +1158,21 @@ function earnFreight(mk, it, kind){
 function xyChipsHTML(c){
   var xs = markXys(c);
   if (!xs.length) return '';
+  /* 2026-11-25 用户令「筛选谁就该谁在前」：闲鱼号筛选开着时，该号的胶囊顶到最前
+     （其余仍按时间新→旧），高亮蓝圈也跟筛选号走——不然筛科科，排最前/最显眼的
+     却是东星斑（今天刚改过价时间最新），看起来像筛了个寂寞。
+     selXy 关掉恢复原样：最新操作的那条在前 + 蓝圈=current 编辑条 */
+  var _svOn = false;
+  if (typeof selXy !== 'undefined' && selXy){
+    var _sx = [], _rx = [];
+    for (var _xi = 0; _xi < xs.length; _xi++) (xs[_xi].xy === selXy ? _sx : _rx).push(xs[_xi]);
+    if (_sx.length){ xs = _sx.concat(_rx); _svOn = true; }
+  }
   /* 2026-10-13 用户定稿：每条发布记录一枚独立胶囊（正品绿/样机橙，当前编辑的那条
      蓝圈加粗）——点胶囊 = 下面定价框立刻显示这条的价；胶囊里的口径字单独可点改口径 */
   var act = actXY(c);
   return ' ' + xs.map(function(x){
-    var on = act && act.key === x.key, s = x.k === 's';
+    var on = _svOn ? (x.xy === selXy) : (act && act.key === x.key), s = x.k === 's';
     var col = s ? '#b45309' : '#0f7b3a', bd = s ? '#f3ddb0' : '#bfe3cb';
     /* 2026-11-02 用户再令：胶囊不显示挣了——点开胶囊定价框里的「挣 ¥xxx」实时行才是唯一入口 */
     return '<span data-actxy="' + esc(x.key) + '" data-key="' + esc(c) + '" title="点别的胶囊=定价框切到那条；再点一下当前这条=直接改价/改口径/填闲鱼ID（整颗都能点）" style="display:inline-block;cursor:pointer;border-radius:99px;padding:1px 9px;margin:1px 0 1px 5px;font-weight:600;background:#fff;border:1px solid ' + bd + ';color:' + col + ';vertical-align:1px;'
@@ -1294,12 +1304,15 @@ function draftCs(c){
   } catch (e) {}
   return null;
 }
-function pubPush(c, on, xy){
+function pubPush(c, on, xy, pt){
   if (!AUTH || !AUTH.token) return;
   /* ⚠ 必须显式带 Content-Type: application/json —— WebView2 里 string body 缺它时
      预检 OPTIONS 发得出去、实际 POST 却不跟，记录就静默丢了（实测踩坑）。
      k = 发布的是正品('l')还是样机('s')；p = 当时的闲鱼定价
      xy = 闲鱼号（2026-10-12 多号：一号一条记录；不传 = 老口径整条删/顶层标）
+     pt = 这条记录原装的发布时间（2026-11-25 用户令「已发布修改不重新排序」：
+          改价/改口径/搬键这类修改保留第一次发布的时间，云端也照留——
+          worker 只认过去的时间戳；不带 pt 时同键重标 worker 自己保旧 t）
      2026-10-13 修「价格乱跳」：本地没价时 p 用 undefined（JSON 化后整个字段不发），
      worker 收到没 p 就**保留该号现价**——绝不能发 null 把云端价抹了；
      只有明确带数字才盖价。真正无价标记走弹窗必填价，p 一定有。 */
@@ -1309,6 +1322,7 @@ function pubPush(c, on, xy){
                    p: (on && isNum(PRICES[c])) ? PRICES[c] : undefined,
                    cs: (on && MARKED[c] && MARKED[c].cs) || null,
                    xid: (on && typeof xy === 'string' && xy && MARKED[c] && MARKED[c].xys && MARKED[c].xys[xy] && MARKED[c].xys[xy].xid) || undefined };
+  if (on && isFinite(+pt) && +pt > 0) _pubBody.pt = +pt;
   authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(_pubBody) }, true)
     .then(function(j){
@@ -1337,6 +1351,7 @@ function pubQueue(tasks){
                p: (t.on && isNum(PRICES[t.c])) ? PRICES[t.c] : undefined,
                cs: (t.on && MARKED[t.c] && MARKED[t.c].cs) || null,
                xid: (t.on && typeof t.xy === 'string' && t.xy && MARKED[t.c] && MARKED[t.c].xys && MARKED[t.c].xys[t.xy] && MARKED[t.c].xys[t.xy].xid) || undefined };
+    if (t.on && isFinite(+t.pt) && +t.pt > 0) _b.pt = +t.pt;   // 2026-11-25：搬家/改名保留原发布时间
     authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(_b) }, true)
       .then(function(j){
@@ -1810,6 +1825,23 @@ function calcHTML(it){
   /* 看子用户发布时：他自己填过价就直接填进输入框（改了会存成自己的，不影响 TA） */
   var _sv = (SUBVIEW && SUBVIEW.info && SUBVIEW.info[it.c]) ? SUBVIEW.info[it.c] : null;
   if (!isNum(saved) && _sv && isNum(_sv.p)) saved = _sv.p;
+  /* 2026-11-25 用户令「筛选科科就显科科的价」：闲鱼号筛选（东星斑/科科…）开着时，
+     定价框跟筛选号走——筛到哪个号就取那个号记录的价，不再显最新标记那条
+     （多半是别的号的价）。自己没这个号的记录才看 TA 记录里有没有（管理号看子用户）。 */
+  if (selXy){
+    var _fxe = null;
+    if (MARKED[it.c] && MARKED[it.c].xys){
+      for (var _fxk in MARKED[it.c].xys){
+        if ((String(_fxk).split('|')[0] || _fxk) === selXy){ _fxe = MARKED[it.c].xys[_fxk] || {}; break; }
+      }
+    }
+    if ((!_fxe || !isNum(_fxe.p)) && _sv && _sv.xs){
+      for (var _fyk in _sv.xs){
+        if ((String(_fyk).split('|')[0] || _fyk) === selXy){ _fxe = _sv.xs[_fyk] || {}; break; }
+      }
+    }
+    if (_fxe && isNum(_fxe.p)) saved = _fxe.p;
+  }
   /* 2026-10-10：看子用户发布 = 只读——TA 填的价照显示，但改不了（改价会存进全局定价表）。
      2026-10-14 用户要求「预览子用户的也要能改」：管理号代管放行（改价/下架直改 TA 的云端记录） */
   var svRO = !!(SUBVIEW && SUBVIEW.u && SUBVIEW.u !== '0' && !(AUTH && AUTH.role === 'admin'));
@@ -3594,7 +3626,11 @@ function renderItem(it){
      正品仓没货 → 价格含税+滞销族整族不显示；样机仓没货 → 样机族整族不显示。
      实时库存没拉到 / 豁免名单 → 全显示（不乱藏）。 */
   var _hasZP = !extStockFree(it) && live && live.wt && +live.wt['正品仓'] > 0;
-  var _hasYJ = !extStockFree(it) && live && live.wt && +live.wt['样机仓'] > 0;
+  /* 2026-11-25 用户令「JC-B库 特价仓这个也是样机仓啊」：特价仓型的货也是样机——
+     LES60H-AC5 实锤，货在 JC-B库（仓型=特价仓）时 wt 里没有「样机仓」键，
+     样机清理价/出库奖励整族被藏，卡上只剩清理数量没有价。特价仓并入样机族闸，
+     汇总/库存牌仍按真实仓型显示「特价仓」不混叫。 */
+  var _hasYJ = !extStockFree(it) && live && live.wt && (+live.wt['样机仓'] > 0 || +live.wt['特价仓'] > 0);
   var _hideZL = !_hasZP;      /* 正品仓没货 → 价格含税+滞销族（滞销清理价/滞销出库奖励）藏 */
   var _hideYJ = !_hasYJ;      /* 样机仓没货 → 样机族（样机清理价/样机出库奖励）藏 */
   /* 2026-11-21 用户令（晚二改，实锤截图）：皓群货盘的价格跟「组织」走——
@@ -4129,7 +4165,7 @@ function renderItem(it){
     + (pok('calc') && _xids.length ? '<div class="row"><label>闲鱼ID</label><span class="v mono">'
        + _xids.map(function(_xi){
            /* 2026-11-21 用户令：ID 也包胶囊（一栏一色=绿），复制点击行为不变 */
-           return '<span class="pill xid" data-xidcopy="' + esc(_xi.xid) + '" title="点一下复制这个闲鱼ID">'
+           return '<span class="pill xid" data-xidcopy="' + esc(_xi.xid) + '">'
                 + (_xi.xy ? esc(_xi.xy) + '·' : '') + esc(_xi.xid) + '</span>'
            /* 2026-10-14 定稿（晚间用户改口）：ID 后面只跟两个纯链接——「编辑宝贝」（卖家
               中心编辑页）+「查看宝贝」（买家页 goofish.com/item?id=）。mtop 直改的
@@ -4283,7 +4319,9 @@ function ptypeOf(it){
        实时库存没拉到 / 豁免名单 → 不藏，照表归型） */
   var _lv = stockOf(it.mo, nameOf(it), it.code);
   if (_lv && _lv.wt && !extStockFree(it)){
-    var _hasZP = +_lv.wt['正品仓'] > 0, _hasYJ = +_lv.wt['样机仓'] > 0;
+    /* 2026-11-25 用户令：特价仓也是样机仓（跟卡片 3598 同款口径，两处必须同步改） */
+    var _hasZP = +_lv.wt['正品仓'] > 0,
+        _hasYJ = (+_lv.wt['样机仓'] > 0 || +_lv.wt['特价仓'] > 0);
     if (!_hasZP){ pt = false; lz = false; }
     if (!_hasYJ) sj = false;
   }
@@ -4561,18 +4599,31 @@ function allFiltered(){
     hit.push({ sc: 0, ix: -1, it: { c: _gc, mo: _gc, _n: norm(_gc), _ghost: 1,
                                     k: (ghostInfo(_gc) || {}).k || 'l' } });
   }
-  /* 2026-10-21 用户定稿：「已发布」视图（自看 u='0' / 管理号看子账号）按标记时间降序——
-     最新标的排最上面，越早发的越靠后。时间口径 = SUBVIEW.info[c].t（该型号最新一次
-     标记/改价/重标的 ts）。退出已发布回正常浏览恢复型号名排序，搜索仍按匹配度。 */
+  /* 2026-11-25 用户令：已发布列表按「第一次发布」的时间排序（2026-10-21 的「最新标记在前」
+     废止——改价/改口径/补ID 都算已发布修改，位置必须不动）。规则：
+     ① 时间口径 = 该型号全部发布记录里**最早**那条的 t（= 第一次发布那刻；
+        记录时间在标记确认/改口径处已改为保留不盖 now，云端 worker 同步保留）。
+     ② 最新发布（第一次发布时间最晚）的排最上面，越早发的越靠下（2026-11-25 二次令，
+        首版做成最早在最上，用户当场翻案）；改过的卡不跳位。
+     ③ 一条时间都取不到的（脏数据）沉到最底（哨兵 0，降序里自然垫底）。退出已发布回正常浏览恢复型号名排序，
+        搜索仍按匹配度。 */
   if (SUBVIEW && SUBVIEW.u != null){
-    var _mt = function(c){
-      var iv = SUBVIEW.info && SUBVIEW.info[c];
-      if (iv && iv.t) return +iv.t || 0;
-      var m = MARKED[c];
-      if (m && m.xys){ var _mx = 0; for (var _xk in m.xys){ var _e = m.xys[_xk] || {}; if ((+_e.t || 0) > _mx) _mx = +_e.t; } return _mx; }
-      return 0;
+    var _ft = function(c){
+      var _mn = Infinity;
+      var _iv = SUBVIEW.info && SUBVIEW.info[c];
+      if (_iv && _iv.xs){
+        for (var _xk in _iv.xs){ var _e = _iv.xs[_xk] || {}; if ((+_e.t || 0) > 0 && (+_e.t || 0) < _mn) _mn = +_e.t; }
+      }
+      if (_mn === Infinity && _iv && (+_iv.t || 0) > 0) _mn = +_iv.t;   // 老格式单条记录退顶层 t
+      if (_mn === Infinity){
+        var _m = MARKED[c];
+        if (_m && _m.xys){
+          for (var _xk2 in _m.xys){ var _e2 = _m.xys[_xk2] || {}; if ((+_e2.t || 0) > 0 && (+_e2.t || 0) < _mn) _mn = +_e2.t; }
+        } else if (_m && (+_m.t || 0) > 0) _mn = +_m.t;
+      }
+      return _mn === Infinity ? 0 : _mn;   // 没时间戳 → 0，降序里自然沉底
     };
-    hit.sort(function(a,b){ return _mt(b.it.c) - _mt(a.it.c) || a.it.c.length - b.it.c.length || (a.it._n < b.it._n ? -1 : a.it._n > b.it._n ? 1 : 0); });
+    hit.sort(function(a,b){ return _ft(b.it.c) - _ft(a.it.c) || a.it.c.length - b.it.c.length || (a.it._n < b.it._n ? -1 : a.it._n > b.it._n ? 1 : 0); });
   } else {
     hit.sort(function(a,b){ return a.it.c.length - b.it.c.length || (a.it._n < b.it._n ? -1 : a.it._n > b.it._n ? 1 : 0); });
   }
@@ -5120,7 +5171,7 @@ function xyRenameSync(oldn, nn){
       if (oldn === '默认' && (cur.k === 'l' || cur.k === 's')){
         cur.xys = {};
         cur.xys[nn] = { t: +cur.t || 0, k: cur.k === 's' ? 's' : 'l', p: (isNum(PRICES[c]) ? PRICES[c] : null) };
-        touched.push([c, nn, '默认']);
+        touched.push([c, nn, '默认', +cur.t || 0]);
       }
       return;
     }
@@ -5135,7 +5186,7 @@ function xyRenameSync(oldn, nn){
         delete cur.xys[key];
       }
       moved = true;
-      touched.push([c, to, key]);
+      touched.push([c, to, key, +cur.xys[to].t || 0]);   // 2026-11-25：带上原发布时间（改名=搬家，不是重新发布）
     });
     if (moved && ACTXY[c]){
       var na = nk(ACTXY[c]);
@@ -5147,7 +5198,7 @@ function xyRenameSync(oldn, nn){
   try { if (localStorage.getItem('ml_lastxy') === oldn) localStorage.setItem('ml_lastxy', nn); } catch(e){}
   /* 展平成单队列：所有「写新键+删旧键」排队走，一次只有一个请求在飞 */
   var _qt = [];
-  touched.forEach(function(t){ _qt.push({ c: t[0], on: true, xy: t[1] }, { c: t[0], on: false, xy: t[2] }); });
+  touched.forEach(function(t){ _qt.push({ c: t[0], on: true, xy: t[1], pt: t[3] }, { c: t[0], on: false, xy: t[2] }); });
   pubQueue(_qt);
   refreshXySel();                        // 孤儿条目/旧名条数当场跟上（筛选下拉）
   run();
@@ -5755,17 +5806,29 @@ function openPickKind(k, recKey){
     /* 闲鱼ID（2026-10-13）：弹窗填了用新值；留空保留这条原本的ID（改价不抹ID） */
     var _xidv = String((m.querySelector('#kindxid') || {}).value || '').trim().slice(0, 40);
     var _oldxid = cur.xys[_rk] && cur.xys[_rk].xid != null ? String(cur.xys[_rk].xid) : null;
-    cur.xys[_rk] = { t: now, k: kk, p: (isNum(PRICES[k]) ? PRICES[k] : null) };
+    /* 2026-11-25 用户令「已发布修改不重新排序」：重标=改价——记录时间保留第一次发布那刻，
+       绝不盖成 now（已发布列表按首发布时间排，时间一盖卡片就跳位）。
+       同号换口径=搬家（老键删、落新键），时间跟着老记录搬，pubPush 带 pt 让云端也保留。 */
+    var _oldE = cur.xys[_rk] || null;
+    var _pubT = (_oldE && (+_oldE.t || 0) > 0) ? +_oldE.t : now;
+    if (_mig && cur.xys[_mig] && (+cur.xys[_mig].t || 0) > 0) _pubT = +cur.xys[_mig].t;
+    cur.xys[_rk] = { t: _pubT, k: kk, p: (isNum(PRICES[k]) ? PRICES[k] : null) };
     var _nxid = _xidv || _oldxid;
     if (_nxid) cur.xys[_rk].xid = _nxid;
     if (_mig) delete cur.xys[_mig];      // 老口径/老号那条搬完就删，不留双胞胎
-    cur.t = now; cur.k = kk;
+    /* 顶层镜像跟 worker markTop 同口径：取 xys 里最新一条的 t/k（不是 now） */
+    var _topT = 0, _topK = kk;
+    for (var _tk0 in cur.xys){
+      var _te0 = cur.xys[_tk0] || {};
+      if ((+_te0.t || 0) >= _topT){ _topT = +_te0.t || 0; _topK = (_te0.k === 's' ? 's' : 'l'); }
+    }
+    cur.t = _topT || now; cur.k = _topK;
     ACTXY[k] = _rk;                      // 当前编辑切到刚标的这条
     var _dcs = draftCs(k); if (_dcs) cur.cs = _dcs;   // 2026-10-15：确认时把定价框选的成本口径一起落库
     MARKED[k] = cur;
     saveMarks();
     savePrices();
-    pubPush(k, true, _rk);               // 云端按记录键存（同号双口径各一条）
+    pubPush(k, true, _rk, _pubT);        // 云端按记录键存（同号双口径各一条；带 pt 保原发布时间）
     if (_mig) pubPush(k, false, _mig);   // 云端同步删老键（pub_ 记录+pubp_ 价镜像一起清）
     m.remove();
     run();
@@ -5885,17 +5948,19 @@ function openSwitchKind(k, xy){
       if (!cur.xys) cur.xys = {};
       if (!cur.xys[tgt]) cur.xys[tgt] = { t: cur.t || now, k: curK === 's' ? 's' : 'l',
                                           p: (isNum(PRICES[k]) ? PRICES[k] : null) };
-      cur.xys[tgt].k = kk; cur.xys[tgt].t = now;
+      /* 2026-11-25 用户令「已发布修改不重新排序」：改口径=修改，记录时间保留（不盖 now） */
+      cur.xys[tgt].k = kk;
       /* 顶层镜像跟 xys 最新一条走（和 worker /pub 重算口径一致） */
       var _lt = null;
       for (var _x in cur.xys){ var _e2 = cur.xys[_x]; if (!_lt || (+_e2.t || 0) > (+_lt.t || 0)) _lt = _e2; }
       if (_lt){ cur.k = _lt.k; cur.t = _lt.t; }
     } else {
-      cur.k = kk; cur.t = now;
+      /* 老格式顶层（无 xys）：改口径=修改，顶层时间原样保留（不盖 now，2026-11-25 用户令） */
+      cur.k = kk;
     }
     var _dcs2 = draftCs(k); if (_dcs2) cur.cs = _dcs2;   // 2026-10-15：改口径时同步落库定价框选的成本口径
     saveMarks();
-    pubPush(k, true, tgt);                 // 云端即时同步（带 k=新口径，价保留）
+    pubPush(k, true, tgt, (tgt && cur.xys && cur.xys[tgt]) ? cur.xys[tgt].t : cur.t);                 // 云端即时同步（带 k=新口径，价保留；pt 保原发布时间）
     run();
     updateLossBanner();                    // 口径变了亏钱名单可能变，黄条跟着重算
   });
@@ -6590,14 +6655,14 @@ function openBaoView(k){
   }
   /* ---------- 蓝底生成（jobman：kitset:<型号>，同老蓝底窗同接口） ---------- */
   var kGen = false;
-  function watchK(btn, done){
+  function watchK(btn, done, okMsg){
     /* 2026-11-04：轮询句柄进 TIMERS（关窗即停）；完成时窗口已被关掉也无妨
        （querySelector 返回 null 直接 return），重开窗会由 HEAD 探测/接管兜住 */
     T(pollJob('kitset:' + k, function(res){
       kGen = false;
       setCancelVis('k', false); clearFail('k');
       if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
-      msg('k', res && res.cached ? '缓存秒出' : '✓ 蓝底四张完成');
+      msg('k', res && res.cached ? '缓存秒出' : (okMsg || '✓ 蓝底四张完成'));
       /* 2026-11-24 用户问「怎么又要我上传」：生成中途开窗时 img_1 未出 → K_MISS=true，
          之后 img_1 出来了窗口还停在「上传主图」（完成回调只重画不重判）。
          完成回调重探一次 img_1 再画，图在就自动换回正常格子。 */
@@ -6611,10 +6676,42 @@ function openBaoView(k){
       setCancelVis('k', false);
       if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
       failMsg('k', err);            // 2026-11-14：失败记档，重开窗不再自动重跑
-      if (done) done();   // 蓝底失败也放行聚光（后端会自己抓素材）
+      /* 2026-11-25 用户令「蓝底都报错了，后面的两个文案怎么会接着跑呢」：链路改失败即停——
+         科科挂了不再自动接东星斑（聚光）/文案三，先把蓝底修好（塞图/重抓）再手动跑。 */
     }, function(sec, st){
       msg('k', ((st && st.prog) || '生成中…') + '（已 ' + sec + ' 秒）');
     }));
+  }
+  /* 科科列「重新生成」（2026-11-25 用户令「重新生成只对文案有用，不用重新生成图片」）：
+     后端 copyonly=1 只重抓数据重算文案 + set.json 落盘，四张成片/水印/对账全跳过，
+     图零动作——图的重出只走图片卡右上角自己的「重新生成」键。 */
+  function genKCopy(btn){
+    if (kGen){ msg('k', '蓝底已在生成中…'); return; }
+    kGen = true;
+    setCancelVis('k', true); clearFail('k');
+    if (btn){ btn.disabled = true; btn.textContent = '生成中…'; }
+    msg('k', '重出文案（图片不动）…');
+    var tried = 0;
+    (function go(){
+      fetch('/api/kitset?model=' + encodeURIComponent(k) + '&force=1&copyonly=1&bg=1')
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (j && j.busy){
+            msg('k', '检测到正在生成，接管进度…');
+            watchK(btn, null, '✓ 文案已重出（图片没动）');
+            return;
+          }
+          if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
+          watchK(btn, null, '✓ 文案已重出（图片没动）');
+        })
+        .catch(function(err){
+          if (tried++ < 1){ T(setTimeout(go, 1500)); return; }
+          kGen = false;
+          setCancelVis('k', false);
+          if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
+          failMsg('k', new Error('请求失败：' + err));
+        });
+    })();
   }
   function genK(force, btn, done){
     if (kGen){ msg('k', '蓝底已在生成中…'); return; }
@@ -6959,7 +7056,13 @@ function openBaoView(k){
   /* 2026-11-14 文案栏改左右两半后页签删除——旧 data-baocpy 切换逻辑一并下线 */
   wrap.querySelectorAll('[data-baogen]').forEach(function(el){
     el.addEventListener('click', function(){
-      (el.getAttribute('data-baogen') === 'k') ? genK(true, el) : genS(el);
+      /* 2026-11-25 用户令「重新生成只对文案有用，不用重新生成图片」：
+         科科=只重文案（copyonly，图不动）；东星斑=只重 kind=l 文案（原来是
+         genS 整套聚光图重出，实锤改掉）；文案三本来就走 loadXCopy(true)。 */
+      var _w = el.getAttribute('data-baogen');
+      if (_w === 'k') genKCopy(el);
+      else if (_w === 's') loadSCopy(true);
+      else genS(el);
     });
   });
   wrap.querySelectorAll('[data-baoopen]').forEach(function(el){
@@ -7048,7 +7151,8 @@ function openBaoView(k){
           showK();          /* 缺主图 → 科科第一格换「上传主图」 */
           if (!kAuto){
             msg('k', '上次生成失败——点「重新生成」或「上传主图」再试', true);
-            if (sNeed && sAuto) _sStart();   /* 蓝底不自动跑，聚光不受牵连 */
+            /* 2026-11-25 用户令：蓝底失败后东星斑/文案三也不再自动接跑（原「聚光不受
+               牵连」口径作废）——先把蓝底修好再整链重跑 */
             return;
           }
           genK(false, wrap.querySelector('[data-baogen="k"]'), function(){
@@ -7060,8 +7164,8 @@ function openBaoView(k){
         } else {
           loadXCopy(false);
         }
-      }).catch(function(){ if (sNeed && sAuto) _sStart(); else loadXCopy(false); });
-    } catch (e) { if (sNeed && sAuto) _sStart(); else loadXCopy(false); }
+      }).catch(function(){ if (sNeed && sAuto && !failedBefore('k')) _sStart(); else loadXCopy(false); });
+    } catch (e) { if (sNeed && sAuto && !failedBefore('k')) _sStart(); else loadXCopy(false); }
     if (!sNeed) msg('s', '缓存秒出');
   });
 }
@@ -8380,8 +8484,10 @@ listEl.addEventListener('click', function(e){
     if (_mr9 && _mr9.xys && _mr9.xys[_bk9] && isFinite(_bv9) && _bv9 > 0){
       _mr9.xys[_bk9].p = _bv9;
       saveMarks();
+      /* 2026-11-25 补 ponly:true：只动价——原样发 on:true 会被 worker 盖 t=now，
+         已发布列表按首发布时间排序后这条会跳位（改价=修改，位置不动） */
       authFetch('/pub', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ c: _bc9, on: true, xy: _bk9, k: _mr9.xys[_bk9].k === 's' ? 's' : 'l', p: _bv9 }) }, true);
+                          body: JSON.stringify({ c: _bc9, on: true, ponly: true, xy: _bk9, k: _mr9.xys[_bk9].k === 's' ? 's' : 'l', p: _bv9 }) }, true);
       run();
     }
     return;
@@ -9338,7 +9444,7 @@ function ghostCardHTML(c){
   if (xids.length){
     h += '<div class="row"><label>闲鱼ID</label><span class="v mono" style="font-weight:600;color:#0f7b3a">'
        + xids.map(function(_xi){
-           return '<span data-xidcopy="' + esc(_xi.xid) + '" title="点一下复制这个闲鱼ID" style="cursor:pointer">'
+           return '<span data-xidcopy="' + esc(_xi.xid) + '" style="cursor:pointer">'
                 + esc(_xi.xy) + '·' + esc(_xi.xid) + '</span>'
                 + (_xi.xid && /^\d{6,}$/.test(_xi.xid) && pok('xyops')
                    ? ' <span data-xyview="' + esc('https://seller.goofish.com/?site=COMMONPRO#/seller-item/publish?itemId=' + encodeURIComponent(_xi.xid)) + '" data-acc="' + esc(_xi.xy || 'default') + '"'

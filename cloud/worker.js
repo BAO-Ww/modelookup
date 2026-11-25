@@ -1342,7 +1342,12 @@ async function route(request, env, path, ctx) {
       const nxid = b.xid === undefined
         ? (oldE && oldE.xid != null ? String(oldE.xid).slice(0, 40) : null)
         : (b.xid ? String(b.xid).trim().slice(0, 40) : null);
-      const ne = { t: now, k, p: np };
+      // 2026-11-25 用户令「已发布修改不重新排序」：重标同一条记录（改价/改ID/同号换口径搬家）
+      // 保留第一次发布的时间——客户端已发布列表按首发布时间排序，t 一盖卡片就跳位。
+      // 客户端搬家（老键删、落新键）时带 pt=老记录的 t，只认过去的时间戳（防未来时间灌入）；
+      // 不带 pt 就看同键旧记录 oldE——有就沿用它的 t；全新发布才盖 now。
+      const _pt = (isFinite(+b.pt) && +b.pt > 0 && +b.pt <= now + 60000) ? +b.pt : 0;
+      const ne = { t: _pt || (oldE && +oldE.t) || now, k, p: np };
       if (nxid) ne.xid = nxid;
       cur.xys[xy] = ne;
       markTop(cur);

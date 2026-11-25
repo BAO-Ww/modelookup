@@ -588,6 +588,75 @@ def _render_img1(cfg, prod, out, safe=False, tone=None):
     wm_paper.stamp_save(C, out, 95)
 
 
+# ── 参数卡行精选（2026-11-25 用户令「参数卡全是尺寸有点过分」）────────────
+# W1/D1/H1 是安装预留口径（铁律：预留不进卖货），一票否决；真参数
+# （能效/容量/噪音/功率/水压…）优先，W/D/H 三围殿后补位，电压/频率凑数垫底。
+# 所有参数卡（蓝底/白字/拼版/聚光）统一走这里；读侧精选对旧 cfg 快照同样生效。
+_PARAM_RESERVED_RE = re.compile(r"[WDH]\d+$")      # 宽度W1/深度D1/高度H1 预留行
+_PARAM_DIM_RE = re.compile(r"^(宽度|深度|高度|宽|深|高|长)[WDH]?\d*$")  # 尺寸家族行
+_PARAM_SELL_KEYS = ("能效", "容量", "容积", "噪音", "声功率", "功率", "变频",
+                    "风冷", "制冷方式", "控温方式", "压缩机", "气候类型", "防触电", "水压")
+# 注：不放「定频」——「额定频率」含「定频」子串会被误判成卖点键（实锤）；
+# 真定频机的键都带「变频」字样（变频/定频二选一列），走「变频」键照样命中。
+_PARAM_TAIL_KEYS = ("电压", "频率", "净重", "毛重", "重量")
+
+
+def _curate_param_rows(rows, n=8):
+    """参数卡行精选：预留行剔除 → 卖点键优先 → 其余真参数原序 → W/D/H 三围殿后
+    → 凑数行垫底，最多 n 条。rows 兼容 (k,v) 元组列表；空值/「尺寸」行剔除。"""
+    pool, seen = [], set()
+    for r0 in (rows or []):
+        if not (isinstance(r0, (list, tuple)) and len(r0) >= 2):
+            continue
+        k, v = str(r0[0]).strip(), str(r0[1]).strip()
+        if not k or not v or k in seen or k == "尺寸":
+            continue
+        if v in ("暂无数据", "暂无", "无", "-", "/"):
+            continue
+        seen.add(k)
+        pool.append((k, v))
+    _dim, _nd, _tail = [], [], []
+    for k, v in pool:
+        if _PARAM_RESERVED_RE.search(k):
+            continue
+        if _PARAM_DIM_RE.match(k):
+            _dim.append((k, v))
+        elif (any(x in k for x in _PARAM_TAIL_KEYS)
+              and not any(x in k for x in _PARAM_SELL_KEYS)):
+            _tail.append((k, v))
+        else:
+            _nd.append((k, v))
+    out, used = [], set()
+
+    def _push(k, v):
+        used.add(k)
+        out.append((k, v))
+
+    for w in _PARAM_SELL_KEYS:          # 卖点键按价值序逐个挑（能效→容量→噪音…）
+        if len(out) >= n:
+            break
+        for k, v in _nd:
+            if k not in used and w in k:
+                _push(k, v)
+                break
+    for k, v in _nd:                    # 其余真参数原序
+        if len(out) >= n:
+            break
+        if k not in used:
+            _push(k, v)
+    for k, v in _dim:                   # W/D/H 三围殿后补位
+        if len(out) >= n:
+            break
+        if k not in used:
+            _push(k, v)
+    for k, v in _tail:                  # 电压/频率凑数垫底
+        if len(out) >= n:
+            break
+        if k not in used:
+            _push(k, v)
+    return out
+
+
 def _render_img2(cfg, prod, out, safe=False):
     C = wm_paper.white_bg_wm(1080, 1080, "blue")   # 烘底水印：水印只进底色，机器/字后铺盖住
     d = ImageDraw.Draw(C)
@@ -614,7 +683,7 @@ def _render_img2(cfg, prod, out, safe=False):
     x0, y0, cw = 520, 246, 500
     _fk = 23 if safe else 26
     _fv = 20 if safe else 23
-    for i, (k, v) in enumerate(cfg["params_rows"]):
+    for i, (k, v) in enumerate(_curate_param_rows(cfg.get("params_rows"))):
         y = y0 + i * 74
         d.text((x0, y + 26), k, font=_font(F_LIGHT, _fk), fill=GRAY)
         _pill(d, x0 + cw, y + 9, v, _font(F_REG, _fv))
@@ -664,6 +733,9 @@ def _v8_points(points, params_rows, n=6):
             break
         # 2026-11-17 实锤卖点图补出「暂无数据/显示屏」卡：空值参数不进卖点池
         if str(v).strip() in ("暂无数据", "暂无", "无", "-", "/", "不支持", "否"):
+            continue
+        # 2026-11-25 铁律：W1/D1/H1 预留口径不进卖点池（「620 宽度W1」卖点条难看）
+        if _PARAM_RESERVED_RE.search(str(k)):
             continue
         # 2026-11-22 CWC16-B07BK 实锤：「装载容量 8套/每抽屉」补成卖点行「8套容量」
         # 跟标题/话术的 16套 打架——每抽屉口径的行不进卖点池（参数卡照常展示）
@@ -906,14 +978,40 @@ def _render_img4(cfg, out, prod=None, safe=False):
                     im2 = im3
             except Exception:
                 pass
-        C.paste(im2, (int(540 - im2.size[0] / 2), 180 + max(0, int((640 - im2.size[1]) / 2))))
-        # 底部两行：品牌+型号 / 宽高深（无实测数字就不硬标）
+        _py4 = 180 + max(0, int((640 - im2.size[1]) / 2))
+        C.paste(im2, (int(540 - im2.size[0] / 2), _py4))
+        # 底部两行：品牌+型号 / 宽高深——**铁律（2026-11-25 用户令「这个要在这里是
+        # 铁律，每个型号都是」）：宽高深必须印在卡底，跟图注是否带尺寸文字无关**；
+        # 中文宽深高只出现在卡底，永不重复。无实测数字就不硬标。
+        dims = cfg.get("dims") or ([int(n) for n in nums[:3]] if len(nums) >= 3 else None)
         d.text((540, 918), "%s  %s" % (cfg.get("brand", ""), cfg.get("model", "")),
                font=_font(F_BOLD, _b4), fill=INK, anchor="mm")
-        dims = cfg.get("dims") or ([int(n) for n in nums[:3]] if len(nums) >= 3 else None)
         if dims and all(dims):
             d.text((540, 972), "宽 %d mm · 高 %d mm · 深 %d mm" % tuple(dims),
                    font=_font(F_REG, _d4), fill=GRAY, anchor="mm")
+        # 图注字母对号行（2026-11-25 用户令「蓝底这里还是空的没有 a1=835mm」→
+        # 复令「聚光红色字就行，蓝底的字黑白，可以的话加个胶囊」）：聚光链保持
+        # 红字描摹稿；蓝底这行改黑白——浅灰胶囊底 + 深墨字，数据源同一个
+        # _dims_pair_text（数值表→权威三围对账→字母语义对位 a*=宽/b*=高/d*=深），
+        # 对不出（无权威三围/无数值表）就不画不编。贴图正下方自适应落位，
+        # 上限 878 不压卡底品牌行（918），胶囊超宽自动缩字号。
+        try:
+            _cap4 = _dims_pair_text((cfg.get("model") or "").strip(),
+                                    load_kinfo(cfg.get("model") or "") or {}) or ""
+            if _cap4:
+                _cs4 = 28
+                while _cs4 > 17 and d.textlength(_cap4, font=_font(F_BOLD, _cs4)) > 960:
+                    _cs4 -= 1
+                _f4 = _font(F_BOLD, _cs4)
+                _cw4 = d.textlength(_cap4, font=_f4)
+                _cy4 = min(872, _py4 + im2.size[1] + 30)
+                _ph4 = _cs4 + 26
+                d.rounded_rectangle([540 - _cw4 / 2 - 30, _cy4 - _ph4 / 2,
+                                     540 + _cw4 / 2 + 30, _cy4 + _ph4 / 2],
+                                    radius=(_cs4 + 26) / 2, fill=(240, 242, 246))
+                d.text((540, _cy4), _cap4, font=_f4, fill=INK, anchor="mm")
+        except Exception:
+            pass
         # 底部红胶囊提示语（2026-11-14 用户定稿：拍前告知省市、好查库存）
         pei_core.hint_pill(C, pei_core.HINT_TEXT["blue"])
         wm_paper.stamp_save(C, out, 95)
@@ -956,13 +1054,18 @@ def _render_img4(cfg, out, prod=None, safe=False):
         # 挪到正视图盒子左边缘——俯视图 821 标注在版心中央，互不相碰
         d.text((fx, fy + fh + 14), "正视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
         # 俯视图（宽×深）：先限高再反推宽，冰箱这类高机不撑爆版面
+        # 2026-11-25 用户令「尺寸图下面一定是要跟其他型号一样的，铁律」：本分支原来
+        # 只印宽高深灰行、漏了品牌+型号行（sizeimg 分支/兜底分支都有）——EC8005-MV5U1
+        # 实锤卡底少一行。俯视图整体上提 16px 给品牌行腾位（标签原 896~918 会擦叠）。
         ph2 = min(150, max(24, int(D / W * 300)))
         pw2 = max(60, min(620, int(ph2 * W / D)))
-        px2, py2 = 540 - pw2 // 2, fy + fh + 112
+        px2, py2 = 540 - pw2 // 2, fy + fh + 96
         d.rounded_rectangle([px2, py2, px2 + pw2, py2 + ph2], radius=8, outline=INK, width=2)
         dim_line(px2, py2 - 36, px2 + pw2, py2 - 36, str(W))
         dim_line(px2 + pw2 + 36, py2, px2 + pw2 + 36, py2 + ph2, str(D), vertical=True)
-        d.text((540, py2 + ph2 + 14), "俯视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
+        d.text((540, py2 + ph2 + 10), "俯视图", font=_font(F_LIGHT, 22), fill=LGRAY, anchor="ma")
+        d.text((540, 918), "%s  %s" % (cfg.get("brand", ""), cfg.get("model", "")),
+               font=_font(F_BOLD, _b4), fill=INK, anchor="mm")
         _dims_txt = "宽 %d mm · 高 %d mm · 深 %d mm" % (W, H, D)
         _hole = re.sub(r"[（(].*$", "", str(cfg.get("hole_dims") or "")).strip()
         if _hole:
@@ -1049,7 +1152,7 @@ def _wv_img2(cfg, prod, out, tone):
         d.text((64, 74), "核 心 参 数", font=_font(F_BOLD, 44), fill=(255, 255, 255), anchor="lm")
         d.text((1016, 74), (cfg.get("brand") or "") + (cfg.get("cat") or ""),
                font=_font(F_LIGHT, 22), fill=(226, 236, 255), anchor="rm")
-    rows = _wv_fix_rows(cfg.get("params_rows"))[:6]
+    rows = _curate_param_rows(_wv_fix_rows(cfg.get("params_rows")), 6)
     x0, cw, ch, gx, gy, y0 = 60, 470, 206, 20, 18, 188
     for i, (k, v) in enumerate(rows):
         r, c = divmod(i, 2)
@@ -1146,7 +1249,7 @@ def _wv_img4(cfg, prod, out, tone):
             sk = sk.resize((max(1, int(sk.width * sc4)), max(1, int(sk.height * sc4))), Image.LANCZOS)
             C.paste(sk, (int(540 - sk.size[0] / 2), 158 + max(0, int((560 - sk.size[1]) / 2))), sk)
     dims = cfg.get("dims") or ([int(n) for n in nums[:3]] if len(nums) >= 3 else None)
-    if dims and all(dims):
+    if dims and all(dims):   # 铁律：宽高深胶囊每个型号都印（2026-11-25 用户二次令）
         labels = ["宽 %d mm" % dims[0], "高 %d mm" % dims[1], "深 %d mm" % dims[2]]
         fp = _font(F_BOLD, 30)
         ws = [_tw(d, s, fp) + 80 for s in labels]
@@ -1185,7 +1288,7 @@ def _wp_img2(cfg, prod, out, tone):
     bottom3, _ = _place(h3, 880, top_min=240)
     d.ellipse([250 - 160, bottom3 - 24, 250 + 160, bottom3 + 6], fill=A["tint"])
     _paste_product(C, prod2, 250, bottom3, 520, max_w=380)
-    rows = _wv_fix_rows(cfg.get("params_rows"))[:6]
+    rows = _curate_param_rows(_wv_fix_rows(cfg.get("params_rows")), 6)
     x0, x1, y0, rh = 470, 1020, 208, 84
     for i, (k, v) in enumerate(rows):
         y = y0 + i * rh
@@ -2702,6 +2805,42 @@ def _gather_info(model, log, force=0):
             _old = [u for u in (info.get("_book_size_urls") or []) if u not in set(_book_u)]
             info["_book_size_urls"] = _book_u + _old
         if book.get("dim_table"):
+            # 2026-11-25 EC8005-MV5U1 实锤：扫描版页里「本机线稿字母标注 + 全系参数表」
+            # 混排，两道视觉提示词闸都拦不住把邻行数字安给本机（MP3 行 765/440/100/430
+            # 被读成 A1/B1/C1/D1 且 vals 键直接写请求型号）。加权威对账：官网/缓存
+            # props 已有「外形尺寸(宽*高*深)」带标签行时，数值表前 3 值必须与之有交集
+            # （本机专属设计口径表至少共一个真值；全系杂值行一个都碰不上）——
+            # 无交集 = 读串了，整条弃用，同页尺寸图一并弃。
+            _auth3 = None
+            for _k, _v in (info.get("props") or []):
+                _ks, _vs2 = str(_k), str(_v)
+                if "外形尺寸" in _ks and re.search(r"\d{2,4}[\*x×]\d{2,4}", _vs2):
+                    _ns = [int(x) for x in re.findall(r"\d{2,4}", _vs2)]
+                    if len(_ns) >= 3:
+                        _auth3 = set(_ns[:3])
+                    break
+            if _auth3:
+                _bad_nodes = set()
+
+                def _dt_ok(tb):
+                    _vs = list((tb.get("vals") or {}).values())
+                    if not _vs:
+                        return False
+                    _row = [int(x) for x in (_vs[0] or [])[:3]
+                            if str(x).strip().lstrip("0") or str(x) == "0"]
+                    if not _row or not (_auth3 & set(_row)):
+                        _bad_nodes.add(str(tb.get("node") or ""))
+                        return False
+                    return True
+
+                _n0 = len(book["dim_table"])
+                book["dim_table"] = [t for t in book["dim_table"] if _dt_ok(t)]
+                if _bad_nodes and book.get("size_imgs"):
+                    book["size_imgs"] = [x for x in book["size_imgs"]
+                                         if not any(nd in x[0] for nd in _bad_nodes)]
+                if log and _n0 != len(book["dim_table"]):
+                    log("数值表权威对账：%d 条中 %d 条与本机外形尺寸对不上，弃（防全系表串值）"
+                        % (_n0, _n0 - len(book["dim_table"])))
             # 尺寸数值表（线稿只标字母、毫米数在同页表格，LES50H-AC5 实锤）——
             # _pick_prod 合成「官方线稿+表格图注」用；按节点签名去重防缓存叠加
             _have_dt = {(t.get("node"), tuple(t.get("labels") or ())) for t in (info.get("_book_dim_table") or [])}
@@ -2894,6 +3033,40 @@ def _gather_info(model, log, force=0):
                 info["cat"] = _c  # 缓存里的 cat 可能是旧映射（HKC3000 净水机被标洗衣机实锤），按 URL 现算覆盖
         except Exception:
             pass
+    # 2026-11-25 EC8005-MV5U1 实锤（出口全量对账）：数值表可能从缓存继承（book 短路
+    # 不重新解析），合并点单次对账拦不住——落盘前对 _book_dim_table 全量过闸：
+    # 官网/缓存 props 已有「外形尺寸(宽*高*深)」带标签行时，每条数值表前 3 值必须
+    # 与权威三围有交集（本机专属设计口径表至少共一个真值；全系杂值行一个都碰不上），
+    # 无交集 = 视觉把邻行数字安给了本机（MP3 行 765/440/100/430 实锤），整条弃。
+    try:
+        _auth3 = None
+        for _k, _v in (info.get("props") or []):
+            _ks, _vs = str(_k), str(_v)
+            if "外形尺寸" in _ks and re.search(r"\d{2,4}[\*x×]\d{2,4}", _vs):
+                _ns = [int(x) for x in re.findall(r"\d{2,4}", _vs)]
+                if len(_ns) >= 3:
+                    _auth3 = set(_ns[:3])
+                break
+        if _auth3 and info.get("_book_dim_table"):
+            _n0 = len(info["_book_dim_table"])
+
+            def _dt_keep(t):
+                _vs = list((t.get("vals") or {}).values())
+                if not _vs:
+                    return False
+                try:
+                    _row = [int(x) for x in (_vs[0] or [])[:3] if str(x).strip()]
+                except Exception:
+                    return False
+                return bool(_row) and bool(_auth3 & set(_row))
+
+            info["_book_dim_table"] = [t for t in info["_book_dim_table"] if _dt_keep(t)]
+            if log and _n0 != len(info["_book_dim_table"]):
+                log("数值表出口对账：%d 条中 %d 条与本机外形尺寸 %s 无交集，弃（防全系表串值）"
+                    % (_n0, _n0 - len(info["_book_dim_table"]),
+                       "/".join(str(x) for x in sorted(_auth3))))
+    except Exception:
+        pass
     # 抓到参数就落盘（2026-10-29 LTD-575WDS9U1 实锤：凑到 23 条却只活在内存，
     # info.json 永远 0 条，下回生成又从头来）。
     # 2026-11-23 新链：pubwork 磁盘缓存已砍，只落 kitset 权威副本（info.json）。
@@ -3143,6 +3316,25 @@ def _dims_from_book_table(tables, model):
         if not row or len(row) < 3:
             continue
         labels = [str(l) for l in (_tb.get("labels") or [])]
+        # 2026-11-25 XQB120-BS5VE1 实锤：洗衣机线稿六列 W/W1/D/D1/H/H1 全匹配
+        # [A-Za-z]{1,3}\d? → 被当 a/b/c/d 走「首列宽/次列高/末列≥300深」工程图惯例 →
+        # 宽580 高620(W1) 深1357(H1) 全错（W1=含凸出宽、H1=开盖高，都不是机身三围）。
+        # 字母带语义（W=宽 D=深 H=高）就按语义对号，只认纯字母——W1/D1/H1 预留口径
+        # 不进卖货尺寸。washerh5 结构化表正是这个家族。
+        _sem = {}
+        for _l, _x in zip(labels, row):
+            try:
+                _iv = int(_x)
+            except Exception:
+                continue
+            if re.fullmatch(r"W", _l, re.I):
+                _sem["w"] = _iv
+            elif re.fullmatch(r"D", _l, re.I):
+                _sem["d"] = _iv
+            elif re.fullmatch(r"H", _l, re.I):
+                _sem["h"] = _iv
+        if len(_sem) >= 2:
+            return (_sem.get("w") or 0, _sem.get("h") or 0, _sem.get("d") or 0)
         _alpha = sum(1 for l in labels if re.fullmatch(r"[a-zA-Z]{1,3}\d?", l))
         if labels and _alpha >= max(1, len(labels) - 1):
             _tail = [int(v) for v in row[2:] if 300 <= int(v) <= 3000]
@@ -3475,12 +3667,28 @@ def _fetch_img(u, timeout=20):
 def _accept_sizeimg(im, sizeimg, prod_path=None, log=None, url=""):
     """收下这张尺寸图：与产品主图同图则丢（那是产品照），否则垫白存盘。
     2026-11-11 用户令「这个都能当尺寸图的」：存盘后还得 AI 读得出毫米数字
-    （_nums_gate），读不出就删盘退 False——场景照会骗过 GLM 的「是/否」。"""
+    （_nums_gate），读不出就删盘退 False——场景照会骗过 GLM 的「是/否」。
+    2026-11-25 XQB120-BS5VE1 实锤：官网「安装空间示意图」（洗衣机线框+「上面预留
+    ≥20mm/后面≥70mm」）有线框、OCR 还读得出 20/70/50/15，把真三围线稿挤掉当了
+    sizeimg——全文含「预留」= 安装空间示意图，一票否决（真尺寸线稿绝不印「预留」）。"""
     try:
         if prod_path and os.path.isfile(prod_path) and _same_img(im, Image.open(prod_path)):
             return False
         _flat_white(im).save(sizeimg, quality=92)
-        if not _nums_gate(sizeimg, log, "详情页候选 %s" % (url.split("/")[-1] or "本地图")):
+        try:
+            _ft = _ocr_img_text(sizeimg)
+        except Exception:
+            _ft = ""
+        if "预留" in (_ft or ""):
+            try:
+                os.remove(sizeimg)
+            except Exception:
+                pass
+            if log:
+                log("详情页候选 %s 是安装预留示意图（OCR 见「预留」），弃用"
+                    % (str(url).split("/")[-1] or "本地图"))
+            return False
+        if not _nums_gate(sizeimg, log, "详情页候选 %s" % (str(url).split("/")[-1] or "本地图")):
             return False
         if log:
             log("官网详情页命中官方尺寸图：%s" % (url.split("/")[-1] or "本地图"))
@@ -3928,6 +4136,106 @@ def _ocr_size_nums(fp, log=None):
     return []
 
 
+def _dims_pair_text(model, info):
+    """数值表 → 图注字母对号串「W=580mm  W1=620mm  …」——全部字母组一组不缺
+    （2026-11-25 用户令「人家这么尺寸你就写了3个」）。聚光描摹管线用它以卡片
+    字体在稿下重印图注（合成图注描摹必糊）；无数值表返回 ''。
+    匹配口径同 _dims_from_book_table：先全码、再同系列骨架放行。"""
+    _nm_p = norm_model(model) or model
+
+    def _skl(s):
+        return re.sub(r"[0-9.\-]", "", norm_model(s) or s or "")
+
+    # 权威三围（2026-11-25 EC8005-MV5U1 实锤）：官网/登记 props 的「外形尺寸(宽*高*深)」
+    # 行是唯一可信锚点——数值表行/线稿字母对位全拿它对账，对不上的一律不印。
+    _auth3, _seq = None, "WHD"
+    for _k, _v in (info or {}).get("props") or []:
+        _ks, _vs = str(_k), str(_v)
+        if "外形尺寸" in _ks and re.search(r"\d{2,4}[\*x×]\d{2,4}", _vs):
+            _ns = [int(x) for x in re.findall(r"\d{2,4}", _vs)]
+            if len(_ns) >= 3:
+                _auth3 = _ns[:3]
+                _mo = re.search(r"[（(]([^）)]*)[）)]", _ks)
+                if _mo:
+                    _seq = "".join({"宽": "W", "深": "D", "高": "H"}.get(c, "")
+                                   for c in _mo.group(1) if c in "宽深高") or "WHD"
+            break
+
+    for _tb in (info or {}).get("_book_dim_table") or ():
+        _vv = _tb.get("vals") or {}
+        _row = _vv.get(_nm_p)
+        if not _row:
+            for _mk in _vv:
+                if _skl(_mk) and _skl(_mk) == _skl(model):
+                    _row = _vv[_mk]
+                    break
+        if not _row and len(_vv) == 1:
+            # 单条目表=专门给本机抓的（washerh5 结构化尺寸表一表一机）——手抖型号
+            # 骨架对不上（BS5VE1↔B53VE1 的 S 差异）也放行，图注不能因手抖丢失
+            _row = next(iter(_vv.values()))
+        _labels = _tb.get("labels") or []
+        if _row and _labels:
+            # 权威对账（出口闸只管落盘，这里管任务内存继承的脏表）：前 3 值与权威
+            # 三围无交集 = 视觉把邻行数字安给了本机（MP3 行 765/440/100/430 实锤），
+            # 跳过这张表走字母对位兜底
+            if _auth3:
+                try:
+                    _head = [int(x) for x in (_row or [])[:3] if str(x).strip()]
+                except Exception:
+                    _head = []
+                if not _head or not (set(_auth3) & set(_head)):
+                    continue
+            return "   ".join("%s=%smm" % (str(_l).strip(), str(_v))
+                              for _l, _v in zip(_labels, _row))
+    # 2026-11-25 用户令「图只有 a1b1d1 的就是显示这几个的多少就好了，这种尺寸你都
+    # 找不到吗，在说明书里面」：全系杂值表被权威对账拦掉后，线稿字母（a1/b1/d1）
+    # 没了数字来源——用权威外形尺寸按字母语义对位：a*=宽、b*=高、d*=深（家电
+    # 说明书工程惯例：正视图 a×b、侧视 d=直径/深；c*=剖视内部参数不印）。
+    # 字母集从线稿 OCR 读（读不到退 a1/b1/d1）。
+    try:
+        if _auth3:
+            _sem = dict(zip(_seq, _auth3))          # {'W':835,'H':475,'D':465}
+            _mp = {"A": "W", "B": "H", "D": "D"}
+            _letters = []                           # [(字母, cx, min_y)]
+            _si2 = os.path.join(model_dir((model or "").strip()), "sizeimg.jpg")
+            if os.path.isfile(_si2):
+                for _b, _t in (_ocr_img_items(_si2) or []):
+                    # OCR 对小字母识别糙（11-25 EC8005 实锤：a1→'aαl'、d1→'dl'）——
+                    # 首字母∈{a,b,d} 后跟 1/l/α/杂讯都收，显示归一成 a1/b1/d1
+                    _m2 = re.match(r"^([abd])[1ilαΑ]*$", str(_t).strip(), re.I)
+                    if _m2:
+                        _xs = [float(p[0]) for p in _b]
+                        _ys = [float(p[1]) for p in _b]
+                        _letters.append((_m2.group(1) + "1",
+                                         (min(_xs) + max(_xs)) / 2, min(_ys)))
+            if _letters:
+                # 阅读序：正视图组在左、侧视图组在右——cx 排序后相邻差 >300 切新视图组，
+                # 组内按 y（a1 顶→b1 侧）；单视图机型自然同组按 y
+                _letters.sort(key=lambda x: x[1])
+                _groups, _prev = [], None
+                for _u, _cx, _y in _letters:
+                    if _prev is not None and _cx - _prev > 300:
+                        _groups.append([])
+                    elif not _groups:
+                        _groups.append([])
+                    _groups[-1].append((_u, _y))
+                    _prev = _cx
+                _ordered = []
+                for _g in _groups:
+                    _g.sort(key=lambda x: x[1])
+                    _ordered.extend(_g)
+                _letters = [(u, 0, 0) for u, _y in _ordered]
+            else:
+                _letters = [("a1", 0, 0), ("b1", 0, 1), ("d1", 0, 2)]
+            _out = ["%s=%dmm" % (_u, int(_sem[_mp[_u[0].upper()]]))
+                    for _u, _y, _x in _letters if _sem.get(_mp.get(_u[0].upper(), ""))]
+            if _out:
+                return "   ".join(_out)
+    except Exception:
+        pass
+    return ""
+
+
 def _nums_gate(sizeimg, log, tag, allow_ai=True):
     """2026-11-11 用户令「这个都能当尺寸图的」：AI 点头还不够——官方尺寸图必须
     **读得出毫米数字**。JSQ31-16FET7FRTPGU1 实锤：产品场景照（浅蓝水纹底）把 GLM-4V
@@ -4225,7 +4533,10 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
     srcs = _xs_part + srcs + _rest_part
     best = None   # (score, PIL image)
     _trans_fallback = [None]   # 透明底小图暂存路径（等更大的变体）
-    _trans_lock = [None]       # (面积, crop, url) 透明底大图候选——循环后与泛洪 best 同走 AI 把关
+    _trans_lock = []           # [(面积, crop, url)] 透明底大图候选——循环后按「整机
+                               # 形态优先、面积降序」逐个走 AI 把关（2026-11-25 由单槽
+                               # 改队列：918x4592 详情长图面积最大抢锁位，AI 毙掉长图后
+                               # 真整机渲染 905x1642 连受审资格都没有，XQB120-BS5VE1 实锤）
     _xs_cands = []             # (面积, RGBA 原图, url) 欣盛候选——形状闸豁免，AI 把关层拦开门/背面图
     _ai_cand = []   # 尺寸图 AI 复核候选（本地路径，启发式漏判时商汤/GLM 兜底认）
     _cand_md5 = set()  # 候选去重（2026-11-12：官网同图两份会占满 12 格/双倍额度）
@@ -4241,6 +4552,12 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
         if u in seen or n >= 40 or (have_prod and have_size):
             break
         seen.add(u); n += 1
+        # 2026-11-25 washerh5 配件清单图（XQB120-BS5VE1 实锤：parts_list/digai1
+        # 「底盖x1」黑塑料配件图）永不为主图候选——配件/螺钉/软管图与整机无关
+        if "/parts_list/" in str(u):
+            if log:
+                log("候选%d 配件清单图（parts_list），跳过" % n)
+            continue
         try:
             if kind == "url":
                 # 2026-11-24 官网大图升级（用户令「官网图不可能这么糊」）：详情页 HTML
@@ -4335,27 +4652,86 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 if bbox and (bbox[2] - bbox[0]) >= 200 and (bbox[3] - bbox[1]) >= 300:
                     # 文档图闸（2026-11-24 BCD-243WGHC2E7SW 实锤）：官网 33.png 参数表
                     # 是「透明底 PNG」且 bbox 铺满全页，透明底收录后 AI 把关还随机误判
-                    # 「整机照」→ 参数表当了首图。bbox 占比 >80% 的透明图是参数表/
-                    # 文档/长图特征（整机实拍照四周有留白），直接弃。
+                    # 「整机照」→ 参数表当了首图。
+                    # 2026-11-25 二修（XQB120-BS5VE1 实锤）：bbox 占比这把尺子分不开
+                    # 文档表和机器渲染——washerh5 说明书唯一能当主图的整机渲染
+                    # （936×1660 透明底）fill=0.96 照样撞 0.8 闸被弃，说明书全是
+                    # 操作示意图→四层全空误报。真判据是内容底色：参数表/文档/示意图
+                    # =大片白底，实体机渲染=色块（白占比≈0）。白占比（>235 灰白）
+                    # >40% 判文档弃；否则放行走下方 trans_lock/备胎 + AI 把关链。
                     _fill = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) / float(w * h)
                     if _fill > 0.8:
+                        _cc = rgba.crop(bbox).convert("RGB").resize((64, 64))
+                        _pd = list(_cc.getdata())
+                        _wf = sum(1 for r, g, b in _pd
+                                  if r > 235 and g > 235 and b > 235) / float(max(1, len(_pd)))
+                        if _wf > 0.40:
+                            if log:
+                                log("候选%d 透明底铺满全页（%.0f%%）白底 %.0f%%——参数表/文档/示意图，弃"
+                                    % (n, _fill * 100, _wf * 100))
+                            continue
                         if log:
-                            log("候选%d 透明底内容铺满全页（%.0f%%）——参数表/文档图，弃"
-                                % (n, _fill * 100))
-                        continue
+                            log("候选%d 透明底铺满但白底仅 %.0f%%——判实体机渲染，放行 AI 把关"
+                                % (n, _wf * 100))
                     crop = rgba.crop(bbox)
                     # 2026-11-24 283 实锤：1127x4411 官网详情长图切片，锁定用原图尺寸
                     # min=1127≥800 通过，crop 后内容才 252px——超分 4.3 倍硬拉=糊。
                     # 锁定必须用 crop 后真实内容尺寸。
                     if min(crop.size) >= 800:
+                        # OCR 烙字闸（2026-11-25 XQB120-BS5VE1 实锤）：配件图把
+                        # 「底盖x1」烙在图里，AI 备用通道还误判「整机照」放行——
+                        # 透明底候选先过文字闸：满 12 框=步骤/示意图，或出现横贯
+                        # 大字框（宽>25%图宽且高>6%图高=配件名/标题烙字）都不要
+                        try:
+                            _tp = os.path.join(mdir, "_cand_ocr.png")
+                            crop.convert("RGB").save(_tp)
+                            _oitems = _ocr_img_items(_tp) or []
+                            _obig = 0
+                            for _b, _t in _oitems:
+                                _bw = _b[2][0] - _b[0][0]
+                                _bh = _b[2][1] - _b[0][1]
+                                if _bw > 0.25 * crop.size[0] and _bh > 0.06 * crop.size[1]:
+                                    _obig += 1
+                            if len(_oitems) >= 12 or _obig >= 1:
+                                if log:
+                                    log("候选%d 透明底烙字（%d 框/大字 %d）——配件/步骤图，弃"
+                                        % (n, len(_oitems), _obig))
+                                continue
+                        except Exception:
+                            pass
                         _sc = crop.size[0] * crop.size[1]
-                        if not _trans_lock[0] or _sc > _trans_lock[0][0]:
-                            _trans_lock[0] = (_sc, crop, u if kind == "url" else "")
-                            if log:
-                                log("候选%d 官方透明底 %dx%d，记候选待 AI 把关"
-                                    % (n, crop.size[0], crop.size[1]))
+                        _trans_lock.append((_sc, crop, u if kind == "url" else ""))
+                        # 受审顺序：整机形态（宽高比 0.35~1.7）优先、面积降序——
+                        # 长图切片（h>>w）垫底，避免它抢走头号受审资格烧 AI 额度
+                        _trans_lock.sort(key=lambda t: (
+                            0 if 0.35 <= t[1].size[0] / float(max(1, t[1].size[1])) <= 1.7 else 1,
+                            -t[0]))
+                        del _trans_lock[6:]
+                        if log and _trans_lock[0][2] == (u if kind == "url" else ""):
+                            log("候选%d 官方透明底 %dx%d，记候选待 AI 把关"
+                                % (n, crop.size[0], crop.size[1]))
                         continue
                     if not _trans_fallback[0]:
+                        # 2026-11-25 XQB120-BS5VE1 实锤：「防生锈」说明书文字页 crop
+                        # 后小于 800px 走备胎，绕过了大图烙字闸——黑底文字页落满目录。
+                        # 备胎同闸：满 12 框或横贯大字框=文字/步骤页，不配当机图备胎
+                        try:
+                            _tp = os.path.join(mdir, "_cand_ocr.png")
+                            crop.convert("RGB").save(_tp)
+                            _oitems = _ocr_img_items(_tp) or []
+                            _obig = 0
+                            for _b, _t in _oitems:
+                                _bw = _b[2][0] - _b[0][0]
+                                _bh = _b[2][1] - _b[0][1]
+                                if _bw > 0.25 * crop.size[0] and _bh > 0.06 * crop.size[1]:
+                                    _obig += 1
+                            if len(_oitems) >= 12 or _obig >= 1:
+                                if log:
+                                    log("候选%d 透明底小图烙字（%d 框/大字 %d）——文字/步骤页，不进备胎"
+                                        % (n, len(_oitems), _obig))
+                                continue
+                        except Exception:
+                            pass
                         tp = os.path.join(mdir, "trans_fallback.png")
                         crop.save(tp)
                         _trans_fallback[0] = tp
@@ -4408,8 +4784,9 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
         # ——欣盛 2000px 关门照终于有资格进候选（形状闸豁免后），开门食物照被 AI
         # 把关 false 时退试下一张，不再直接跳海选（283 实锤开门照误判整机当 front）
         _xs_cands.sort(key=lambda t: -t[0])
-        if _trans_lock[0]:
-            _cand = (_trans_lock[0][1], _trans_lock[0][2], "官方透明底")
+        if _trans_lock:
+            _c0 = _trans_lock[0]
+            _cand = (_c0[1], _c0[2], "官方透明底")
         elif _xs_cands:
             _c0 = _xs_cands[0]
             _cand = (_c0[1], _c0[2], "欣盛商品图")
@@ -4429,7 +4806,12 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 log("代码候选（%s）AI 判不对，弃用" % _cand[2])
             _nxt = None
             if _cand[2] == "官方透明底":
-                if _xs_cands:
+                if _trans_lock:
+                    _trans_lock.pop(0)      # 本张已毙，退队列下一张透明底
+                if _trans_lock:
+                    _c0 = _trans_lock[0]
+                    _nxt = (_c0[1], _c0[2], "官方透明底")
+                elif _xs_cands:
                     _c0 = _xs_cands[0]
                     _nxt = (_c0[1], _c0[2], "欣盛商品图")
                 elif best:
@@ -4444,6 +4826,10 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             _cand = _nxt             # 全毙 → None 走拼图海选
         if _cand:
             _rescue_prod(_cand[0], log).save(picked)
+            have_prod = True
+            # 2026-11-25 补 have_prod（XQB120-BS5VE1 实锤）：代码选图成功后没立
+            # 标志 → ③图库/④备胎链照跑，④无条件用 trans_fallback（防生锈文字页
+            # 913×612）把刚选好的整机渲染覆写掉还提前 return，尺寸图流程整个被跳
             if _cand[1]:
                 picked_url = _cand[1]
             if log:
@@ -4638,7 +5024,52 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
         # 读数字，8 张线稿排队 = 半小时（LES60H-AC5 实锤）。现在一张 3.6s，且顺带把 OCR
         # 文本留给下面表格合成挑「真线稿」（带 a/b/c/d 字母标注的那张）。
         _ocr_seen = []          # [(原图路径, 像不像尺寸线稿)]
+        # 2026-11-25 用户令「直接把这个放上去不就好了」：官方详情页自带「印死图注」的
+        # 尺寸图（线稿+宽Nmm·深Nmm·高Nmm+W1=NNNmm 印在图里，XQB120-BS5VE1 实锤
+        # 1271×1234 高清版）在 washerh5 树里挂在「部件名称介绍」节点——ctx 不含
+        # 「尺寸」进不了 size_urls，直采循环摸不到它。直接扫说明书落盘图：方形比例
+        # + OCR 见官方图注模式（宽NNNmm 或 ≥2 组 W1=NNNmm，且全文 ≥4 组 mm）就直采
+        # ——官方印的字比我们合成的权威，还省一道表格合成。
+        try:
+            _cap_pool = []
+            for _cfp in (glob.glob(os.path.join(mdir, "说明书", "*.png"))
+                         + glob.glob(os.path.join(mdir, "说明书", "*.jpg"))
+                         + glob.glob(os.path.join(mdir, "说明书", "*.jpeg"))):
+                try:
+                    _cw, _ch = Image.open(_cfp).size
+                except Exception:
+                    continue
+                if 400 <= _cw <= 2600 and 0.7 <= _cw / float(_ch) <= 1.35:
+                    _cap_pool.append((_cw * _ch, _cfp))
+            _cap_pool.sort(key=lambda t: -t[0])
+            for _, _cfp in _cap_pool[:6]:
+                _cflat = re.sub(r"\s+", "", _ocr_img_text(_cfp) or "")
+                if not _cflat or "预留" in _cflat:
+                    continue
+                _cap_ok = (re.search(r"宽\d{3,}mm", _cflat)
+                           or len(re.findall(r"[WwDdHh]\d?=\d{3,}mm", _cflat)) >= 2)
+                if not (_cap_ok and len(re.findall(r"mm", _cflat, re.I)) >= 4):
+                    continue
+                try:
+                    _cim = Image.open(_cfp)
+                    if prod_path and os.path.isfile(prod_path) \
+                            and _same_img(_cim, Image.open(prod_path)):
+                        continue
+                    _flat_white(_cim).save(sizeimg, quality=92)
+                except Exception:
+                    continue
+                if _nums_gate(sizeimg, log, "官方带图注尺寸图 %s" % os.path.basename(_cfp),
+                              allow_ai=False):
+                    have_size = True
+                    if log:
+                        log("官方带图注尺寸图直采：%s（图注官方印死，免合成）"
+                            % os.path.basename(_cfp))
+                    break
+        except Exception:
+            pass
         for _su in size_urls[:8]:   # 扫描版 PDF 页 32 张起（C8U12G3），4 席不够摸到尺寸页
+            if have_size:           # 官方带图注尺寸图已直采，候选不再抢位
+                break
             _sfp = _size_fp(_su)
             if not _sfp:
                 continue
@@ -4648,10 +5079,20 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
             _sfp = _norm_dark_lineart(_sfp, log)
             _txt = _ocr_img_text(_sfp)
             _flat = re.sub(r"\s+", "", _txt or "")
-            # 「像尺寸线稿」：有 a1/b1/c1/d1 这类字母标注，或有尺寸字样；但排除
-            # 有害物质表/保修收费表这类满页文字的表格（G1020378 实锤被误认成线稿）
-            _looks = (not any(w in _flat for w in ("有害物质", "多溴", "邻苯", "保修", "收费", "三包"))) \
-                and (len(re.findall(r"(?<![a-z0-9])[abcdABCD][0-9](?![0-9a-z])", _flat)) >= 2
+            # 2026-11-25 XQB120-BS5VE1 闸：安装空间示意图（ctx 带「安装」也混在
+            # size_urls 里）OCR 读得出预留毫米数（≥20/70/50/15），会在这条直采链
+            # 抢在真线稿前被收——全文含「预留」直接跳过，绝不进尺寸图。
+            if "预留" in _flat:
+                if log:
+                    log("尺寸线稿候选 %s 是安装预留示意图（OCR 见「预留」），跳过"
+                        % os.path.basename(_sfp))
+                continue
+            # 「像尺寸线稿」：有 a1/b1/c1/d1 或洗衣机家族 W/W1/D/D1/H/H1 这类字母标注，
+            # 或有尺寸字样；但排除有害物质表/保修收费表这类满页文字的表格（G1020378 实锤
+            # 被误认成线稿），2026-11-25 加「预留」——安装空间示意图 OCR 全文带它，
+            # 绝不是外观尺寸图（XQB120-BS5VE1 实锤挤掉真线稿）
+            _looks = (not any(w in _flat for w in ("有害物质", "多溴", "邻苯", "保修", "收费", "三包", "预留"))) \
+                and (len(re.findall(r"(?<![a-zA-Z0-9])[abcdwhdABCDWHD][0-9]{0,2}(?![a-zA-Z0-9])", _flat)) >= 2
                      or bool(re.search(r"(产品尺寸|外形尺寸|整机尺寸|安装尺寸|尺寸示意)", _flat)))
             _ocr_seen.append((_sfp, _looks))
             if not _ocr_size_nums(_sfp):
@@ -4692,15 +5133,25 @@ def _pick_prod(model, img_urls, mdir, log, page_url=None, kind="", want_dims=Non
                 for _sfp in _line_cand[:3]:
                     try:
                         im2 = _flat_white(Image.open(_sfp)).convert("RGB")
-                        # 图注条：白底黑字「a=825mm b=370mm …」，附在线稿下方
-                        _lb = "   ".join("%s=%smm" % (str(_l), str(_v))
+                        # 图注单行=字母对号（2026-11-25 终版用户令）：线稿每个字母都要有
+                        # 「字母=数值mm」（W/W1/D/D1/H/H1 一组不缺，少一个就有一个标注
+                        # 看不懂）；中文宽深高**不印在图注里**——img_4/聚光卡片底部的
+                        # 宽高深行是铁律（「这个要在这里是铁律，每个型号都是」），重复必删。
+                        _lb = "   ".join("%s=%smm" % (str(_l).strip(), str(_v))
                                          for _l, _v in zip(_labels, _row))
-                        _fnt = _font(F_BOLD, max(28, im2.width // 34))
+                        _fsize = max(28, im2.width // 34)
+                        _fnt = _font(F_BOLD, _fsize)
                         _tmp = Image.new("RGB", (im2.width, im2.height + _fnt.size * 2),
                                          (255, 255, 255))
                         _tmp.paste(im2, (0, 0))
                         _dr = ImageDraw.Draw(_tmp)
+                        # 洗衣机六列图注一行放不下起笔为负两头被裁——超宽时字号按画布
+                        # 比例缩，最低 22px 保证可读（XQB120-BS5VE1 实锤）
                         _tw = _dr.textlength(_lb, font=_fnt)
+                        if _tw > im2.width * 0.96:
+                            _fsize = max(22, int(_fsize * im2.width * 0.96 / _tw))
+                            _fnt = _font(F_BOLD, _fsize)
+                            _tw = _dr.textlength(_lb, font=_fnt)
                         _dr.text(((im2.width - _tw) // 2, im2.height + _fnt.size // 2),
                                  _lb, font=_fnt, fill=(20, 20, 20))
                         _tmp.save(sizeimg, quality=92)
@@ -5343,6 +5794,43 @@ def _hard_points(info, pd, sp):
             add("支持预约功能")
         if "智能" in alltext or "wifi" in alltext.lower() or "物联" in alltext:
             add("智能互联，手机远程操控")
+    # 2026-11-25 用户令「这两个文案写的很好，但是科科的写的不够啊」：模板+官网+通用
+    # 兜底走完仍不满 6 条时，参数行直给补点（东星斑同款参数事实口径）——只挑带数字
+    # 的真参数行，重量/电压/尺寸/包装这类废键一概不进；值已在已有卖点里的跳过
+    # （2200W/1级能效这种不许占两行）。add() 自带同名去重，绝不双胞胎。
+    if len(out) < 6:
+        _have = " ".join(out)
+        for k, v in (info.get("props") or []):
+            if len(out) >= 6:
+                break
+            ks, vs = str(k).strip(), str(v).strip()
+            if not vs or vs in ("支持", "是", "有", "具备", "yes", "Yes", "否", "无"):
+                continue
+            if any(x in ks for x in ("净重", "毛重", "重量", "包装", "电压", "电源",
+                                     "型号", "品牌", "产地", "颜色", "尺寸",
+                                     "条码", "编码", "货号")):
+                continue
+            # 2026-11-25 XQB120-BS5VE1 实锤：washerh5 线稿标注键直拼出「宽度W580 /
+            # 宽度W1620 / 高度H11357」——W1+620 粘连读成「宽1620」、H1+1357 粘连
+            # 读成「高11357」，卖货文案全废。①键尾字母带数字（W1/D1/H1）=线稿第二组
+            # （含管路凸出/开盖预留口径），卖货不报；②键尾单个大写字母是线稿标注
+            # 残留（宽度W），剥掉成「宽度580」（剥字母在下面 _kg 定义后做）。
+            if re.search(r"[A-Za-z]\d$", ks):
+                continue
+            if not re.search(r"\d", vs):
+                continue
+            # 键名剥括号；括号里是纯单位（W/MPa/℃/L）且值里没带就补回值尾
+            _mp = re.search(r"[（(]([^（）()]*)[）)]", ks)
+            _u = _mp.group(1).strip() if _mp else ""
+            _kg = re.sub(r"[（(][^（）()]*[）)]", "", ks).strip()
+            _kg = re.sub(r"(?<=[\u4e00-\u9fa5])[A-Z]$", "", _kg)
+            if _u and _u.upper() not in vs.upper() and re.match(r"^[A-Za-z%℃]{1,5}$", _u):
+                _line = _kg + vs + _u
+            else:
+                _line = (_kg + vs) if _kg else vs
+            if _line in _have or vs in _have:
+                continue
+            add(_line)
     return out
 
 
@@ -5520,18 +6008,14 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
         split = _split_name(str(row.get("n") or ""), model)
         if split:
             line1, line2 = split
-    rows = []
     # 2026-11-22 CWC16-B07BK 实锤：爬虫按大小猜的 宽度/高度/深度 行（宽821实为高）
     # 跟官方「整机外形尺寸(宽x深x高)」行同卡打架——带标签行在场时猜序行不进参数卡
     _labeled_in = any("外形尺寸" in str(k) and "宽" in str(k) and "高" in str(k)
                       for k, _ in (info.get("props") or []))
-    # 2026-11-24 用户令「文案里要有能效等级」：官网+说明书合并后 props 是「缓存在前、
-    # 官网键追加在尾」，傻取前 8 条全是说明书键——能效等级/变频/风冷这些核心卖点
-    # 参数永远挤不进参数卡（BCD-243WGHC2E7SW 实锤重出后 params 还是纯说明书 8 条）。
-    # 改两段式：核心卖点键（能效/变频/风冷/压缩机/控温/气候…）先挑出来排最前，
-    # 其余按原序补到 8 条。
-    _PRIORITY_KEYS = ("能效", "变频", "定频", "风冷", "制冷方式", "控温方式",
-                      "压缩机", "气候类型", "防触电")
+    # 2026-11-24 用户令「文案里要有能效等级」：核心卖点键先挑出来排最前（能效/变频/
+    # 风冷/压缩机/气候…），其余按原序补——收进 _curate_param_rows 统一精选。
+    # 2026-11-25 用户令「参数卡全是尺寸有点过分」：W1/D1/H1 预留口径一票否决，
+    # 真参数（容量/噪音/功率/水压…）优先，W/D/H 三围殿后，电压/频率凑数垫底。
     _pool = []
     for k, v in (info.get("props") or []):
         ks, vs = str(k), str(v)
@@ -5540,21 +6024,7 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
         if _labeled_in and ks in ("宽度", "高度", "深度", "宽", "高", "深"):
             continue
         _pool.append((ks, vs))
-    _seen_k = set()
-    for pk in _PRIORITY_KEYS:
-        if len(rows) >= 8:
-            break
-        for k, v in _pool:
-            if pk in k and k not in _seen_k:
-                rows.append((k, v))
-                _seen_k.add(k)
-                break
-    for k, v in _pool:
-        if len(rows) >= 8:
-            break
-        if k not in _seen_k:
-            rows.append((k, v))
-            _seen_k.add(k)
+    rows = _curate_param_rows(_pool, 8)
     # 尺寸：参数没有时查多方核实过的已知库（360WDCL=宽630×高1905×深680，ZOL/太平洋/天马三源一致）；
     # 都没有就不标数字——瞎标 (500,800,500) 是造假（2026-10-22 自查砍掉）
     dims = _parse_dims(pd) or _KNOWN_DIMS.get(model) or _KNOWN_DIMS.get(norm_model(model) or "")
@@ -5972,6 +6442,35 @@ def _rerender_cached(model, mdir, old, log):
     抓取产物（product.png / sizeimg.jpg / 官网图）都在盘上，只重跑渲染 + AI 复检，
     不走网络。set.json 或 product.png 缺料时调用方回退完整抓取链。"""
     cfg = old.get("cfg") or {}
+    # 2026-11-25 用户令「参数卡全是尺寸有点过分」：快照 params_rows 是旧口径
+    # （W1/D1/H1 预留行占卡、真参数挤不进）时，并上 info.json 真参数池重新精选——
+    # 能效/容量/噪音顶上来，W1/D1/H1 预留行出局；精选结果随 set.json 回写，
+    # 下次快照就是新口径。纯本地重排不走网络，不违背「重新生成别重新抓」。
+    try:
+        _props = [(str(k), str(v)) for k, v in ((load_kinfo(model) or {}).get("props") or [])]
+        if _props:
+            _labeled_in = any("外形尺寸" in k and "宽" in k and "高" in k for k, _ in _props)
+            _pool = [(k, v) for k, v in _props
+                     if v.strip() and not any(x in k for x in _SKIP_KEYS)
+                     and not (_labeled_in and k in ("宽度", "高度", "深度", "宽", "高", "深"))]
+            cfg["params_rows"] = _curate_param_rows(
+                (cfg.get("params_rows") or []) + _pool, 8)
+            if log:
+                log("参数卡精选：并入 info.json 真参数池重排（W1/D1/H1 预留行出局）")
+        # 尺寸对账（2026-11-25 EC8005-MV5U1 实锤）：快照 dims 可能是历史脏值（说明书
+        # 全系表 OCR 串值 765/440/430），info.json 里「外形尺寸(宽*高*深)」带标签参数行
+        # 才是正主——拆出的 dims 跟快照不一致时以带标签行为准，随 set.json 回写。
+        _pd2 = pei_core.prop_dict([(str(k), str(v)) for k, v in (_props or [])])
+        _reg_dims = _parse_dims(_pd2)
+        if _reg_dims and all(_reg_dims) and tuple(cfg.get("dims") or ()) != tuple(_reg_dims):
+            if log:
+                log("尺寸对账：快照 %s ≠ 带标签参数行 %s，以后者为准"
+                    % (cfg.get("dims"), tuple(_reg_dims)))
+            cfg["dims"] = [int(x) for x in _reg_dims]
+            cfg["size_pills"] = ["%d × %d mm" % (_reg_dims[0], _reg_dims[1]),
+                                 "深 %d mm" % _reg_dims[2]]
+    except Exception:
+        pass
     # 用户手工图优先（2026-11-17）：官网/主图.* → product.png，官网/尺寸图*/zol_数字 →
     # sizeimg.jpg。重新生成走快照不重新抓，没有这道用户放的图永远晾着。
     _manual_overrides(mdir, log)
@@ -6081,13 +6580,17 @@ def _rerender_cached(model, mdir, old, log):
     return res
 
 
-def generate(model, force=0, log=None, chain="book"):
+def generate(model, force=0, log=None, chain="book", copyonly=0):
+    """copyonly=1（2026-11-25 用户令「重新生成只对文案有用，不用重新生成图片」）：
+    蓝底窗科科列「重新生成」专用——重抓数据、重算标题/卖点/售后、set.json 照落盘，
+    但四张成片不重渲染、水印/糊图预警/聚光对账全跳过、product.png 不重选（AI 选图
+    短路），sizeimg 也不挪备份——图零动作，只换文案。"""
     log = log or (lambda s: None)
     if not os.path.isfile(F_REG):
         raise RuntimeError("缺系统字体 msyh.ttc（%s）" % F_REG)
     mdir = model_dir(model)
     cache = os.path.join(mdir, "set.json")
-    if force:
+    if force and not copyonly:
         # 用户令 2026-11-13「重新生成别重新抓」：抓好的料还在（set.json 快照 + product.png）
         # 就用快照重渲染四张，不重新爬。缺料才落到底下的完整抓取链。
         _prod0 = os.path.join(mdir, "product.png")
@@ -6170,7 +6673,8 @@ def generate(model, force=0, log=None, chain="book"):
         info, img_urls = _ensure_dims_legacy(info, mdir, img_urls, log)
     else:
         log("抓参数/机图（官网→说明书）…")
-        info, img_urls = _gather_info(model, log, force=1 if force else 0)
+        # copyonly=1：参数重抓（文案重出要新数据），图源不强制（选图层短路不换主图）
+        info, img_urls = _gather_info(model, log, force=1 if (force and not copyonly) else 0)
         # 尺寸补漏（2026-10-29 用户令「一个机器怎么可能没有尺寸」；2026-11-23 新链：
         # 中关村下线，缺尺寸键改问说明书站——详见 _ensure_dims）。
         info, img_urls = _ensure_dims(info, mdir, img_urls, log)
@@ -6184,7 +6688,7 @@ def generate(model, force=0, log=None, chain="book"):
                       want_dims=_want,
                       size_urls=tuple((info or {}).get("_book_size_urls") or ()),
                       size_table=tuple((info or {}).get("_book_dim_table") or ()),
-                      force=1 if force else 0)
+                      force=1 if (force and not copyonly) else 0)
     if not prod and zimgs:
         log("中关村图单独再试一轮…")
         prod = _pick_prod(model, zimgs, mdir, log, want_dims=_want, chain="legacy")
@@ -6225,13 +6729,39 @@ def generate(model, force=0, log=None, chain="book"):
     # 只认带「宽/高/深」标签的数字；读不出就不印 pill（官方尺寸图上本来就有图注）。
     _ai_dims = _ocr_dims3(os.path.join(mdir, "sizeimg.jpg"), log) if (
         mdir and os.path.isfile(os.path.join(mdir, "sizeimg.jpg"))) else None
-    if not _ai_dims:
-        # 图注是官方字母（a/b/c/d）没有宽高深字样 → 按数值表映射（工程图惯例：
-        # 首列主视图横向=宽、第二列纵向=高、末列 ≥300=端面深；LES60H-AC5 实锤）
-        _ai_dims = _dims_from_book_table((info or {}).get("_book_dim_table") or (), model)
-        if _ai_dims and log:
-            log("尺寸数字取说明书数值表（宽×高×深）：%s" % "×".join(str(x) for x in _ai_dims))
+    if not _ai_dims or 0 in _ai_dims:
+        # 2026-11-25 XQB120-BS5VE1 实锤：六列图注「W=580mm W1=620mm D=590mm…」
+        # OCR 丢段（「W=580」整段没读出），_ocr_dims3 只凑齐 h/d → dims=[0,966,590]、
+        # pill 变「0 × 966 mm」。说明书数值表（W/D/H 语义对号）是结构化权威：
+        # 全缺整组取，部分缺（0 位）逐位补。
+        _tb_dims = _dims_from_book_table((info or {}).get("_book_dim_table") or (), model)
+        if _tb_dims:
+            if not _ai_dims:
+                _ai_dims = _tb_dims
+                if log:
+                    log("尺寸数字取说明书数值表（宽×高×深）：%s" % "×".join(str(x) for x in _ai_dims))
+            else:
+                _ai_dims = tuple(_tb_dims[i] if not _ai_dims[i] else _ai_dims[i]
+                                 for i in range(3))
+                if log:
+                    log("尺寸数字 OCR 缺项，说明书数值表补齐：%s" % "×".join(str(x) for x in _ai_dims))
     cfg, titles, points, aftersale, aftersales = _build_cfg(info, mdir=mdir, ai_dims=_ai_dims, log=log)
+    if copyonly:
+        # 2026-11-25 用户令「重新生成只对文案有用，不用重新生成图片」：文案算完直接
+        # 落 set.json 收工——四张成片/水印/糊图预警/聚光对账全跳过，图片文件零动作。
+        log("只重文案：跳过渲染，图片不动")
+        res = {"ok": True, "cached": False, "copyonly": True,
+               "model": cfg["model"], "name": cfg["series"] + " " + cfg["model"],
+               "titles": titles, "points": points, "aftersale": aftersale, "aftersales": aftersales,
+               "params": dict(cfg["params_rows"]), "src": cfg["url"],
+               "imgs": ["1", "2", "3", "4"]}
+        res["cfg"] = cfg
+        try:
+            with io.open(cache, "w", encoding="utf-8") as f:
+                json.dump(res, f, ensure_ascii=False)
+        except Exception:
+            pass
+        return res
     log("渲染四张 1080×1080…")
 
     def _p(s):

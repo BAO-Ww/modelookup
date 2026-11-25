@@ -448,6 +448,104 @@ def _par_local():
             _PAR_LOCAL["pars"] = {}
     return _PAR_LOCAL["pars"]
 
+def _official_page_data(model, nm, sk, url, log, pname=''):
+    """官网详情页 URL → data（2026-11-25 从 fetch_official 主循环抽出共用）：
+    抓页 → title/pname 防串页 → 参数组 → 型号自报闸门（页面标型号≠请求弃用，
+    无型号行扫全文自报）→ 参数/卖点/图。任何一道闸不过返回 None。"""
+    s = SITES[sk]
+    try:
+        html = fetch(url, extra_headers={'Referer': s['home'] + '/'})
+    except Exception:
+        return None
+    title = _clean((re.search(r'<title>(.*?)</title>', html, re.S) or [None, ''])[1])
+    if pname:
+        if nm not in norm_model(title + ' ' + pname):
+            return None  # 防串页
+    elif nm not in norm_model(title) and nm not in norm_model(html):
+        return None  # 手工登记路径：title 和全文都不含请求型号 = 别家页
+    groups = parse_groups(html)
+    # 2026-11-19 型号自报闸门（BCD-335WLDPGU1 实锤）：串页详情页 title/pname 可能都过不了
+    # 严检但参数表里白纸黑字写着别的型号（页面标 BCD-342WLLFDEDW9U1 ≠ 请求 BCD-335WLDPGU1），
+    # 参数/卖点/图全是别家机器的。页面自己报的「型号」跟请求对不上 → 整页弃用换下一候选。
+    _pagem = ''
+    for _g, _kv in groups:
+        for _k, _v in (_kv or []):
+            _ks = str(_k).strip().lstrip('：: ')
+            if _ks in ('型号', '产品型号', '商品型号') and str(_v).strip():
+                _pagem = str(_v).strip().lstrip('：: ')
+                break
+        if _pagem:
+            break
+    if _pagem and norm_model(_pagem) != nm:
+        log("官网[%s]型号对不上（页面标 %s ≠ %s），弃用换下一个" % (s['name'], _pagem[:30], model))
+        return None
+    if not _pagem and ('leader.com.cn' in url or 'haier.com' in url or 'casarte.com' in url):
+        # 2026-11-20 补：官网通用页连「型号」行都没有（335WLLFDEDBXU1 实锤串 342 页），拒
+        # 2026-11-24 宽容闸（BCD-283WLHC357SW 实锤误杀）：海尔官网详情页改版后
+        # 参数表不再印「型号」行（型号在 title/JS 配置/页面文案里）——参数表没找到
+        # 不再一票拒，扫页面全文：norm 后全文含请求型号 = 页面自报吻合，放行；
+        # 全文都不含 = title/pname 命中只是搜索行数据、内容页是别家机器
+        # （335WLDPGU1 串 342 页实锤），照旧拒。
+        if nm not in norm_model(html):
+            log("官网[%s]页面没标型号（通用页/串页嫌疑），弃用换下一个" % s['name'])
+            return None
+        log("官网[%s]参数表无型号行，页面全文自报吻合放行" % s['name'])
+    pname_out = _clean(_strip_font(str(pname))) or title or model
+    log("官网[%s]命中：%s / 参数 %d 组" % (s['name'], pname_out[:30], len(groups)))
+    return {'source': '官网', 'brand': s['name'], 'pname': pname_out, 'price': '',
+            'url': url, 'groups': [[g, kv] for g, kv in groups],
+            'sellpoints': parse_sellpoints(html), 'imgs': extract_images(html, url)}
+
+
+def _registered_official_urls(model):
+    """手工登记的官网详情页 URL（kitset/<型号>/官网/官网URL.txt，一行一个）。
+    2026-11-25 用户令「怎么抓取不抓取官网的呢」（EC8005-MV5U1 实锤）：官网检索接口
+    （产品库+说明书库）和产品 sitemap 全都只收「在架在售」，下架/老款的详情页是
+    孤儿页——官网站内搜不到、必应/百度程序内也定位不到（RSS 废/反爬），但页面本身
+    还在。用户搜索引擎找到 URL 贴进登记文件，抓取链就能按正式详情页解析（全闸门
+    防串机）。返回 URL 列表，没有返回 []。"""
+    out = []
+    try:
+        import paths as _paths
+        _regp = os.path.join(_paths.data_base(), "kitset", norm_model(model) or model,
+                             "官网", "官网URL.txt")
+        if os.path.isfile(_regp):
+            with io.open(_regp, encoding="utf-8") as f:
+                out = [x.strip() for x in f.read().replace("；", "\n").replace(";", "\n").splitlines()
+                       if x.strip().lower().startswith("http")]
+    except Exception:
+        pass
+    return out
+
+
+def _registered_official_params(model):
+    """手工登记的官网参数（kitset/<型号>/官网/官网参数.txt，键=值 一行一对）。
+    2026-11-25 用户令「说明书的参数一点都没有」（EC8005-MV5U1 实锤）：下架/老款
+    官网详情页内容可能整个下掉（只剩通用壳，站内检索不收录、详情页数据接口挖不到），
+    说明书 PDF 又是全系杂值表（整页 OCR 错位、铁律禁用防串值）——搜索引擎快照里
+    官网参数还在，用户复制贴进登记文件，抓取链按官网参数正主收进 props。
+    值带「尺寸(宽x深x高)」标签行时 _parse_dims 会照常权威拆 dims。
+    返回 [(键, 值)] 列表，没有返回 []。"""
+    out = []
+    try:
+        import paths as _paths
+        _regp = os.path.join(_paths.data_base(), "kitset", norm_model(model) or model,
+                             "官网", "官网参数.txt")
+        if os.path.isfile(_regp):
+            with io.open(_regp, encoding="utf-8") as f:
+                for ln in f.read().splitlines():
+                    ln = ln.strip()
+                    if not ln or ln.startswith("#") or "=" not in ln:
+                        continue
+                    k, _, v = ln.partition("=")
+                    k, v = k.strip(), v.strip()
+                    if k and v and v not in ("暂无数据", "暂无", "无", "-"):
+                        out.append((k, v))
+    except Exception:
+        pass
+    return out
+
+
 def fetch_official(model, log, need_imgs=False):
     """官网三站顺序找；命中详情页→参数/卖点/产品名/价/图。没命中返回 None。
 
@@ -493,44 +591,39 @@ def fetch_official(model, log, need_imgs=False):
             url = 'https://' + url.lstrip('/')
         if not url:
             continue
-        try:
-            html = fetch(url, extra_headers={'Referer': s['home'] + '/'})
-        except Exception:
+        data = _official_page_data(model, nm, sk, url, log, pname=pname)
+        if not data:
             continue
-        title = _clean((re.search(r'<title>(.*?)</title>', html, re.S) or [None, ''])[1])
-        if nm not in norm_model(title + ' ' + pname):
-            continue  # 防串页
-        groups = parse_groups(html)
-        # 2026-11-19 型号自报闸门（BCD-335WLDPGU1 实锤）：串页详情页 title/pname 可能都过不了
-        # 严检但参数表里白纸黑字写着别的型号（页面标 BCD-342WLLFDEDW9U1 ≠ 请求 BCD-335WLDPGU1），
-        # 参数/卖点/图全是别家机器的。页面自己报的「型号」跟请求对不上 → 整页弃用换下一候选。
-        _pagem = ''
-        for _g, _kv in groups:
-            for _k, _v in (_kv or []):
-                _ks = str(_k).strip().lstrip('：: ')
-                if _ks in ('型号', '产品型号', '商品型号') and str(_v).strip():
-                    _pagem = str(_v).strip().lstrip('：: ')
-                    break
-            if _pagem:
-                break
-        if _pagem and norm_model(_pagem) != nm:
-            log("官网[%s]型号对不上（页面标 %s ≠ %s），弃用换下一个" % (s['name'], _pagem[:30], model))
-            continue
-        if not _pagem and ('leader.com.cn' in url or 'haier.com' in url or 'casarte.com' in url):
-            # 2026-11-20 补：官网通用页连「型号」行都没有（335WLLFDEDBXU1 实锤串 342 页），拒
-            # 2026-11-24 宽容闸（BCD-283WLHC357SW 实锤误杀）：海尔官网详情页改版后
-            # 参数表不再印「型号」行（型号在 title/JS 配置/页面文案里）——参数表没找到
-            # 不再一票拒，扫页面全文：norm 后全文含请求型号 = 页面自报吻合，放行；
-            # 全文都不含 = title/pname 命中只是搜索行数据、内容页是别家机器
-            # （335WLDPGU1 串 342 页实锤），照旧拒。
-            if nm not in norm_model(html):
-                log("官网[%s]页面没标型号（通用页/串页嫌疑），弃用换下一个" % s['name'])
-                continue
-            log("官网[%s]参数表无型号行，页面全文自报吻合放行" % s['name'])
-        log("官网[%s]命中：%s / 参数 %d 组" % (s['name'], pname[:30], len(groups)))
-        return {'source': '官网', 'brand': s['name'], 'pname': pname, 'price': price or '',
-                'url': url, 'groups': [[g, kv] for g, kv in groups],
-                'sellpoints': parse_sellpoints(html), 'imgs': extract_images(html, url)}
+        data['price'] = price or data.get('price') or ''
+        return data
+    # 2026-11-25 用户令「怎么又是官网说明书欣盛都没抓取到东西呢」：三站零命中原来
+    # 全是静默 continue，日志一行不打、用户以为官网层根本没跑——落空必须说出来。
+    log("官网三站（海尔/卡萨帝/统帅）搜索零命中「%s」——官网没收录这台" % model)
+    # 2026-11-25 手工登记兜底（EC8005-MV5U1 实锤）：官网检索接口（产品库+说明书库）
+    # 和产品 sitemap 全只收「在架在售」，下架/老款详情页是孤儿页（站内搜不到），但
+    # 页面本身还在——kitset/<型号>/官网/官网URL.txt 贴上 URL 就按正式详情页解析。
+    _reg = _registered_official_urls(model)
+    if _reg:
+        log("官网检索没收录，试手工登记的 %d 个详情页 URL…" % len(_reg))
+        for url in _reg:
+            sk2 = ('casarte' if 'casarte.com' in url
+                   else ('leader' if 'leader.com.cn' in url else 'haier'))
+            data = _official_page_data(model, nm, sk2, url, log)
+            if data:
+                return data
+    else:
+        log("提示：官网有页但检索不收录的下架/老款，把详情页 URL 贴进 "
+            "kitset\\<型号>\\官网\\官网URL.txt（一行一个）即可自动抓")
+    # 手工参数登记（2026-11-25 EC8005-MV5U1 实锤）：下架款详情页内容整个下掉只剩壳
+    # （URL 在页也死的），但搜索引擎快照里官网参数还在——贴进 官网参数.txt 正主收编。
+    _props_reg = _registered_official_params(model)
+    if _props_reg:
+        log("收编手工参数登记（官网参数.txt）%d 条" % len(_props_reg))
+        return {'source': '官网', 'brand': '', 'pname': model,
+                'price': '',
+                'url': (_reg[0] if _reg else ''),
+                'groups': [["参数", [[k, v] for k, v in _props_reg]]],
+                'sellpoints': [], 'imgs': []}
     if _kv and len(_kv) >= 3:
         log("官网没抓到可用详情页，退回参数库（%d 条参数、无图）" % len(_kv))
         return {'source': '云端参数库', 'brand': '', 'pname': model, 'price': '',
@@ -584,6 +677,7 @@ def fetch_xinsheng(model, log):
     except Exception:
         return None
     if not row:
+        log("欣盛商城没对上「%s」（YS编码/商品名零命中）" % model)
         return None
     code, name, sp, al, pid = row
     album = []
@@ -647,7 +741,7 @@ _BOOK_PARAM_NAMES = ("技术数据", "技术规格", "技术参数", "规格参�
 _BOOK_MANUAL_NAMES = ("安全注意", "注意事", "警告", "使用方法", "安装方法", "清洗保养",
                       "维护", "产品特色", "功能介绍", "洗涤注意", "使用方面", "疑难解答")
 _BOOK_ROW_HEADS = ("项目", "内容", "项目名称", "参数名称", "名称", "条目")
-_BOOK_TEXT_MAX = 24
+_BOOK_TEXT_MAX = 30
 
 
 def _book_find_entry(_post, model, nm, log):
@@ -681,6 +775,50 @@ def _book_find_entry(_post, model, nm, log):
                 log("说明书站模糊命中：%s（码 %s）"
                     % (e.get("productModel"), e.get("productCode")))
                 break
+    if not e:
+        # 2026-11-25 源表手抖兜底（XQB120-B53VE1 ↔ 站上 XQB120-BS5VE1，5/S 打反
+        # 实锤：机器真实在册但精确/裁前缀全查不着）。站内搜索=子串匹配且固定回
+        # 字母序前 5 条（XQB120- total=33 只回 BA*，page/pageNum/pageSize 全无效
+        # 实测）——策略=破折号后逐位前缀茎 + 易混字符替身（5↔S/8↔B/0↔O/1↔I/
+        # 2↔Z/6↔G）生成一组短茎逐个查（~5 次 POST），命中并集里 difflib 挑最像
+        # （≥0.88 且长度差 ≤1 才收）；命中型号由调用方接管防串机并打显式日志。
+        import difflib
+        _cnf = {"5": "S", "S": "5", "8": "B", "B": "8", "0": "O", "O": "0",
+                "1": "I", "I": "1", "2": "Z", "Z": "2", "6": "G", "G": "6"}
+        _s = str(model)
+        _dash = _s.find("-")
+        _stems = []
+        if _dash >= 0:
+            _head, _tail = _s[:_dash + 1], _s[_dash + 1:]
+            for j in range(1, min(4, len(_tail)) + 1):
+                _stems.append(_head + _tail[:j])
+                for c in _cnf.get(_tail[j - 1], ""):
+                    _stems.append(_head + _tail[:j - 1] + c)
+        else:
+            for j in range(4, min(9, len(_s)) + 1):
+                _stems.append(_s[:j])
+        _pool, _seen_s = [], set()
+        for st in _stems:
+            if not st or len(st) < 4 or st in _seen_s:
+                continue
+            _seen_s.add(st)
+            try:
+                _pool.extend(_post("product/getProductBrandNameByProductCode",
+                                   {"productCode": st}).get("data") or [])
+            except Exception:
+                pass
+        best, _bs = {}, 0.0
+        for x in _pool:
+            pm = norm_model(x.get("productModel") or "")
+            if not pm or abs(len(pm) - len(nm)) > 1:
+                continue
+            r = difflib.SequenceMatcher(None, nm, pm).ratio()
+            if r > _bs:
+                best, _bs = x, r
+        if best and _bs >= 0.88:
+            e = best
+            log("说明书站系列模糊命中 %s（请求 %s 相似度 %.2f——源数据疑似手抖）"
+                % (best.get("productModel"), model, _bs))
     return e or {}
 
 
@@ -933,6 +1071,14 @@ def _book_fetch(model, log):
     except Exception as ex:
         log("说明书站查询失败：%s" % str(ex)[:80])
         return {}
+    # 2026-11-25 防串机基座换成命中机（XQB120-B53VE1→站上真机 XQB120-BS5VE1 实锤）：
+    # 树根/参数页比对一律用命中型号，请求型号只留日志——命中机就是这台，比对继续用
+    # 请求型号会把真机误当串机整链弃用。
+    _pm_hit = str(e.get("productModel") or "").strip()
+    model_eff = _pm_hit or model
+    nm_eff = norm_model(model_eff) or nm
+    if nm_eff != nm:
+        log("说明书站命中机 %s ≠ 请求 %s（源数据疑似手抖），防串机按命中机走" % (model_eff, model))
     # 2. 产品码 → 说明书地址（type=1 H5 电子书 / type=2 PDF 整本，11-23 用户令
     # 「不管什么格式的全部下载下来」——PDF 走 _book_pdf 下载整本+解析）
     try:
@@ -946,7 +1092,12 @@ def _book_fetch(model, log):
         return {}
     if _btype == "2" or url.lower().split("?")[0].endswith(".pdf"):
         return _book_pdf(model, url, pcode, log)
-    # 3. SUMEBookMap 树
+    # 3. washerh5 洗衣机/干衣机壳（2026-11-25 新增：XQB120-BS5VE1 实锤——
+    # washShare/ies/<码>/<版本>/web 是 Vite 壳，SUMEBookMap 解析器吃不到被
+    # 「形态不符」跳过；数据=同目录 prod.json 物料树）
+    if "/washShare/ies/" in url:
+        return _book_washerh5(model, model_eff, url, pcode, nm_eff, hdrs, log)
+    # 4. SUMEBookMap 树
     pr = urllib.parse.urlparse(url)
     segs = [s for s in pr.path.split("/") if s]
     ind = ""
@@ -973,8 +1124,8 @@ def _book_fetch(model, log):
     # 全等比对误拒、整链失效）——改为根标 norm 后【包含】请求型号即放行；
     # 必须含完整型号才过，根标是别的型号时依然拦得住，防串机不放松。
     _root_nm = norm_model(str(tree.get("name") or "").replace("说明书", "").replace("使用说明书", ""))
-    if not (_root_nm and nm in _root_nm):
-        log("说明书型号对不上（根标 %s 不含 %s），弃用" % (tree.get("name"), model))
+    if not (_root_nm and nm_eff in _root_nm):
+        log("说明书型号对不上（根标 %s 不含 %s），弃用" % (tree.get("name"), model_eff))
         return {}
     # 全树收节点（递归所有键——各品牌树键名不统一，probe 实锤 WAS/WAT 两形态都能收全）
     nodes = []
@@ -1114,15 +1265,15 @@ def _book_fetch(model, log):
     def _skel(s):
         return re.sub(r"[0-9.\-]", "", norm_model(s) or "")
 
-    if _pm and norm_model(_pm) != nm:
-        if _skel(_pm) and _skel(_pm) == _skel(model):
+    if _pm and norm_model(_pm) != nm_eff:
+        if _skel(_pm) and _skel(_pm) == _skel(model_eff):
             _n0 = len(rows)
             rows = [(k, v) for k, v in rows
                     if str(k) not in ("产品型号", "产品系列") and "容量" not in str(k)]
-            log("说明书参数页标 %s ≠ 请求 %s：同系列变体（就是容量差），剥型号/容量行放行 %d 条通用参数"
-                % (_pm, model, len(rows)))
+            log("说明书参数页标 %s ≠ 命中机 %s：同系列变体（就是容量差），剥型号/容量行放行 %d 条通用参数"
+                % (_pm, model_eff, len(rows)))
         else:
-            log("说明书参数页标 %s ≠ 请求 %s（非同系列），参数弃用防串机" % (_pm, model))
+            log("说明书参数页标 %s ≠ 命中机 %s（非同系列），参数弃用防串机" % (_pm, model_eff))
             rows = []
     log("说明书全量：参数 %d 条 / 图 %d 张（尺寸线稿 %d）/ 说明要点 %d 条"
         % (len(rows), len(imgs), len(size_imgs), len(manual)))
@@ -1134,6 +1285,179 @@ def _book_fetch(model, log):
     return {"rows": rows, "imgs": imgs, "size_imgs": size_imgs,
             "manual": manual, "dim_table": dim_tables, "url": url, "pcode": pcode,
             "brand": brand, "root": str(tree.get("name") or "")}
+
+
+def _book_washerh5(model, model_eff, url, pcode, nm_eff, hdrs, log):
+    """洗衣机/干衣机 washerh5 电子说明书全量抓（2026-11-25 新增）。
+    XQB120-BS5VE1 实锤：washShare/ies/<码>/<版本>/web/index.html 是 Vite 壳
+    （SUMEBookMap 解析器吃不到，原被「形态不符」跳过）；数据=同目录 prod.json
+    物料树：product_introduce（部件/配件/「产品尺寸介绍」=尺寸线稿图+
+    table_lie_2hang 结构化宽深高）、quick_start（快速入门）、use_reading（安装
+    指导/清洁保养/安全事项…），图全是绝对 URL。返回 dict 形状与 SUMEBookMap
+    分支一致；防串机按命中型号 model_eff。"""
+    pr = urllib.parse.urlparse(url)
+    _base = "%s://%s%s" % (pr.scheme, pr.netloc, pr.path.rsplit("/", 1)[0] + "/")
+    try:
+        req = urllib.request.Request(_url_esc(_base + "prod.json"), headers=hdrs)
+        with urlopen_ssl(req, timeout=20) as r:
+            tree = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception as ex:
+        log("washerh5 prod.json 拉取失败：%s" % str(ex)[:80])
+        return {}
+    root_pm = str(tree.get("product_model") or "").strip()
+    _root_nm = norm_model(root_pm)
+    if not (_root_nm and nm_eff in _root_nm):
+        log("washerh5 树型号 %s 不含命中机 %s，弃用防串机" % (root_pm or "?", model_eff))
+        return {}
+    imgs, size_imgs, rows, manual, dim_tables = [], [], [], [], []
+    seen_i, seen_m = set(), set()
+
+    def _walk(node, ctx):
+        if isinstance(node, dict):
+            t = node.get("material_text")
+            nctx = ctx
+            if isinstance(t, str) and t.strip() \
+                    and node.get("material_type") in ("title", "image_text_title", "image") \
+                    and re.match(r"^[\u4e00-\u9fa5A-Za-z0-9（）()、·\-]{2,16}$", t.strip()):
+                nctx = t.strip()
+            mp = node.get("material_path")
+            # 首页机器渲染图（product_image/product_background_image）显式抬 ctx：
+            # 它们挂在 content 字典下、路径上没有中文标题节点，ctx 会是空串排进
+            # prio 1 梯队；XQB120-BS5VE1 实锤这台说明书全是操作示意图，唯一能当
+            # 主图的就是这张纯白底整机渲染，必须进「产品介绍」prio 0 梯队让 AI
+            # 选图先吃。
+            if node.get("material_code") in ("product_image", "product_background_image") \
+                    and isinstance(mp, str) and mp:
+                nctx = "产品介绍"
+            if isinstance(mp, str) and mp not in seen_i \
+                    and re.search(r"\.(png|jpe?g|webp)(\?|$)", mp, re.I):
+                seen_i.add(mp)
+                if any(w in nctx for w in ("尺寸", "安装", "空间")):
+                    size_imgs.append((nctx, mp))
+                imgs.append((nctx, mp))
+            if node.get("material_type") in ("table_lie_2hang", "table_heng_2lie") \
+                    and isinstance(t, list):
+                # 结构化键值表：尺寸表（table_lie_2hang：name「宽度\nW」）+ 整机规格表
+                # （table_heng_2lie：产品型号/额定电压/额定频率/进水水压/额定洗涤容量/
+                #   额定脱水容量/洗涤噪音/脱水噪音/能效等级——2026-11-25 用户令
+                #   「参数卖点抓下来给AI，你就抓了个尺寸」实锤全漏的是这张）。
+                # rows 记中文名（宽度=580，规格卡用），dim_table 记尾字母列头
+                # （W/W1/D/D1/H/H1，与 SUMEBookMap「字母（mm）」口径一致）
+                labels, vals, rows2 = [], [], []
+                for it in t:
+                    if not isinstance(it, dict):
+                        continue
+                    # 产品型号行不进参数（防串机校验在树根 root_pm 已做；
+                    # _hard_points 废键黑名单虽然挡得住，别让脏键进 props）
+                    if "产品型号" in str(it.get("name") or ""):
+                        continue
+                    # name「宽度\nW」先按空白拆段再清洗——先去空白会把换行吃掉
+                    # 导致中英拆不开（W/W1 列头口径丢，2026-11-25 实测修正）
+                    _parts = [p.strip() for p in re.split(r"[\s\n]+", str(it.get("name") or "")) if p.strip()]
+                    _iv = it.get("value")
+                    v2 = (_iv or {}).get("material_text") if isinstance(_iv, dict) else None
+                    if not _parts or v2 in (None, ""):
+                        continue
+                    _cn = _parts[0]
+                    _tm = re.search(r"([A-Za-z0-9]+)$", _parts[-1])
+                    _en = _tm.group(1) if len(_parts) > 1 and _tm else _parts[-1]
+                    # 规格表 name 常是「额定电压\n额定电压」双行同文（官方源数据如此）——
+                    # 尾段与首段相同就不拼，别出「额定电压额定电压」这种键
+                    if _en == _cn:
+                        _en = ""
+                    try:
+                        _v = float(str(v2)) if "." in str(v2) else int(str(v2))
+                    except Exception:
+                        _v = str(v2)
+                    labels.append(_en)
+                    vals.append(_v)
+                    rows2.append((_cn + _en, str(v2)))
+                if node.get("material_type") == "table_heng_2lie":
+                    # 规格表值多为字符串（220V~ / (0.03~1.0)MPa / 60dB(A计权)），
+                    # 不设数字闸直接进 rows——数字闸会把整表 9 条全杀掉
+                    rows.extend(rows2)
+                    if rows2:
+                        log("washerh5 整机规格表 %d 条：%s" % (
+                            len(rows2), "；".join("%s=%s" % (k, v) for k, v in rows2)))
+                elif vals and all(isinstance(v, (int, float)) for v in vals):
+                    # 尺寸表（table_lie_2hang）：全数字才进，另记 dim_table
+                    rows.extend(rows2)
+                    dim_tables.append({"node": nctx or "产品尺寸", "labels": labels,
+                                       "vals": {root_pm or model_eff: vals}})
+                    log("washerh5 结构化尺寸表（%s）：%s" % (nctx or "产品尺寸", "；".join(
+                        "%s=%s" % (labels[i], vals[i]) for i in range(len(labels)))))
+            elif node.get("material_type") == "table" and isinstance(t, dict):
+                # 程序/容量表（table）：程序清单 + 容量场景示例都是文案真料——
+                # 「最大容量12kg：3件T恤+2件裙子…」「程序：智慧洗、速洗、手搓净…」
+                # 转成说明要点进 manual（fetch 里拼「官方说明书要点」喂 AI）
+                _heads = [str(x).strip() for x in (t.get("table_head_name") or []) if str(x).strip()]
+                _codes = [str(x).strip() for x in (t.get("table_head_code") or []) if str(x).strip()]
+                _drows = [r for r in (t.get("table_data") or []) if isinstance(r, dict)]
+                if _drows and "program_name" in _codes:
+                    _names = []
+                    for r in _drows:
+                        _nm = str(r.get("program_name") or "").strip()
+                        if _nm and _nm not in _names:
+                            _names.append(_nm)
+                    if _names:
+                        _t2 = ("洗涤程序：" + "、".join(_names[:16]))[:120]
+                        if _t2 not in seen_m and len(manual) < _BOOK_TEXT_MAX:
+                            seen_m.add(_t2)
+                            manual.append(_t2)
+                elif _drows and _codes and _heads:
+                    r0 = _drows[0]
+                    _cells = []
+                    for _ci, _code in enumerate(_codes):
+                        _v3 = r0.get(_code)
+                        if _v3 in (None, ""):
+                            continue
+                        _hn = _heads[_ci] if _ci < len(_heads) else _code
+                        _cells.append("%s %s" % (_hn, str(_v3).replace("\n", " ").strip()))
+                    if _cells:
+                        _t2 = "；".join(_cells)[:120]
+                        if _t2 not in seen_m and len(manual) < _BOOK_TEXT_MAX:
+                            seen_m.add(_t2)
+                            manual.append(_t2)
+            elif isinstance(t, str) and t != root_pm \
+                    and node.get("material_type") in ("text", "text_note", "text_bold"):
+                t2 = re.sub(r"\s+", " ", t).strip()
+                # 2026-11-25 XQB120-BS5VE1 手册实锤：按钮操作说明（按此键/此标识亮起）、
+                # 法务句（使用前请仔细阅读/外观图仅为示意/保留解释权）对卖货文案零价值，
+                # 却能把 30 席占满挤掉程序/容量摘要——黑名单直接跳；纯数值散字
+                # （(0.03~1.0)MPa / 12.0kg，规格表 rows 已收全）也跳。
+                if any(w in t2 for w in ("按此键", "轻按此键", "此标识亮起", "使用前请仔细阅读",
+                                         "外观图仅为示意", "保留说明书解释权", "只适合在中国")):
+                    pass
+                elif 14 <= len(t2) <= 100 and t2 not in seen_m and len(manual) < _BOOK_TEXT_MAX:
+                    seen_m.add(t2)
+                    manual.append(t2)
+            for v in node.values():
+                _walk(v, nctx)
+        elif isinstance(node, list):
+            for v in node:
+                _walk(v, ctx)
+
+    _walk(tree, "")
+    _PRI = ("正面", "背面", "外观", "部件", "附件", "尺寸", "安装要求", "安装方法",
+            "控制面板", "电气原理", "产品介绍", "品牌介绍")
+
+    def _prio(it):
+        n = it[0]
+        return 0 if any(w in n for w in _PRI) else 1
+
+    imgs.sort(key=_prio)
+    size_imgs.sort(key=_prio)
+    brand = {"casarte": "卡萨帝", "leader": "统帅", "haier": "海尔"}.get(
+        str(tree.get("brand") or ""), "")
+    log("washerh5 全量：参数 %d 条 / 图 %d 张（尺寸线稿 %d）/ 说明要点 %d 条"
+        % (len(rows), len(imgs), len(size_imgs), len(manual)))
+    try:
+        _book_dump(model, imgs, size_imgs, log)
+    except Exception as _e:
+        log("说明书图全量落盘异常：%r" % (_e,))
+    return {"rows": rows, "imgs": imgs, "size_imgs": size_imgs,
+            "manual": manual, "dim_table": dim_tables, "url": url, "pcode": pcode,
+            "brand": brand, "root": root_pm}
 
 
 def _hzy_params(model, log):
@@ -1787,8 +2111,10 @@ def _book_scanned_vision(imgs, mdir, model, log):
         txt = _vision_call_auto(
             du,
             "这张大图是一本家电说明书的全部页面缩略图，每格左上角红底白字是页码。请找两类页：\n"
-            "A = 产品尺寸示意图页：画着整机外形线稿，带尺寸标注线和毫米数字，或带 W/H/D 字母+数字表格；\n"
+            "A = 产品尺寸示意图页：画着**本型号一台机器**的外形线稿，带尺寸标注线和毫米数字，或带 W/H/D 字母+数字表格；\n"
             "B = 产品规格表页：表格列出能力/容量、电压、功率、产品尺寸、净重、能效等级之类的技术参数。\n"
+            "注意：多个型号/系列挤在一张的参数汇总总表（表里出现多个型号或「XX系列」字样）"
+            "不算 A 也不算 B——那是全系杂值表，标了字母也不是本型号的尺寸。\n"
             "只输出两行，严格按下面格式（页码用格子上的红底数字，多个用逗号分隔，没有就写 0）：\n"
             "A: 30\nB: 31\n不要输出任何其他文字。", log)
     a_list, b_list = [], []
@@ -1814,7 +2140,9 @@ def _book_scanned_vision(imgs, mdir, model, log):
         nums = _vision_call_auto(
             du1,
             "这页如果画着产品尺寸示意图，读出图上字母（W/H/D/D1/D2 等）对应的毫米数；"
-            "只输出每行一条「字母=数字」，例如 W=600。没有尺寸标注就只输出 0。", log)
+            "只输出每行一条「字母=数字」，例如 W=600。没有尺寸标注就只输出 0。"
+            "注意：如果这页是多个型号/系列挤在一张的参数汇总总表（表里出现多个型号或"
+            "「XX系列」字样），它不是本型号的尺寸图，无论有没有字母和数字都只输出 0。", log)
         vals = {}
         for ln in str(nums or "").splitlines():
             mm = re.match(r"\s*([A-Za-z]\d?)\s*[=:：]\s*(\d{2,4})", ln)
@@ -1956,7 +2284,7 @@ def _facts_text(data, model):
     # 进 facts 后数字闸放行；尺寸类行有 _is_size_line 一票否决兜底。
     _ml = [str(m).strip() for m in (data.get('manual') or []) if str(m).strip()]
     if _ml:
-        lines.append("官方说明书要点(真实资料可转述): " + "；".join(_ml[:14]))
+        lines.append("官方说明书要点(真实资料可转述): " + "；".join(_ml[:16]))
     return "\n".join(lines)
 
 

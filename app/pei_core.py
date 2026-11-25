@@ -1082,6 +1082,22 @@ def capacity_str(info):
         if k in pd:
             val = str(pd[k]); break
     if val is None:
+        # 键名带单位括号归一（2026-11-25 EC8005-MV5U1 官网登记「容积(L)=80」实锤：
+        # 「容积」精确匹配撞不上「容积(L)」，标题四要素缺容量）
+        def _nk(s):
+            return re.sub(r"[（(].*?[)）]", "", str(s)).replace(" ", "").strip()
+        _nkmap = {_nk(k): k for k in pd}
+        for k in keys:
+            _kk = _nkmap.get(k)
+            if _kk is not None:
+                val = str(pd[_kk])
+                # 值是纯数字、单位长在键名括号里 → 把键名单位补到值尾（80 + L = 80L）
+                if re.fullmatch(r"\d+(?:\.\d+)?", val.strip()):
+                    _ku = re.search(r"[（(]([^\)）]{1,8})[)）]", str(_kk))
+                    if _ku and re.fullmatch(r"(?i)(l|升|kg|公斤|m³|立方米)",
+                                            _ku.group(1).strip()):
+                        val = "%s%s" % (val.strip(), _ku.group(1).strip())
+                break
         for v in pd.values():
             if re.search(r"\d", str(v)) and re.search(r"(升|L|kg|公斤|m³|立方米)", str(v)):
                 val = str(v); break
