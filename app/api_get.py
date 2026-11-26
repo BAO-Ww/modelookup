@@ -149,7 +149,9 @@ class ApiGetMixin:
                             raise jobman.CancelledError("已取消")
                     try:
                         res = kitset.generate(model, force, log=_log,
-                                              copyonly=1 if copyonly else 0)
+                                              copyonly=1 if copyonly else 0,
+                                              pickdone=(q.get("pickdone") or ["0"])[0] in ("1", "true"),
+                                              skipsize=(q.get("skipsize") or ["0"])[0] in ("1", "true"))
                         res["dir"] = kitset.model_dir(model)
                         return res
                     except Exception as e:
@@ -178,12 +180,44 @@ class ApiGetMixin:
                 import kitset
                 res = kitset.generate(model, force,
                                       log=lambda s: state.LOG.append("[蓝底] " + s),
-                                      copyonly=1 if copyonly else 0)
+                                      copyonly=1 if copyonly else 0,
+                                      pickdone=(q.get("pickdone") or ["0"])[0] in ("1", "true"),
+                                      skipsize=(q.get("skipsize") or ["0"])[0] in ("1", "true"))
                 res["dir"] = kitset.model_dir(model)
                 self._send(200, json.dumps(res, ensure_ascii=False))
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": "蓝底套图生成失败：%s" % e},
                                            ensure_ascii=False))
+            return
+
+        # ---------- 选图面板：候选清单（2026-11-26 用户令「下载完了就全部铺出来我来选」） ----------
+        if path == "/api/kitcands":
+            q = urllib.parse.parse_qs(u.query)
+            model = (q.get("model") or [""])[0].strip()
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            import kitset
+            mdir = kitset.model_dir(model)
+            items = []
+            cj = os.path.join(mdir, "cand.json")
+            if os.path.isfile(cj):
+                try:
+                    with io.open(cj, encoding="utf-8") as f:
+                        items = (json.load(f) or {}).get("items") or []
+                except Exception:
+                    items = []
+            if not items:
+                # 清单缺失（老型号/清单落盘失败）→ 现扫兜底
+                try:
+                    items = kitset._write_cand_manifest(model, mdir) or []
+                except Exception:
+                    items = []
+            prod = "product.png" if os.path.isfile(os.path.join(mdir, "product.png")) else ""
+            size = "sizeimg.jpg" if os.path.isfile(os.path.join(mdir, "sizeimg.jpg")) else ""
+            self._send(200, json.dumps({"ok": True, "model": model, "items": items,
+                                        "cur": {"main": prod, "size": size}},
+                                       ensure_ascii=False))
             return
 
         # ---------- 官网按钮：型号对应的官网产品详情页（2026-11-03 用户令「不要搜索页」） ----------

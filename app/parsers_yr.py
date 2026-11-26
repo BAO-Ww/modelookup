@@ -12,6 +12,7 @@ import openpyxl  # ⚠ 顶层 import（PyInstaller 规矩：不能放函数体�
 
 from normalize import brand_norm, core_of, norm_model, num, sx
 from paths import rp
+import secstore                       # 2026-11-26 读表走内存解密（盘上是 KDX1 密文）
 from state import _tick
 from xlsx_core import col_of, header_map, nc, rows_of, sc
 from parsers_haier import parse_clean, parse_price
@@ -81,7 +82,7 @@ def pick_sheet(names, *keys):
 
 def load_records_from_path(path):
     """读一个 xlsx → (记录列表, 月份提示)。自动识别是哪个表。"""
-    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    wb = openpyxl.load_workbook(secstore.open_xlsx(path), data_only=True, read_only=True)
     names = wb.sheetnames
     base = os.path.basename(path)
     month = ""
@@ -303,7 +304,7 @@ def _norm_txt(v):
 
 def parse_subsidy_rows(xlsx_path):
     """以旧换新表 → [{mo(归一), c(69码), p(零售价)}]。"""
-    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(secstore.open_xlsx(xlsx_path), read_only=True, data_only=True)
     out = []
     try:
         for ws in wb.worksheets:

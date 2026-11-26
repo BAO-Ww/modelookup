@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 
 import state
+import secstore                       # 2026-11-26 本机落盘加密（子用户盘上不留明文原价）
 import winref
 from cloud import (_cloud_token, cloud_req, kit_sync_cloud, par_pull_cloud,
                    stock_pull_cloud, sync_xlsx_cloud)
@@ -459,8 +460,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
                 raise RuntimeError("拿不到下载直链")
             state.set_state("running", "正在下载公布版在线表…")
             raw = fetch_xlsx_by_url(du, log)
-            with open(wp(CLEAN_XLSX), "wb") as f:
-                f.write(raw)
+            secstore.write_bytes(wp(CLEAN_XLSX), raw)   # 2026-11-26 落盘即加密
             _upd_parts = ["公布版✓"]
 
             # ---- ② 价格表（fileId 现场反查；拿不到就沿用上次的，不阻断整体更新）
@@ -472,8 +472,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
                     du2 = obtain_download_url(log, fid, PRICE_SHARE,
                                               allow_prompt=False, silent=3)
                     raw2 = fetch_xlsx_by_url(du2, log)
-                    with open(wp(PRICE_XLSX), "wb") as f:
-                        f.write(raw2)
+                    secstore.write_bytes(wp(PRICE_XLSX), raw2)   # 2026-11-26 落盘即加密
                     _upd_parts.append("价格表✓")
                 else:
                     log("价格表 fileId 没拿到，保留上一次的价格表数据")
@@ -491,8 +490,7 @@ def do_update(log, xlsx_bytes=None, xlsx_path=None, auto=False):
                     du3 = obtain_download_url(log, sfid, SUBSIDY_SHARE,
                                               allow_prompt=True, silent=4)
                     raw3 = fetch_xlsx_by_url(du3, log)
-                    with open(wp(SUBSIDY_XLSX), "wb") as f:
-                        f.write(raw3)
+                    secstore.write_bytes(wp(SUBSIDY_XLSX), raw3)   # 2026-11-26 落盘即加密
                     _upd_parts.append("补贴表✓")
                 else:
                     log("补贴表 fileId 没拿到，沿用上一次的补贴数据")

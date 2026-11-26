@@ -60,6 +60,9 @@ const PERM_KEYS = [
   "xysoft",      // 闲鱼操作打开方式：勾=软件内嵌（默认），不勾=系统浏览器（2026-10-17）
   "tbyp",        // 婷宝电器优选（出图出文案）入口——内嵌婷宝版文案窗（2026-10-17，独立权限管理号定给谁）
   "kitset",      // 蓝底套图入口（2026-10-23 独立权限开关，原来搭「写文案 copy」的车没法单独关）
+  // 2026-11-26 用户令「把这两个也做成权限」：原来写死只渲染给管理号的两颗卡片按钮
+  "hjdb",        // 号价对比按钮（看所有人的闲鱼定价对比——勾给谁谁能看，/puball 同步放行）
+  "natforce",    // 定死发全国按钮（卡片上把发往定死「全国·100运费」）
 ];
 
 // 旧权限键 → 新键映射（v2.5 之前的 perm 只存 guide/clear_price 两个粗键）
@@ -80,6 +83,38 @@ function migratePerm(perm) {
   }
   return p;
 }
+
+// ---- 拿货价加价（2026-11-26 用户令「子用户看不到我的任何加价」）----
+// 每个子账号一个 mk（固定金额·元，管理号在账号管理里设）。下发链路在云端就
+// 把拿货价六档（pt/lpz/spz/mh/m2/mr）按人改掉——子用户机器落盘的就已经是
+// 加过的价，原价根本不下发；加价值本身只走 /mk 给客户端后端，页面永远碰不到。
+const MK_KEYS = { pt: 1, lpz: 1, spz: 1, mh: 1, m2: 1, mr: 1 };
+function mkPrices(o, mk, depth) {
+  if (o == null || (depth = depth || 0) > 8) return o;
+  if (Array.isArray(o)) return o.map((x) => mkPrices(x, mk, depth + 1));
+  if (typeof o !== "object") return o;
+  const out = {};
+  for (const k of Object.keys(o)) {
+    const v = o[k];
+    out[k] = (MK_KEYS[k] && typeof v === "number" && isFinite(v))
+      ? v + mk : mkPrices(v, mk, depth + 1);
+  }
+  return out;
+}
+// 管理员升级（2026-11-26 用户令）：子账号可升成管理员（全权限·看原价·可管账号）。
+// 管理号本体（root）受保护：谁都不能改/删/降。root 判定 = KV root_admin，
+// 没有时回退「users 里第一个 admin」（bootstrap 管理号永远最先插入，顺序可靠）。
+async function rootAdminName(env, users) {
+  try {
+    const r = await env.KV.get("root_admin");
+    if (r && users[r] && users[r].role === "admin") return r;
+  } catch (e) {}
+  return Object.keys(users).find((u) => users[u].role === "admin") || "";
+}
+
+// 机器专用账号名单（2026-11-26）：/admin/newacct 建的抓取链账号（ci）本来就是 admin，
+// 面板现在会把它列出来——身份锁死，防误降级断抓取链。逗号分隔，要加机器号改这里。
+const MACH_ACCTS = "ci";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -1180,6 +1215,8 @@ async function route(request, env, path, ctx) {
     // 防误删保护：云端明明有子账号、请求却一个都没带（多半是面板没加载出来）→ 拒绝保存
     const subCount = Object.values(users).filter((x) => x.role !== "admin").length;
     if (subCount > 0 && list.length === 0) return jerr("请求里一个账号都没有，疑似面板没加载好，已拒绝保存");
+    // 2026-11-26 管理员升级：root（管理号本体）谁都不能动；升上去的管理员可改可降
+    const rootAdm = await rootAdminName(env, users);
     for (const it of list) {
       const u = String(it.u || "").trim();
       if (!u || u === who) continue;
@@ -1190,7 +1227,8 @@ async function route(request, env, path, ctx) {
         salt: crypto.randomUUID().replaceAll("-", ""), role: "sub",
         ph: "", note: "", disabled: false, perm: {},
       };
-      if (cur.role === "admin") continue;      // 管理号不可改
+      if (u === rootAdm) continue;             // 管理号本体不可改（原「admin 不可改」的收窄版）
+      const _mach = MACH_ACCTS.split(",").map((s) => s.trim()).includes(u);
       if (it.pw) {                              // 传了密码 = 新建/改密
         if (String(it.pw).length < 4) return jerr(u + " 的密码至少 4 位");
         // 2026-11-04 P1-3：管理号新建/改密改 PBKDF2（原来裸 SHA-256，与登录路径不一致）
@@ -1204,13 +1242,21 @@ async function route(request, env, path, ctx) {
       const perm = {};
       for (const k of PERM_KEYS) perm[k] = !!(it.perm && it.perm[k]);
       cur.perm = perm;
+      // 拿货价加价（2026-11-26）：固定金额·元，0=不加；管理员恒不生效（/mk 恒回 0）
+      const _mk = Math.max(0, Math.min(100000, Number(it.mk) || 0));
+      cur.mk = Math.round(_mk * 100) / 100;
+      // 升级/降级管理员：只认面板明确传来的 adm（老客户端不带就保持原状，防误降）；
+      // 机器账号（ci）身份锁死永远 admin——抓取链 /kdauth /xlsxcloud /stockcloud 只认 admin
+      if (it.adm !== undefined && !_mach) cur.role = it.adm ? "admin" : "sub";
+      if (_mach) cur.role = "admin";
       users[u] = cur;
     }
     // 删除：列表里消失的旧子账号 → 移除并清掉 TA 的发布记录/定价/补图残留
     // 审计（S5）防误删补齐：原来只拦「list 全空」，list=[自己] 这类「面板少渲染」场景会把
     // 全部子账号连 pub_/pubp_ 删光。现在只要删名单非空就要求 confirm:true 明确确认。
     const keep = new Set(list.map((it) => String(it.u || "").trim()));
-    const doomed = Object.keys(users).filter((u) => users[u].role !== "admin" && u !== who && !keep.has(u));
+    // 2026-11-26：升上去的管理员也允许删（原来一刀切排除所有 admin）；root 仍排除
+    const doomed = Object.keys(users).filter((u) => u !== rootAdm && u !== who && !keep.has(u));
     if (doomed.length && b.confirm !== true)
       return jerr("本次保存将删除子账号：" + doomed.join(", ") + "。如果是误操作请检查面板；确认要删请带 confirm:true", 400);
     for (const u of doomed) {
@@ -1227,10 +1273,23 @@ async function route(request, env, path, ctx) {
     const users = await getUsers(env);
     const me = users[who];
     if (!me || me.role !== "admin") return jerr("只有管理号能看", 403);
-    const out = Object.entries(users).filter(([u, x]) => x.role !== "admin")
+    // 2026-11-26：升上去的管理员也列出来（root 本体仍不列）；带 mk（加价）和 adm（身份）
+    const rootAdm = await rootAdminName(env, users);
+    const out = Object.entries(users).filter(([u]) => u !== rootAdm)
       .map(([u, x]) => ({ u, note: x.note || "", disabled: !!x.disabled,
-                          hasPw: !!x.ph, perm: x.perm || {} }));
+                          hasPw: !!x.ph, perm: x.perm || {},
+                          mk: +x.mk || 0, adm: x.role === "admin",
+                          mach: MACH_ACCTS.split(",").map((s) => s.trim()).includes(u) }));
     return J({ ok: true, keys: PERM_KEYS, users: out });
+  }
+
+  // 拿货价加价查询（2026-11-26）：只给客户端后端用（带 token 的本机服务），
+  // 页面 JS 永远不调这个——加价值对子用户页面零暴露（用户铁律）。
+  if (path === "/mk" && request.method === "GET") {
+    const users = await getUsers(env);
+    const me = users[who];
+    const mk = (me && me.role !== "admin") ? Math.max(0, +me.mk || 0) : 0;
+    return J({ ok: true, mk });
   }
 
   // ---------- 发布记录（云端，跟账号走，换电脑登录也在） ----------
@@ -1502,7 +1561,8 @@ async function route(request, env, path, ctx) {
   if (path === "/puball" && request.method === "GET") {
     const users = await getUsers(env);
     const me = users[who];
-    if (!me || me.role !== "admin") return jerr("只有管理号能看", 403);
+    // 2026-11-26 用户令：号价对比从「写死管理号」改成权限键 hjdb——勾给谁谁能看
+    if (!me || (me.role !== "admin" && !(me.perm && me.perm.hjdb))) return jerr("只有管理号能看", 403);
     const out = {}, prices = {};
     // 2026-11-01 用户令「已发布每次打开都要好久」：原来子账号之间串行、每个账号内部
     // getPubN 又把 pub/pubp 串着读 → 3 个号 = 9 次 D1 串行，晚高峰实测 6-9s（最坏 61s）。
@@ -1865,7 +1925,17 @@ async function route(request, env, path, ctx) {
   if (path === "/stockcloud" && request.method === "GET") {
     const obj = await getJSONc(env, "stocklive", null);
     if (!obj) return jerr("云端还没有共享库存（管理号更新一次后这里就有了）", 404);
-    return J({ ok: true, ts: obj.ts, rows: obj.rows, stock: obj.stock, sbc: obj.sbc || null,
+    // 拿货价加价（2026-11-26 用户令「子用户看不到我的任何加价」）：按请求者的 mk
+    // 在云端就把拿货价六档改掉——子用户机器落盘的就已经是加过的价，原价不下发。
+    const users = await getUsers(env);
+    const _me = users[who];
+    const _mk = (_me && _me.role !== "admin") ? Math.max(0, +_me.mk || 0) : 0;
+    let _stock = obj.stock, _sbc = obj.sbc || null;
+    if (_mk > 0) {
+      _stock = mkPrices(obj.stock, _mk);
+      if (_sbc) _sbc = mkPrices(_sbc, _mk);
+    }
+    return J({ ok: true, ts: obj.ts, rows: obj.rows, stock: _stock, sbc: _sbc,
                mo2meta: obj.mo2meta || null, by: obj.by });
   }
   // 轻量探测：只回时间戳/行数/谁更新的（子账号后台轮询用，不用每次拉 ~0.4MB 全量）

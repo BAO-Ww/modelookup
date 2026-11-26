@@ -2058,7 +2058,7 @@ def _r2_pull(model, log=None):
 # 以下两函数为 v3.0.87 原版行为（pubwork 爬虫→R2→官网→欣盛→中关村→必应→GLM），
 # 仅婷套图（white_hero）/婷宝版配文相关链路使用；宝套图/宝三文案走新版（官网→说明书两层）。
 
-def _gather_info_legacy(model, log):
+def _gather_info_legacy(model, log, force=0):
 
     """pubwork 爬虫 → 官网三站 → 欣盛，三路凑 props/brand/title/price/url。
 
@@ -4348,6 +4348,158 @@ def _manual_overrides(mdir, log):
     return ok_prod
 
 
+_CAND_SYS_FILES = {"product.png", "sizeimg.jpg", "set.json", "info.json", "cand.json",
+                   "_neg.json", "_cand_ocr.png", "_state_pick.json"}
+# 选中产物/手选覆盖文件名不算候选（product*/sizeimg*/主图*/尺寸图*/zol_*——这些是
+# 已选结果或覆盖通道，混进清单会被用户当成素材再选一遍，EC8005 官网/product.png 实锤）
+_CAND_NOT_SRC = re.compile(r"^(product|sizeimg|主图|尺寸图|尺寸|zol_)", re.I)
+
+
+def _write_cand_manifest(model, mdir):
+    """全量候选清单落盘 cand.json（2026-11-26 用户令「下载完了就全部铺出来我来选」）：
+    收录 官网/欣盛/中关村/说明书/其他 五源子目录 + 型号根散图（系统产物排除），
+    每源字节降序；每张带 来源/相对路径/px 尺寸/字节 —— 选图面板直接铺这个。"""
+    items = []
+    for sub in _SRC_TAG_DIRS:
+        sd = os.path.join(mdir, sub)
+        if not os.path.isdir(sd):
+            continue
+        _one = []
+        for f in sorted(os.listdir(sd)):
+            if f.startswith(".") or not f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                continue
+            if _CAND_NOT_SRC.match(f):
+                continue
+            p = os.path.join(sd, f)
+            if not os.path.isfile(p):
+                continue
+            try:
+                im = Image.open(p)
+                im.load()
+            except Exception:
+                continue
+            if max(im.size) < 250:
+                continue
+            _one.append({"p": "%s/%s" % (sub, f), "src": sub,
+                         "w": im.size[0], "h": im.size[1], "b": os.path.getsize(p)})
+        _one.sort(key=lambda x: -x["b"])
+        items.extend(_one)
+    root_files = []
+    try:
+        for f in sorted(os.listdir(mdir)):
+            if f.startswith(".") or f in _CAND_SYS_FILES or _CAND_NOT_SRC.match(f):
+                continue
+            p = os.path.join(mdir, f)
+            if not os.path.isfile(p) or not f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                continue
+            try:
+                im = Image.open(p)
+                im.load()
+            except Exception:
+                continue
+            if max(im.size) < 250:
+                continue
+            root_files.append({"p": f, "src": "其他", "w": im.size[0], "h": im.size[1],
+                               "b": os.path.getsize(p)})
+    except Exception:
+        pass
+    root_files.sort(key=lambda x: -x["b"])
+    items.extend(root_files)
+    with io.open(os.path.join(mdir, "cand.json"), "w", encoding="utf-8") as f:
+        json.dump({"model": model, "ts": int(time.time()), "items": items},
+                  f, ensure_ascii=False)
+    return items
+
+
+def _cand_collect(model, img_urls, mdir, log, page_url=None, kind="", force=0):
+    """抓图全落盘 + 全量候选清单，选图交给人工（2026-11-26 用户令「AI选图跟代码
+    选图全部删除，下载完了就全部铺出来我来选主图跟尺寸图」）——替代宝套图新链
+    （chain="book"）里的 _pick_prod：
+    · _manual_overrides 命中（手选/上传过的 官网/主图.*、官网/尺寸图.*）→ 幂等应用，
+      手选图永远优先；
+    · 本轮 URL 候选全量下载落盘到 官网/欣盛/中关村/其他 子目录（md5 去重、无 40 席
+      上限；<250px 小图和 parts_list 配件图不收；海尔 CDN _1200 大图升级照走）；
+    · cand.json 全量清单落盘（_write_cand_manifest），= 选图面板数据源；
+    · R2 抓取图上云照跑（2026-11-16 用户令「所有的都抓取放到 R2」保留）。
+    **不跑任何 AI/代码选图**。返回 (prod|None, sizeimg|None)。"""
+    import hashlib
+    os.makedirs(mdir, exist_ok=True)
+    _manual_overrides(mdir, log)
+    # —— 已落盘图 md5 指纹（防同图重复落盘占目录）——
+    _exist_md5 = set()
+    for _sub in _SRC_TAG_DIRS:
+        _sd = os.path.join(mdir, _sub)
+        if not os.path.isdir(_sd):
+            continue
+        for _f in os.listdir(_sd):
+            if not _f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                continue
+            try:
+                _exist_md5.add(hashlib.md5(io.open(os.path.join(_sd, _f), "rb").read()).hexdigest())
+            except Exception:
+                pass
+    # —— 本轮 URL 候选全量下载 ——
+    n = 0
+    for it in (img_urls or []):
+        u, tag = (it if isinstance(it, tuple) else (it, "其他"))
+        if not str(u).lower().startswith(("http://", "https://")):
+            continue
+        if "/parts_list/" in str(u):
+            continue    # 配件清单图永不进候选（11-25 用户令）
+        n += 1
+        raw = None
+        for _u in dict.fromkeys((_haier_1200(u), u)):
+            try:
+                raw = fetch(_u, extra_headers={
+                    "Referer": _u.split("/")[0] + "//" + _u.split("/")[2] + "/"},
+                    binary=True, timeout=20)
+                if raw and len(raw) >= 3000:
+                    break
+                raw = None
+            except Exception:
+                raw = None
+        if raw is None:
+            continue
+        try:
+            im = Image.open(io.BytesIO(raw))
+            im.load()
+        except Exception:
+            continue
+        if min(im.size) < 250:
+            continue
+        try:
+            _fh = hashlib.md5(raw).hexdigest()
+        except Exception:
+            _fh = None
+        if _fh and _fh in _exist_md5:
+            continue
+        if _fh:
+            _exist_md5.add(_fh)
+        _sdir = os.path.join(mdir, tag if tag in _SRC_TAG_DIRS else "其他")
+        os.makedirs(_sdir, exist_ok=True)
+        fp = os.path.join(_sdir, "src_%d.jpg" % n)
+        with io.open(fp, "wb") as f:
+            f.write(raw)
+    # —— 全量清单（选图面板数据源）——
+    try:
+        _write_cand_manifest(model, mdir)
+    except Exception as _e:
+        if log:
+            log("候选清单落盘失败（不影响选图，面板会现扫）：%r" % _e)
+    # —— R2 抓取图上云（11-16 用户令保留，异步不阻塞）——
+    try:
+        import threading as _th
+        import cloud as _cl
+        if getattr(_cl, "_cloud_token", lambda: "")():
+            _th.Thread(target=_cl.kit_push_model, args=(model, log), daemon=True).start()
+    except Exception:
+        pass
+    prod = os.path.join(mdir, "product.png")
+    sizeimg = os.path.join(mdir, "sizeimg.jpg")
+    return (prod if os.path.isfile(prod) else None,
+            sizeimg if os.path.isfile(sizeimg) else None)
+
+
 def _rescue_sizeimg_official(mdir, dims=None, log=None):
     """官网编号图里对账补捞尺寸图（2026-11-17 LF4-519WDS9U1 实锤：官网\07.jpg 就是
     正经尺寸线稿 833×1850×594，cfg.dims/size_pills 都有但 sizeimg 空着 —— 全量抓取
@@ -6267,8 +6419,10 @@ def fetch_candidates(model, log=None):
     info, img_urls = _gather_info(model, log)
     if not img_urls:
         return False
-    _pick_prod(model, img_urls, mdir, log, page_url=(info or {}).get("url") or None,
-               kind=(info or {}).get("kind") or (info or {}).get("cat") or "")
+    # 2026-11-26 用户令「AI选图跟代码选图全部删除」：抓图全落盘+清单落盘，不选图
+    _cand_collect(model, img_urls, mdir, log,
+                  page_url=(info or {}).get("url") or None,
+                  kind=(info or {}).get("kind") or (info or {}).get("cat") or "")
     return True
 
 
@@ -6474,34 +6628,29 @@ def _rerender_cached(model, mdir, old, log):
     # 用户手工图优先（2026-11-17）：官网/主图.* → product.png，官网/尺寸图*/zol_数字 →
     # sizeimg.jpg。重新生成走快照不重新抓，没有这道用户放的图永远晾着。
     _manual_overrides(mdir, log)
-    # 重新生成也要补尺寸图：旧快照里 sizeimg 常是 None（当时官网没抓到），后来
-    # 中关村归档拼出了 zol_size.jpg —— 这里对账补上，否则第 4 张永远手绘线稿
-    # （2026-11-16 XQGL120-L732EH 实锤）。
+    # 2026-11-26 用户令「AI选图跟代码选图全部删除」：快照重渲不再自动补捞尺寸图
+    # （中关村 zol_size 顶上/官网编号图 AI 补捞全砍）——手选覆盖命中即重建，
+    # 缺尺寸图 → need_pick 交选图面板人工点选，不再自作主张。
     _si = os.path.join(mdir, "sizeimg.jpg")
     if not (cfg.get("sizeimg") and os.path.isfile(cfg["sizeimg"])):
-        if not os.path.isfile(_si):
-            _zs = os.path.join(mdir, "中关村", "zol_size.jpg")
-            if os.path.isfile(_zs):
-                if _clean_sizeimg(_zs, _si) and log:
-                    log("尺寸图：官网没有，用中关村拼接图顶上（已清洗掉源图自带标题/说明）")
-            if not os.path.isfile(_si):
-                # 官网编号图里补捞（2026-11-17 LF4-519WDS9U1：07.jpg 明明是尺寸
-                # 线稿却漏选，dims 都有了 sizeimg 还是空，第 4 格永远手绘）
-                _rescue_sizeimg_official(mdir, cfg.get("dims"), log)
         if os.path.isfile(_si):
             cfg["sizeimg"] = _si   # 末尾 res["cfg"]=cfg 会随 set.json 落盘回写
+        elif cfg.get("model"):
+            return {"ok": True, "need_pick": True, "model": cfg.get("model"),
+                    "missing": ["尺寸图"],
+                    "msg": "重出需要尺寸图——在选图面板点选一张，或点「没尺寸图？自动画」"}
     # 尺寸数字补账：旧快照 dims/size_pills 是空的 → img_2 只能写「以实物为准」、
     # img_4 底部没有宽高深（聚光却有，两版不对齐，2026-11-16 用户实锤）。
-    # 官方图自己印的数字最权威，AI 读一次；读出后随 set.json 回写，下次不再读。
+    # 2026-11-26：AI 读数字改纯本地 OCR（_ocr_dims3），选图全人工后不再烧视觉额度。
     if cfg.get("sizeimg") and not (cfg.get("dims") and all(cfg.get("dims") or [])):
         try:
-            _dims = _ai_read_size_nums(cfg["sizeimg"], log)
+            _dims = _ocr_dims3(cfg["sizeimg"], log)
             if _dims and all(_dims):
                 cfg["dims"] = [int(x) for x in _dims]
                 cfg["size_pills"] = ["%d × %d mm" % (_dims[0], _dims[1]),
                                      "深 %d mm" % _dims[2]]
                 if log:
-                    log("尺寸数字：AI 读官方图 %d/%d/%d，参数图与尺寸图底部已补" % tuple(_dims))
+                    log("尺寸数字：本地 OCR 读官方图 %d/%d/%d，参数图与尺寸图底部已补" % tuple(_dims))
         except Exception:
             pass
     titles = old.get("titles") or []
@@ -6580,7 +6729,7 @@ def _rerender_cached(model, mdir, old, log):
     return res
 
 
-def generate(model, force=0, log=None, chain="book", copyonly=0):
+def generate(model, force=0, log=None, chain="book", copyonly=0, pickdone=0, skipsize=0):
     """copyonly=1（2026-11-25 用户令「重新生成只对文案有用，不用重新生成图片」）：
     蓝底窗科科列「重新生成」专用——重抓数据、重算标题/卖点/售后、set.json 照落盘，
     但四张成片不重渲染、水印/糊图预警/聚光对账全跳过、product.png 不重选（AI 选图
@@ -6657,72 +6806,121 @@ def generate(model, force=0, log=None, chain="book", copyonly=0):
         except Exception:
             pass
     zimgs = []
-    if chain == "legacy":
-        # 婷（白字/婷宝版）专用老链：v3.0.87 原版行为，与宝新链（官网→说明书）互不影响
-        log("抓参数/机图（婷老链：爬虫→官网→欣盛→中关村）…")
-        info, img_urls = _gather_info_legacy(model, log)
-        if not img_urls or not (info.get("props") or []):
-            # 官网/欣盛没图或没参数：中关村在线兜底（用户令 2026-10-21）
-            log("常规渠道缺料，试中关村…")
-            zimgs, zprops = _zol_data(model, (info or {}).get("brand") or "", log)
-            zimgs = [(u, "中关村") for u in zimgs if u]   # 下载落盘按来源进 中关村\ 文件夹
-            if zimgs and not img_urls:
-                img_urls = zimgs
-            if zprops and not (info.get("props") or []):
-                info["props"] = zprops
-        info, img_urls = _ensure_dims_legacy(info, mdir, img_urls, log)
-    else:
-        log("抓参数/机图（官网→说明书）…")
-        # copyonly=1：参数重抓（文案重出要新数据），图源不强制（选图层短路不换主图）
-        info, img_urls = _gather_info(model, log, force=1 if (force and not copyonly) else 0)
-        # 尺寸补漏（2026-10-29 用户令「一个机器怎么可能没有尺寸」；2026-11-23 新链：
-        # 中关村下线，缺尺寸键改问说明书站——详见 _ensure_dims）。
-        info, img_urls = _ensure_dims(info, mdir, img_urls, log)
-    # 本机真实尺寸（中关村图集尺寸图的对号基准）：_ensure_dims 后 props 里该有的都有了
-    try:
-        _want = _parse_dims(dict(info.get("props") or []))
-    except Exception:
-        _want = None
-    prod = _pick_prod(model, img_urls, mdir, log, page_url=(info or {}).get("url") or None,
-                      kind=(info or {}).get("kind") or (info or {}).get("cat") or "",
-                      want_dims=_want,
-                      size_urls=tuple((info or {}).get("_book_size_urls") or ()),
-                      size_table=tuple((info or {}).get("_book_dim_table") or ()),
-                      force=1 if (force and not copyonly) else 0)
-    if not prod and zimgs:
-        log("中关村图单独再试一轮…")
-        prod = _pick_prod(model, zimgs, mdir, log, want_dims=_want, chain="legacy")
-    if not prod:
-        # 最后兜底：卡片缩略图（小图，清晰度有限但好过失败）
-        lib2 = _library_img(model, min_side=0)
-        if lib2:
-            _rescue_prod(lib2, log).save(os.path.join(mdir, "product.png"))
-            prod = os.path.join(mdir, "product.png")
-            if log:
-                log("用卡片缩略图凑（清晰度有限，建议在写文案里补张高清图）")
-        if not prod:
-            # 2026-11-23 用户令「都没有的话直接就让我塞进去跟主图」：四层图源全空时
-            # 明确告诉用户怎么手动塞图——_manual_overrides 会把 官网/主图.* 直接当
-            # product.png（跳过 AI 选图，幂等），塞尺寸图同理（文件名带「尺寸图」）。
-            raise RuntimeError(
-                "官网/说明书/欣盛/中关村四层都没找到机图——手动塞图：把你的图放进 "
-                "图片库 %s 的「官网」文件夹，文件名带「主图」两个字（如 主图.png），"
-                "重新生成即当主图；尺寸图同理（文件名带「尺寸图」）" % mdir)
-        # 2026-11-22 force 尺寸图保险：hunt 跑完还没图，把 force 前备份的旧官方尺寸图
-        # 还原回去（重抓失败不再永久丢图）；hunt 抓到了新的就删备份用新图
-        _bak = os.path.join(mdir, "sizeimg.jpg.bak")
-        if not os.path.isfile(os.path.join(mdir, "sizeimg.jpg")) and os.path.isfile(_bak):
+    _resumed = False
+    prod = None
+    if pickdone or skipsize:
+        # 选图面板接力（2026-11-26 用户令「下载完了就全部铺出来我来选」）：抓取已在
+        # 上一轮完成（参数快照 _state_pick.json），用户手选/上传完主图尺寸图后
+        # 从这里直接进渲染，不再重抓。skipsize=1 = 用户明确「无尺寸图出图」。
+        _sp = os.path.join(mdir, "_state_pick.json")
+        _st = {}
+        if os.path.isfile(_sp):
             try:
-                os.rename(_bak, os.path.join(mdir, "sizeimg.jpg"))
-                if log:
-                    log("重抓没拿到官方尺寸图，还原重出前的旧图")
+                with io.open(_sp, encoding="utf-8") as f:
+                    _st = json.load(f) or {}
+            except Exception:
+                _st = {}
+        info = _st.get("info") or {}
+        zimgs = _st.get("zimgs") or []
+        _manual_overrides(mdir, log)
+        prod = os.path.join(mdir, "product.png")
+        if not os.path.isfile(prod):
+            raise RuntimeError("还没选主图——在选图面板点选一张，或把图放进 官网/ 文件夹"
+                               "（文件名带「主图」两个字），再点出图")
+        if not os.path.isfile(os.path.join(mdir, "sizeimg.jpg")) and not skipsize:
+            return {"ok": True, "need_pick": True, "model": model, "missing": ["尺寸图"],
+                    "msg": "主图已定——尺寸图还没选，点一张候选图，或点「没尺寸图？自动画」"
+                           "（自动画=主图描线稿当尺寸图，宽高深三围照印卡底）"}
+        if not (info.get("props") or []):
+            info = None      # 快照空壳（异常残留）→ 落完整抓取链兜底
+        if info:
+            _resumed = True
+            try:
+                os.remove(_sp)
             except Exception:
                 pass
-        elif os.path.isfile(_bak):
-            try:
-                os.remove(_bak)
-            except Exception:
-                pass
+    if not _resumed:
+        if chain == "legacy":
+            # 婷（白字/婷宝版）专用老链：v3.0.87 原版行为（含 AI 选图），与宝新链互不影响
+            log("抓参数/机图（婷老链：爬虫→官网→欣盛→中关村）…")
+            info, img_urls = _gather_info_legacy(model, log,
+                                                 force=1 if (force and not copyonly) else 0)
+            if not img_urls or not (info.get("props") or []):
+                # 官网/欣盛没图或没参数：中关村在线兜底（用户令 2026-10-21）
+                log("常规渠道缺料，试中关村…")
+                zimgs, zprops = _zol_data(model, (info or {}).get("brand") or "", log)
+                zimgs = [(u, "中关村") for u in zimgs if u]   # 下载落盘按来源进 中关村\ 文件夹
+                if zimgs and not img_urls:
+                    img_urls = zimgs
+                if zprops and not (info.get("props") or []):
+                    info["props"] = zprops
+            info, img_urls = _ensure_dims_legacy(info, mdir, img_urls, log)
+        else:
+            log("抓参数/机图（官网→说明书）…")
+            # copyonly=1：参数重抓（文案重出要新数据），图源不强制（选图层短路不换主图）
+            info, img_urls = _gather_info(model, log, force=1 if (force and not copyonly) else 0)
+            # 尺寸补漏（2026-10-29 用户令「一个机器怎么可能没有尺寸」；2026-11-23 新链：
+            # 中关村下线，缺尺寸键改问说明书站——详见 _ensure_dims）。
+            info, img_urls = _ensure_dims(info, mdir, img_urls, log)
+        # 本机真实尺寸（中关村图集尺寸图的对号基准）：_ensure_dims 后 props 里该有的都有了
+        try:
+            _want = _parse_dims(dict(info.get("props") or []))
+        except Exception:
+            _want = None
+        if chain == "legacy":
+            # 2026-11-26 用户令「婷的窗口也改成跟宝的窗口一样自行选图」：婷老链同口径
+            # 砍 AI/代码选图——抓图全落盘+全量清单（cand.json），缺主图/尺寸图
+            # need_pick 交选图面板人工点选，选完 pickdone=1 接力渲染。
+            if copyonly:
+                prod = os.path.join(mdir, "product.png")
+                prod = prod if os.path.isfile(prod) else None
+            else:
+                _prod2, _size2 = _cand_collect(
+                    model, img_urls, mdir, log,
+                    page_url=(info or {}).get("url") or None,
+                    kind=(info or {}).get("kind") or (info or {}).get("cat") or "",
+                    force=1 if (force and not copyonly) else 0)
+                if not _prod2 or not _size2:
+                    _miss = (["主图"] if not _prod2 else []) + (["尺寸图"] if not _size2 else [])
+                    try:
+                        with io.open(os.path.join(mdir, "_state_pick.json"), "w",
+                                     encoding="utf-8") as f:
+                            json.dump({"info": info, "zimgs": zimgs or []},
+                                      f, ensure_ascii=False)
+                    except Exception:
+                        pass
+                    return {"ok": True, "need_pick": True, "model": model, "missing": _miss,
+                            "msg": "抓图完成——在选图面板点选%s，没有合适的直接上传"
+                                   % "、".join(_miss)}
+                prod = _prod2
+        else:
+            # 2026-11-26 用户令「AI选图跟代码选图全部删除，下载完了就全部铺出来我来选」：
+            # 宝套图新链不再自动选主图/尺寸图——_cand_collect 抓图全落盘+全量清单
+            # （cand.json），铺给选图面板人工点选；缺主图或缺尺寸图 → need_pick 返回
+            # （前端开选图面板），选完 pickdone=1 接力渲染，不再重抓。
+            if copyonly:
+                # 文案重出图零动作（顺带修掉 copyonly 不短路选图的遗留）：只认现有产物
+                prod = os.path.join(mdir, "product.png")
+                prod = prod if os.path.isfile(prod) else None
+            else:
+                _prod2, _size2 = _cand_collect(
+                    model, img_urls, mdir, log,
+                    page_url=(info or {}).get("url") or None,
+                    kind=(info or {}).get("kind") or (info or {}).get("cat") or "",
+                    force=1 if (force and not copyonly) else 0)
+                if not _prod2 or not _size2:
+                    _miss = (["主图"] if not _prod2 else []) + (["尺寸图"] if not _size2 else [])
+                    try:
+                        with io.open(os.path.join(mdir, "_state_pick.json"), "w",
+                                     encoding="utf-8") as f:
+                            json.dump({"info": info, "zimgs": zimgs or []},
+                                      f, ensure_ascii=False)
+                    except Exception:
+                        pass
+                    return {"ok": True, "need_pick": True, "model": model, "missing": _miss,
+                            "msg": "抓图完成——在选图面板点选%s，没有合适的直接上传"
+                                   % "、".join(_miss)}
+                prod = _prod2
     log("组装套图数据…")
     # 2026-11-24 用户令「别一张一张问 AI」：这里原来为给 img4 印「宽×高×深」两个数字，
     # 每次出图都问一次视觉 AI（Qwen 限流时 45s→180s+ 卡死实锤）。改成纯本地 OCR：
@@ -7002,7 +7200,13 @@ def white_hero(model, tone="blue", log=None):
         # 跑完 cfg 落盘，之后白字秒开。
         log("没有参数快照，先跑一遍蓝底（1-2 分钟，跑一次以后秒开）…")
         # 2026-11-23 分家：婷白字缺快照重跑走婷老链（chain="legacy"），不碰宝新链
-        generate(model, 1, log=log, chain="legacy")
+        # 2026-11-26 用户令「婷的窗口也自行选图」：婷老链缺图 → need_pick 透传给
+        # 前端婷窗开选图面板，选完「出图」pickdone=1 接力，白字自动续跑。
+        _g = generate(model, 1, log=log, chain="legacy")
+        if _g and _g.get("need_pick"):
+            return {"ok": True, "need_pick": True, "model": model,
+                    "missing": _g.get("missing") or ["主图"],
+                    "msg": _g.get("msg") or "抓图完成——请在选图面板点选主图/尺寸图"}
         j, mdir = _cfg_of(model)
         if not j or not j.get("cfg"):
             raise RuntimeError("蓝底参数快照拿不到——先在蓝底里给这个型号出一次图")

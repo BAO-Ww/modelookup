@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 
 import state
+import secstore                       # 2026-11-26 本机落盘加密（子用户盘上不留明文原价）
 from config import CLOUD_HOST, _CLOUD_UA
 from net import urlopen_ssl
 from paths import wp
@@ -269,6 +270,30 @@ def natf_push(model, on, log=None):
     if err or not j or not j.get("ok"):
         return None, err or (j or {}).get("msg") or "推送失败"
     return j.get("natf") or {}, None
+
+
+# ---------------------------------------------------------------- 拿货价加价（2026-11-26）
+_MK_CACHE = {"at": 0.0, "v": 0}
+
+
+def markup_get(refresh=False):
+    """当前登录者的拿货价加价（元，0=不加）。worker GET /mk 查询，本机缓存 10 分钟。
+    铁律（用户令「子用户看不到我的任何加价」）：这个值只在本机后端用——组包时把
+    拿货价六档加上它、再喂给页面；页面 JS 永远拿不到这个数，界面也没有任何
+    「原价/加价」痕迹。管理号恒 0（看原价）。拉取失败沿用旧值，绝不让价格消失。"""
+    now = time.time()
+    if not refresh and now - _MK_CACHE["at"] < 600:
+        return _MK_CACHE["v"]
+    j, err = cloud_req("/mk", "GET", timeout=30)
+    if err or not j or not j.get("ok"):
+        return _MK_CACHE["v"]
+    try:
+        v = max(0, int(round(float(j.get("mk") or 0) * 100)) / 100)
+    except Exception:
+        v = 0
+    _MK_CACHE["at"] = now
+    _MK_CACHE["v"] = v
+    return v
 
 
 def stock_push_cloud(log):
@@ -930,8 +955,7 @@ def sync_xlsx_cloud(log, touch=False):
                 raw = base64.b64decode(b64)
                 if raw[:2] != b"PK":
                     raise RuntimeError("%s 不是有效的表格文件" % name)
-                with open(wp(name), "wb") as f:
-                    f.write(raw)
+                secstore.write_bytes(wp(name), raw)   # 2026-11-26 落盘即加密（KDX1）
                 saved.append(name)
             if not saved:
                 return "unchanged"

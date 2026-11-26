@@ -12,6 +12,7 @@ import threading
 import time
 
 import state
+import secstore                       # 2026-11-26 payload.json 落盘加密（明文原价不能留盘上）
 from config import CLEAN_XLSX, PRICE_XLSX, PAYLOAD_VER, SOURCES, ONLINE_SHARE, FILE_ID, SUBSIDY_XLSX
 from paths import rp
 from parsers_yr import load_records_from_path, merge_records, parse_subsidy_rows
@@ -66,21 +67,63 @@ _PAY_LOCK = threading.Lock()
 _DATA_JSON = None
 _IMG_BYTES = {}
 
+# 拿货价加价（2026-11-26 用户令「子用户看不到我的任何加价」）：
+# 后端组包层把拿货价六档 +mk 再喂页面——原始价绝不进页面/接口；_PAY_MKV 是模块级
+# 变量（不放进 payload JSON，页面连「有没有加价」都感知不到）。管理号恒 0。
+MK_KEYS = ("pt", "lpz", "spz", "mh", "m2", "mr")   # 拿货价六档（零售指导价/官网价/京东价不加）
+_PAY_MKV = 0
+
+
+def _apply_markup(o, mk, depth=0):
+    """rows 里拿货价六档全部 +mk（嵌套 srcs 货源子价一并加）；非数字（「送」/None）不动。"""
+    if o is None or depth > 8:
+        return
+    if isinstance(o, list):
+        for x in o:
+            _apply_markup(x, mk, depth + 1)
+        return
+    if not isinstance(o, dict):
+        return
+    for k, v in list(o.items()):
+        if k in MK_KEYS:
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                o[k] = v + mk
+        elif isinstance(v, (dict, list)):
+            _apply_markup(v, mk, depth + 1)
+
 
 def get_payload():
-    global _PAY
+    global _PAY, _PAY_MKV
+    # 加价查询放锁外（有 10 分钟缓存，极少真打网络；拿锁等网会卡死其他取数方）
+    try:
+        import cloud as _cl
+        mk = _cl.markup_get()
+    except Exception:
+        mk = 0
     with _PAY_LOCK:
         if _PAY is None:
             _PAY = load_current_payload()
+            _PAY_MKV = 0                      # 新载入=原始价（还没套加价）
+        if mk != _PAY_MKV:
+            _PAY = load_current_payload()     # 重读原始数据再套，防旧值二次叠加
+            if mk:
+                _apply_markup(_PAY.get("rows"), mk)
+            _PAY_MKV = mk
+            try:
+                with state.SLOCK:
+                    state.STATE["rev"] += 1   # 加价变了 → 页面轮询到 rev 无感重载
+            except Exception:
+                pass
         return _PAY
 
 
 def set_payload(p):
-    global _PAY, _DATA_JSON
+    global _PAY, _DATA_JSON, _PAY_MKV
     with _PAY_LOCK:
         p.setdefault("meta", {})["pv"] = PAYLOAD_VER
         _PAY = p
         _DATA_JSON = None
+        _PAY_MKV = 0                      # 新包是原始价 → 下次 get_payload 按当前 mk 重新套
         _IMG_BYTES.clear()
         with state.SLOCK:
             state.STATE["rev"] += 1          # 数据换新 → 前端轮询到就无感重载
@@ -210,8 +253,7 @@ def load_current_payload():
     p = wp("payload.json")
     if os.path.isfile(p):
         try:
-            with io.open(p, encoding="utf-8") as f:
-                d = json.load(f)
+            d = json.loads(secstore.read_bytes(p).decode("utf-8"))   # 2026-11-26 密文读+旧明文就地迁移
             if (d.get("meta") or {}).get("pv") == PAYLOAD_VER:
                 return d
         except Exception:
@@ -219,8 +261,7 @@ def load_current_payload():
     p = rp("payload.json")
     if os.path.isfile(p):
         try:
-            with io.open(p, encoding="utf-8") as f:
-                d = json.load(f)
+            d = json.loads(secstore.read_bytes(p).decode("utf-8"))   # 2026-11-26 密文读（明文资源也兼容）
             if (d.get("meta") or {}).get("pv") == PAYLOAD_VER:
                 return d
         except Exception:
@@ -469,8 +510,9 @@ def rebuild(log):
         if _web:
             payload["web"] = _web
     set_payload(payload)
-    with io.open(wp("payload.json"), "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False)      # 记为「当前数据」，下次启动沿用
+    # 2026-11-26 落盘加密：payload.json 里是未加价的原始行，明文就是原价泄露——KDX1 容器
+    secstore.write_bytes(wp("payload.json"),
+                         json.dumps(payload, ensure_ascii=False).encode("utf-8"))
     log("重建完成：%d 个型号 / %d 张机图" % (len(payload["rows"]), len(payload["imgs"])))
     state.set_state(built=payload["meta"]["built"])
     return payload

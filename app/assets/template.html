@@ -2035,6 +2035,9 @@ var PERM_DEFS = [
   ['xysoft',      '链接软件内打开',    '入口与面板', '勾上=闲鱼链接在软件里打开；不勾=浏览器打开'],
   ['tbyp',        '婷',                '入口与面板', '控制卡片「婷」按钮（婷套图）和「配文」按钮——2026-11-04 用户令：婷入口绑婷开关'],
   ['kitset',      '宝',                '入口与面板', '控制卡片「宝」按钮（蓝底四张+暗角聚光）'],
+  // 2026-11-26 用户令「把这两个也做成权限」：原来写死只渲染给管理号的两颗卡片按钮
+  ['hjdb',        '号价对比',          '入口与面板', '卡片功能条「号价对比」——看所有闲鱼号各定的什么价、差多少'],
+  ['natforce',    '定死发全国',        '入口与面板', '卡片功能条「📍定死发全国」——发往定死全国·100运费'],
   ['p_pt',        '价格含税',          '价格列', '拿货价含税那档'],
   ['p_mr',        '价格取整',          '价格列', '把价取整显示'],
   ['p_mh',        '拿货价·慧买卖',     '价格列', '美的系慧买卖价'],
@@ -2958,12 +2961,15 @@ function openAdmin(){
     m.querySelectorAll('.auser').forEach(function(row){
       var perm = {};
       row.querySelectorAll('.pk.on').forEach(function(c){ perm[c.dataset.k] = true; });
+      var admc = row.querySelector('.admchip');
       users.push({
         u: row.querySelector('.uname').value.trim(),
         note: row.querySelector('.unote').value.trim(),
         pw: row.querySelector('.upw').value,
         disabled: row.querySelector('.adis').checked,
-        perm: perm
+        perm: perm,
+        adm: !!(admc && admc.textContent.indexOf('已升级') >= 0),
+        mk: (parseFloat((row.querySelector('.amk') || {}).value) || 0)
       });
     });
     m.querySelector('#asave').disabled = true; m.querySelector('#asave').textContent = '保存中…';
@@ -3010,6 +3016,23 @@ function userRow(x, isNew){
     chips += '</div></div>';
   });
   chips += '</div>';
+  /* 2026-11-26 用户令：①子账号可升成管理员（全权限·看原价·可管账号和加价）
+     ②拿货价加价：管理号给子账号单独设「TA 看到的拿货价 = 表格原价 + 这个数」，
+     固定金额（元），留空=不加；TA 界面上没有任何加价痕迹（后端组包就加好了） */
+  var _adm = !!x.adm;
+  var _admchip;
+  if (x.mach) {
+    d.dataset.mach = '1';
+    _admchip = '<span class="admchip" style="cursor:default;user-select:none;border:1px solid #d7dce6;background:#f6f7f9;color:#8a93a3;border-radius:999px;padding:5px 14px;font-size:12.5px;font-weight:600">🔧 机器账号（抓取链专用·身份已锁定）</span>'
+      + '<span style="font-size:11.5px;color:#98a2b3">云端抓取链的机器号，本来就要管理员权限，身份锁死别动</span>';
+  } else {
+    d.dataset.mach = '';
+    _admchip = '<span class="admchip" style="cursor:pointer;user-select:none;border:1px solid '
+      + (_adm ? '#2e6be6' : '#d7dce6') + ';background:' + (_adm ? '#eaf1ff' : '#fff')
+      + ';color:' + (_adm ? '#2e6be6' : '#5b6474') + ';border-radius:999px;padding:5px 14px;'
+      + 'font-size:12.5px;font-weight:600">' + (_adm ? '👑 管理员（已升级）' : '👑 升为管理员') + '</span>'
+      + '<span style="font-size:11.5px;color:#98a2b3">勾上=跟管理号一样：看原价、能管账号和加价</span>';
+  }
   d.innerHTML = '<div class="arow">'
     + '<input type="text" class="uname" placeholder="账号" value="' + esc(x.u) + '"' + (isNew ? '' : ' readonly') + '>'
     + '<input type="text" class="unote" placeholder="备注（如：小王）" value="' + esc(x.note) + '">'
@@ -3017,7 +3040,18 @@ function userRow(x, isNew){
     + '<label style="font-size:12.5px;color:#7b8494"><input type="checkbox" class="adis"' + (x.disabled ? ' checked' : '') + '> 停用</label>'
     + (x.hasPw && !isNew ? '' : '<span style="font-size:11.5px;color:#d92d20">新号</span>')
     + (x.u && x.u !== AUTH.u ? '<button class="achip adel" title="把这个账号整个删掉（保存后生效）" style="color:#d92d20;border-color:#f1c2c2">删除</button>' : '')
-    + '</div>' + chips
+    + '</div>'
+    + '<div class="axyrow" style="display:flex;align-items:center;gap:8px;margin-top:10px">'
+    +   '<span style="font-size:12px;color:#7b8494;flex:none">身份</span>' + _admchip
+    + '</div>'
+    + '<div class="subonly" style="' + (_adm ? 'display:none' : '') + '">'
+    + chips
+    + '<div class="axyrow" style="display:flex;align-items:center;gap:8px;margin-top:8px">'
+    +   '<span style="font-size:12px;color:#7b8494;flex:none">拿货价加价</span>'
+    +   '<input type="number" class="amk" min="0" step="1" placeholder="TA 看到的拿货价 = 表格原价 + 这个数（元，留空=不加；TA 完全感觉不到加过价）" '
+    +     'style="flex:1;min-width:0;border:1px solid #d7dce6;border-radius:8px;padding:7px 10px;font-size:13px" value="' + (x.mk ? x.mk : '') + '">'
+    + '</div>'
+    + '</div>'
     /* 闲鱼号配置（2026-10-13 用户定稿）：每个子账号自己名下有几个号、叫什么，
        管理号在这里代设（TA 自己标记时点新号也会自动记进 TA 的配置）；逗号分隔 */
     + '<div class="axyrow" style="display:flex;align-items:center;gap:8px;margin-top:8px">'
@@ -3048,6 +3082,25 @@ function userRow(x, isNew){
   d.querySelectorAll('.pk').forEach(function(c){
     c.addEventListener('click', function(){ c.classList.toggle('on'); });
   });
+  /* 管理员开关（2026-11-26）：点一下切换身份；管理员=权限块和加价输入整组收起。
+     机器账号（ci）身份锁死不可点。 */
+  var _admchip = d.querySelector('.admchip');
+  function _paintAdm(){
+    var on = d.dataset.mach === '1' || _admchip.textContent.indexOf('已升级') >= 0;
+    d.querySelectorAll('.subonly').forEach(function(el){ el.style.display = on ? 'none' : ''; });
+    if (d.dataset.mach === '1') return;       // 机器账号样式锁死，不跟随切换
+    _admchip.style.border = '1px solid ' + (on ? '#2e6be6' : '#d7dce6');
+    _admchip.style.background = on ? '#eaf1ff' : '#fff';
+    _admchip.style.color = on ? '#2e6be6' : '#5b6474';
+    _admchip.textContent = on ? '👑 管理员（已升级）' : '👑 升为管理员';
+  }
+  _admchip.addEventListener('click', function(){
+    if (d.dataset.mach === '1') return;       // 机器账号身份不可动
+    var on = _admchip.textContent.indexOf('已升级') >= 0;
+    _admchip.textContent = on ? '👑 升为管理员' : '👑 管理员（已升级）';
+    _paintAdm();
+  });
+  _paintAdm();
   return d;
 }
 function loadAdminList(m){
@@ -6233,6 +6286,198 @@ function openWhiteView(k){
       })
       .catch(function(){ renderTbCopyEmpty(); });
   }
+  /* 婷窗选图面板（2026-11-26 用户令「婷的窗口也改成跟宝的窗口一样自行选图」）：
+     与宝窗同一套后端（/api/kitcands 清单、/api/kitpick 点选落盘、/api/kitmain 上传、
+     pickdone=1 接力渲染）——婷老链缺图 need_pick 时铺出来人工点选；独立 id 前缀
+     tpick_ 不与宝窗面板互撞。选完「出图」= 蓝底四张渲染完自动续跑白字（tone）。
+     铁律同宝窗：没选完不能关（收起键灰化+提示），面板外点击不关。 */
+  var tpickPanel = null;
+  function tpickClose(){ if (tpickPanel){ tpickPanel.remove(); tpickPanel = null; } }
+  function tpickImgUrl(p){
+    return '/api/kitimg/' + encodeURIComponent(k) + '/' +
+      String(p || '').split('/').map(encodeURIComponent).join('/');
+  }
+  function tpickSlot(kind, cur, label, color){
+    var has = !!cur;
+    return '<div style="width:112px;height:84px;flex:none;background:#f6f8fb;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center">'
+      + (has ? '<img src="' + tpickImgUrl(cur) + '?t=' + Date.now() + '" style="max-width:100%;max-height:100%;object-fit:contain">'
+             : '<span style="color:#aab2c0;font-size:11px">未选</span>')
+      + '</div>'
+      + '<div style="flex:1;min-width:0">'
+      + '<div style="font-size:12.5px;font-weight:600;color:' + color + '">' + label + (has ? ' · 已定' : ' · 待选') + '</div>'
+      + '<div style="margin-top:6px">'
+      + '<button id="tpick_up_' + kind + '" style="border:1px solid ' + color + ';background:#fff;color:' + color + ';border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">上传</button>'
+      + '</div></div>';
+  }
+  function openPickPanelT(missing, note, tone, btn){
+    tpickClose();
+    var msg = wrap.querySelector('#wv_msg');
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:99990;display:flex;align-items:center;justify-content:center';
+    var pan = document.createElement('div');
+    pan.style.cssText = 'background:#fff;border-radius:14px;width:min(980px,94vw);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 18px 60px rgba(0,0,0,.35);overflow:hidden';
+    pan.innerHTML =
+      '<div style="padding:14px 18px 10px;border-bottom:1px solid #eef1f6;display:flex;align-items:center;gap:10px">'
+      + '<b style="font-size:15px;color:#1a2230">选图 · ' + esc(k) + '（婷套图）</b>'
+      + '<span style="color:#8a929e;font-size:12px">点图=设为主图；要当尺寸图点卡片右下「设尺寸图」；没有合适的直接上传。</span>'
+      + '<span style="flex:1"></span>'
+      + '<button id="tpick_x" style="border:0;background:#f1f3f8;border-radius:8px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#5a6472">收起</button></div>'
+      + '<div style="display:flex;gap:12px;padding:12px 18px 6px">'
+      + '<div id="tpick_slot_main" style="flex:1;display:flex;align-items:center;gap:10px;border:1.5px dashed #5b8def;border-radius:10px;padding:10px"></div>'
+      + '<div id="tpick_slot_size" style="flex:1;display:flex;align-items:center;gap:10px;border:1.5px dashed #d4b34a;border-radius:10px;padding:10px"></div>'
+      + '</div>'
+      + '<div id="tpick_grid" style="flex:1;overflow:auto;padding:8px 18px 6px;display:flex;flex-wrap:wrap;gap:10px;align-content:flex-start"></div>'
+      + '<div style="padding:12px 18px;border-top:1px solid #eef1f6;display:flex;gap:10px;align-items:center">'
+      + '<span id="tpick_tip" style="color:#8a929e;font-size:12px;flex:1">' + esc(note || '') + '</span>'
+      + '<button id="tpick_nosize" style="border:1px solid #cbd3e0;background:#fff;border-radius:9px;padding:8px 14px;font-size:12.5px;cursor:pointer;color:#5a6472">没尺寸图？自动画</button>'
+      + '<button id="tpick_go" style="border:0;background:#1d4ed8;color:#fff;border-radius:9px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer">出图</button></div>';
+    ov.appendChild(pan);
+    document.body.appendChild(ov);
+    tpickPanel = ov;
+    var tcur = { main: null, size: null };
+    var tx = ov.querySelector('#tpick_x');
+    var ttip = ov.querySelector('#tpick_tip');
+    function paintX(){
+      /* 同宝窗：不用 disabled（不派发 click），视觉禁用 + 点击给铁律提示 */
+      var ready = !!(tcur.main && tcur.size);
+      tx.textContent = ready ? '收起' : '选完才能收起';
+      tx.style.cursor = ready ? 'pointer' : 'not-allowed';
+      tx.style.opacity = ready ? '1' : '.55';
+    }
+    if (missing && missing.length){ paintX(); }
+    tx.onclick = function(){
+      if (!(tcur.main && tcur.size)){
+        ttip.textContent = '铁律：主图/尺寸图还没选完，面板不能关——点大图选定；实在没有尺寸图点「没尺寸图？自动画」';
+        return;
+      }
+      tpickClose();
+    };
+    function paintSlots(cur){
+      tcur.main = cur.main || null;
+      tcur.size = cur.size || null;
+      paintX();
+      ov.querySelector('#tpick_slot_main').innerHTML = tpickSlot('main', cur.main, '主图', '#1d4ed8');
+      ov.querySelector('#tpick_slot_size').innerHTML = tpickSlot('size', cur.size, '尺寸图', '#8a6a10');
+      ov.querySelector('#tpick_up_main').onclick = function(){ tUpload('main'); };
+      ov.querySelector('#tpick_up_size').onclick = function(){ tUpload('size'); };
+    }
+    function refresh(){
+      fetch('/api/kitcands?model=' + encodeURIComponent(k), {cache:'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (!j || !j.ok) throw new Error((j && j.msg) || '清单读取失败');
+          paintSlots(j.cur || {});
+          var items = j.items || [];
+          var cur = j.cur || {};
+          ttip.textContent = '候选 ' + items.length + ' 张' + (cur.main ? '' : ' · 主图待选') + (cur.size ? '' : ' · 尺寸图待选（实在没有就点「没尺寸图？自动画」，画好照样印三围）');
+          var grid = ov.querySelector('#tpick_grid');
+          grid.innerHTML = '';
+          if (!items.length){
+            grid.innerHTML = '<div style="width:100%;padding:40px 0;text-align:center;color:#8a929e;font-size:13px">没有抓到候选图——直接用上面的「上传」塞主图/尺寸图</div>';
+            return;
+          }
+          items.forEach(function(it){
+            var isMain = cur.main === it.p, isSize = cur.size === it.p;
+            var d = document.createElement('div');
+            d.style.cssText = 'position:relative;flex:0 0 calc(33.333% - 10px);border:2px solid '
+              + (isMain ? '#16a34a' : (isSize ? '#d4b34a' : '#e7ebf2'))
+              + ';border-radius:10px;overflow:hidden;background:#fbfcfe;cursor:pointer';
+            d.innerHTML =
+              '<div style="height:210px;background:#fff;display:flex;align-items:center;justify-content:center">'
+              + '<img loading="lazy" src="' + tpickImgUrl(it.p) + '" style="max-width:100%;max-height:206px;object-fit:contain">'
+              + '</div>'
+              + '<div style="padding:6px 10px 8px;display:flex;align-items:center;gap:8px">'
+              + '<span style="color:#6a7382;font-size:10.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(it.p) + '">' + esc(it.src) + ' · ' + it.w + '×' + it.h + '</span>'
+              + '<button data-k="size" style="flex:none;border:1px solid #b98f1f;background:#fdf6e3;color:#8a6a10;border-radius:7px;padding:3px 10px;font-size:11px;cursor:pointer">设尺寸图</button>'
+              + '</div>';
+            if (isMain || isSize){
+              var tag = document.createElement('div');
+              tag.textContent = isMain ? '✓ 已定主图' : '✓ 已定尺寸图';
+              tag.style.cssText = 'position:absolute;top:6px;left:6px;background:'
+                + (isMain ? '#16a34a' : '#d4b34a') + ';color:#fff;border-radius:6px;padding:2px 8px;font-size:10.5px;font-weight:600';
+              d.appendChild(tag);
+            }
+            function pickOne(kind, b){
+              if (b){ b.disabled = true; b.textContent = '…'; }
+              fetch('/api/kitpick', {method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({model:k, kind:kind, p:it.p})})
+                .then(function(r){ return r.json(); })
+                .then(function(j2){
+                  if (!j2 || !j2.ok) throw new Error((j2 && j2.msg) || '落盘失败');
+                  refresh();
+                })
+                .catch(function(e){
+                  if (b){ b.disabled = false; b.textContent = '设尺寸图'; }
+                  ttip.textContent = '✗ ' + (e.message || e);
+                });
+            }
+            d.addEventListener('click', function(){ pickOne('main'); });
+            var bsz = d.querySelector('button[data-k="size"]');
+            bsz.addEventListener('click', function(ev){ ev.stopPropagation(); pickOne('size', bsz); });
+            grid.appendChild(d);
+          });
+        })
+        .catch(function(e){ ttip.textContent = '✗ ' + (e.message || e); });
+    }
+    function tUpload(kind){
+      var inp = wrap._tpickUpInp;
+      if (!inp){
+        inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = 'image/*'; inp.style.display = 'none';
+        wrap.appendChild(inp);
+        wrap._tpickUpInp = inp;
+      }
+      inp.onchange = function(){
+        var f = inp.files && inp.files[0];
+        if (!f) return;
+        ttip.textContent = '上传中…';
+        var rd = new FileReader();
+        rd.onload = function(){
+          fetch('/api/kitmain', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({model:k, data:rd.result, kind: kind === 'main' ? 'main' : 'size'})})
+            .then(function(r){ return r.json(); })
+            .then(function(j){
+              if (!j || !j.ok) throw new Error((j && j.msg) || '上传失败');
+              refresh();
+            })
+            .catch(function(e){ ttip.textContent = '✗ 上传失败：' + (e.message || e); });
+        };
+        rd.readAsDataURL(f);
+      };
+      inp.click();
+    }
+    function launch(skip){
+      tpickClose();
+      if (msg) msg.textContent = '选图完成，蓝底出图后自动续跑' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + '…';
+      fetch('/api/kitset?model=' + encodeURIComponent(k) + '&pickdone=1' + (skip ? '&skipsize=1' : '') + '&bg=1')
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (!j || !j.ok) throw new Error((j && j.msg) || '启动失败');
+          pollJob('kitset:' + k, function(res){
+            if (msg) msg.textContent = '✓ 蓝底好了，续跑' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + '…';
+            wvStart(tone, btn);
+          }, function(err){
+            if (msg){ msg.textContent = '✗ ' + ((err && err.message) || '出图失败'); msg.style.color = '#fca5a5'; }
+          });
+        })
+        .catch(function(e){
+          if (msg){ msg.textContent = '✗ ' + e; msg.style.color = '#fca5a5'; }
+        });
+    }
+    ov.querySelector('#tpick_go').onclick = function(){
+      fetch('/api/kitcands?model=' + encodeURIComponent(k), {cache:'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          var cur = (j && j.cur) || {};
+          if (!cur.main){ ttip.textContent = '先选主图（或点「上传」塞一张）再出图'; return; }
+          if (!cur.size){ launch(true); return; }
+          launch(false);
+        })
+        .catch(function(){ launch(false); });
+    };
+    ov.querySelector('#tpick_nosize').onclick = function(){ launch(true); };
+    refresh();
+  }
   function wvStart(tone, btn){
     var msg = wrap.querySelector('#wv_msg');
     var _t = btn.textContent;
@@ -6245,6 +6490,13 @@ function openWhiteView(k){
         if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
         pollJob('kitwhite:' + k + ':' + tone, function(res){
           btn.disabled = false; btn.textContent = _t;
+          /* 2026-11-26 用户令「婷的窗口也改成跟宝的窗口一样自行选图」：婷老链缺图
+             → 开选图面板人工点选，选完「出图」自动续跑本 tone 白字。 */
+          if (res && res.need_pick){
+            if (msg){ msg.textContent = res.msg || '抓图完成——请在选图面板点选主图/尺寸图'; msg.style.color = '#fcd34d'; }
+            openPickPanelT(res.missing || [], res.msg || '', tone, btn);
+            return;
+          }
           if (msg) msg.textContent = '✓ ' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + '四张完成';
           wvShow();
           /* 2026-11-04 用户令：生成完不再自动打开文件夹（想开点卡右上「打开文件夹」） */
@@ -6312,6 +6564,7 @@ function openBaoView(k){
       +       '<span style="flex:1"></span>'
       +       '<button data-baocancel="k" style="border:1px solid #f0b9b3;background:#fff;color:#d92d20;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer;display:none">取消</button>'
       +       '<button data-baoopen="k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+      +       '<button id="bao_pick" title="铺出抓到的全部候选图，点选主图/尺寸图；面板没选完被关掉也随时点这里重开" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">选图</button>'
       +       '<button data-baogen="k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
       +       '<button id="mjd_k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">样机</button>'
       +       '<button id="cpk_k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制文案</button>'
@@ -6553,13 +6806,8 @@ function openBaoView(k){
       g.innerHTML = '';
       for (var n = 1; n <= 4; n++){
         (function(nn){
-          /* 2026-11-23 用户令「蓝底没有首图就直接停了后面的了，我上传图直接科科用了，
-             后面两个才跟这个生成」：科科列缺主图（img_1 没出来）→ 第一格换成
-             「上传主图」，传完自动出蓝底，蓝底好了再串东星斑/文案三。 */
-          if (tid === 'k' && nn === 1 && K_MISS){
-            g.appendChild(upMainTile());
-            return;
-          }
+          /* 2026-11-26 用户令「这个可以不要了」：上传主图虚线格撤了——上传/选图
+             统一走选图面板（栏头「选图」键随时重开，面板里每槽自带上传）。 */
           g.appendChild(cell('k', kImg(nn), nn, KLAB[nn], '蓝底 · ' + KLAB[nn],
             function(){ zoom(kImg(nn), '蓝底 · ' + KLAB[nn]); },
             function(){ regenKOne(nn); }));
@@ -6568,48 +6816,218 @@ function openBaoView(k){
     });
     refit();
   }
-  /* 科科列「上传主图」格子（同一个文件框全局复用，showK 反复重画不堆积 input） */
-  function upMainTile(){
-    var d = document.createElement('div');
-    d.style.cssText = 'position:relative;width:100%;height:100%;background:#fbfcfe;border:1px dashed #5b8def;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px';
-    d.innerHTML = '<button id="bao_up_k" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;border-radius:9px;padding:7px 16px;font-size:12.5px;font-weight:600;cursor:pointer">上传主图</button>'
-      + '<div style="color:#8a929e;font-size:10.5px;text-align:center;line-height:1.5;padding:0 6px">传一张实拍图当主图<br>蓝底出图后自动串聚光/文案三</div>';
-    var btn = d.querySelector('#bao_up_k');
-    btn.onclick = function(ev){
-      ev.stopPropagation();
-      var inp = wrap._mainUpInp;
+  /* ================= 选图面板（2026-11-26 用户令「AI选图跟代码选图全部删除，
+     下载完了就全部铺出来我来选主图跟尺寸图，那个没有我就会自己上传」） =================
+     蓝底生成返回 need_pick（缺主图/缺尺寸图）→ 面板铺出抓到的全部候选图
+     （/api/kitcands 清单，/api/kitimg 直读本地+云端兜底），点图上的按钮选主图/
+     尺寸图（/api/kitpick 即时落盘成手选覆盖），没有合适的每槽自带上传键；
+     选完「出图」= pickdone=1 接力渲染不重抓。 */
+  var pickPanel = null;
+  function pickClose(){ if (pickPanel){ pickPanel.remove(); pickPanel = null; } }
+  function pickImgUrl(p){
+    return '/api/kitimg/' + encodeURIComponent(k) + '/' +
+      String(p || '').split('/').map(encodeURIComponent).join('/');
+  }
+  function pickSlotHtml(kind, cur, label, color){
+    var has = !!cur;
+    return '<div style="width:112px;height:84px;flex:none;background:#f6f8fb;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center">'
+      + (has ? '<img src="' + pickImgUrl(cur) + '?t=' + Date.now() + '" style="max-width:100%;max-height:100%;object-fit:contain">'
+             : '<span style="color:#aab2c0;font-size:11px">未选</span>')
+      + '</div>'
+      + '<div style="flex:1;min-width:0">'
+      + '<div style="font-size:12.5px;font-weight:600;color:' + color + '">' + label + (has ? ' · 已定' : ' · 待选') + '</div>'
+      + '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">'
+      + '<button id="pick_up_' + kind + '" style="border:1px solid ' + color + ';background:#fff;color:' + color + ';border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">上传</button>'
+      + '</div></div>';
+  }
+  function openPickPanel(missing, note){
+    pickClose();
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:99990;display:flex;align-items:center;justify-content:center';
+    var pan = document.createElement('div');
+    pan.style.cssText = 'background:#fff;border-radius:14px;width:min(980px,94vw);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 18px 60px rgba(0,0,0,.35);overflow:hidden';
+    pan.innerHTML =
+      '<div style="padding:14px 18px 10px;border-bottom:1px solid #eef1f6;display:flex;align-items:center;gap:10px">'
+      + '<b style="font-size:15px;color:#1a2230">选图 · ' + esc(k) + '</b>'
+      + '<span style="color:#8a929e;font-size:12px">抓到的图全在这——点图=设为主图；要当尺寸图点卡片右下「设尺寸图」；没有合适的直接上传。</span>'
+      + '<span style="flex:1"></span>'
+      + '<button id="pick_x" style="border:0;background:#f1f3f8;border-radius:8px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#5a6472">收起</button></div>'
+      + '<div style="display:flex;gap:12px;padding:12px 18px 6px">'
+      + '<div id="pick_slot_main" style="flex:1;display:flex;align-items:center;gap:10px;border:1.5px dashed #5b8def;border-radius:10px;padding:10px"></div>'
+      + '<div id="pick_slot_size" style="flex:1;display:flex;align-items:center;gap:10px;border:1.5px dashed #d4b34a;border-radius:10px;padding:10px"></div>'
+      + '</div>'
+      + '<div id="pick_grid" style="flex:1;overflow:auto;padding:8px 18px 6px;display:flex;flex-wrap:wrap;gap:10px;align-content:flex-start"></div>'
+      + '<div style="padding:12px 18px;border-top:1px solid #eef1f6;display:flex;gap:10px;align-items:center">'
+      + '<span id="pick_tip" style="color:#8a929e;font-size:12px;flex:1">' + esc(note || '') + '</span>'
+      + '<button id="pick_nosize" style="border:1px solid #cbd3e0;background:#fff;border-radius:9px;padding:8px 14px;font-size:12.5px;cursor:pointer;color:#5a6472">没尺寸图？自动画</button>'
+      + '<button id="pick_go" style="border:0;background:#1d4ed8;color:#fff;border-radius:9px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer">出图</button></div>';
+    ov.appendChild(pan);
+    document.body.appendChild(ov);
+    pickPanel = ov;
+    /* 2026-11-26 用户铁律「我没选完图不能关」：主图/尺寸图没定齐时「收起」禁用
+       （点了只提示不关），面板只能被「出图」关掉——出图=选完了。openPickPanel
+       先按 missing 置初始态，refresh 拿到 cur 后 paintSlots 里实时更新。 */
+    var _cur = { main: null, size: null };
+    var _bx = ov.querySelector('#pick_x');
+    function _paintX(){
+      /* 不用 disabled——disabled 按钮不派发 click，点了没反应用户会懵；
+         视觉禁用（灰+not-allowed）+ 点击给铁律提示。 */
+      var ready = !!(_cur.main && _cur.size);
+      _bx.textContent = ready ? '收起' : '选完才能收起';
+      _bx.style.cursor = ready ? 'pointer' : 'not-allowed';
+      _bx.style.opacity = ready ? '1' : '.55';
+    }
+    if (missing && missing.length){ _paintX(); }
+    _bx.onclick = function(){
+      if (!(_cur.main && _cur.size)){
+        tip.textContent = '铁律：主图/尺寸图还没选完，面板不能关——点大图选定；实在没有尺寸图点「没尺寸图？自动画」';
+        return;
+      }
+      pickClose();
+    };
+    /* 2026-11-26 用户令「还没选呢怎么可以关掉」：点面板外面不再关——手滑碰一下
+       就全没了太伤，只认「收起」键和「出图」（出图/无尺寸图出图在 launch 里 pickClose）。 */
+    var grid = ov.querySelector('#pick_grid');
+    var tip = ov.querySelector('#pick_tip');
+
+    function pickGoUrl(skip){ return '/api/kitset?model=' + encodeURIComponent(k) + '&pickdone=1' + (skip ? '&skipsize=1' : '') + '&bg=1'; }
+    function launch(skip){
+      if (kGen) return;
+      kGen = true; setCancelVis('k', true); clearFail('k');
+      pickClose();
+      msg('k', '选图完成，开始出图…');
+      var tried = 0;
+      (function go(){
+        fetch(pickGoUrl(skip)).then(function(r){ return r.json(); }).then(function(j){
+          if (j && j.busy){ watchK(null, function(){ chainAfterK(); }); return; }
+          if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
+          watchK(null, function(){ chainAfterK(); });
+        }).catch(function(err){
+          if (tried++ < 1){ setTimeout(go, 1500); return; }
+          kGen = false; setCancelVis('k', false);
+          failMsg('k', new Error('出图启动失败：' + (err.message || err)));
+        });
+      })();
+    }
+    function paintSlots(cur){
+      _cur.main = cur.main || null;
+      _cur.size = cur.size || null;
+      _paintX();
+      ov.querySelector('#pick_slot_main').innerHTML = pickSlotHtml('main', cur.main, '主图', '#1d4ed8');
+      ov.querySelector('#pick_slot_size').innerHTML = pickSlotHtml('size', cur.size, '尺寸图', '#8a6a10');
+      ov.querySelector('#pick_up_main').onclick = function(){ pickUpload('main'); };
+      ov.querySelector('#pick_up_size').onclick = function(){ pickUpload('size'); };
+    }
+    function refresh(){
+      fetch('/api/kitcands?model=' + encodeURIComponent(k), {cache:'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (!j || !j.ok) throw new Error((j && j.msg) || '清单读取失败');
+          paintSlots(j.cur || {});
+          var items = j.items || [];
+          var cur = j.cur || {};
+          tip.textContent = '候选 ' + items.length + ' 张' + (cur.main ? '' : ' · 主图待选') + (cur.size ? '' : ' · 尺寸图待选（实在没有就点「没尺寸图？自动画」，画好照样印三围）');
+          grid.innerHTML = '';
+          if (!items.length){
+            grid.innerHTML = '<div style="width:100%;padding:40px 0;text-align:center;color:#8a929e;font-size:13px">没有抓到候选图——直接用上面的「上传」塞主图/尺寸图</div>';
+            return;
+          }
+          /* 2026-11-26 二修（用户令「我看不到完整的图怎么选啊，肯定是我点击那个就是那个啊」）：
+             ①布局 grid→flex-wrap——Playwright 实锤 #pick_grid 的 overflow:auto + flex 压高
+             会把 grid 行轨均分容器高度（我机每行 152px、用户 65 张 13 行每行 ~40px），
+             卡片 overflow:hidden 裁掉来源行和按钮=「哪里能选图」；flex-wrap 行高永远
+             跟内容走，绝不压缩。②大图 3 列（210px 图箱 contain 完整可见）。
+             ③点图=设为主图（用户口径「我点击那个就是那个」）；尺寸图走卡右下「设尺寸图」
+             钮；已选卡描边+角标。 */
+          items.forEach(function(it){
+            var isMain = cur.main === it.p, isSize = cur.size === it.p;
+            var d = document.createElement('div');
+            d.style.cssText = 'position:relative;flex:0 0 calc(33.333% - 10px);border:2px solid '
+              + (isMain ? '#16a34a' : (isSize ? '#d4b34a' : '#e7ebf2'))
+              + ';border-radius:10px;overflow:hidden;background:#fbfcfe;cursor:pointer';
+            d.innerHTML =
+              '<div style="height:210px;background:#fff;display:flex;align-items:center;justify-content:center">'
+              + '<img loading="lazy" src="' + pickImgUrl(it.p) + '" style="max-width:100%;max-height:206px;object-fit:contain">'
+              + '</div>'
+              + '<div style="padding:6px 10px 8px;display:flex;align-items:center;gap:8px">'
+              + '<span style="color:#6a7382;font-size:10.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(it.p) + '">' + esc(it.src) + ' · ' + it.w + '×' + it.h + '</span>'
+              + '<button data-k="size" style="flex:none;border:1px solid #b98f1f;background:#fdf6e3;color:#8a6a10;border-radius:7px;padding:3px 10px;font-size:11px;cursor:pointer">设尺寸图</button>'
+              + '</div>';
+            if (isMain || isSize){
+              var tag = document.createElement('div');
+              tag.textContent = isMain ? '✓ 已定主图' : '✓ 已定尺寸图';
+              tag.style.cssText = 'position:absolute;top:6px;left:6px;background:'
+                + (isMain ? '#16a34a' : '#d4b34a') + ';color:#fff;border-radius:6px;padding:2px 8px;font-size:10.5px;font-weight:600';
+              d.appendChild(tag);
+            }
+            function pickOne(kind, btn){
+              if (btn){ btn.disabled = true; btn.textContent = '…'; }
+              fetch('/api/kitpick', {method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({model:k, kind:kind, p:it.p})})
+                .then(function(r){ return r.json(); })
+                .then(function(j2){
+                  if (!j2 || !j2.ok) throw new Error((j2 && j2.msg) || '落盘失败');
+                  refresh();
+                })
+                .catch(function(e){
+                  if (btn){ btn.disabled = false; btn.textContent = '设尺寸图'; }
+                  tip.textContent = '✗ ' + (e.message || e);
+                });
+            }
+            d.addEventListener('click', function(){ pickOne('main'); });
+            var bsz = d.querySelector('button[data-k="size"]');
+            bsz.addEventListener('click', function(ev){ ev.stopPropagation(); pickOne('size', bsz); });
+            grid.appendChild(d);
+          });
+        })
+        .catch(function(e){ tip.textContent = '✗ ' + (e.message || e); });
+    }
+    function pickUpload(kind){
+      var inp = wrap._pickUpInp;
       if (!inp){
         inp = document.createElement('input');
         inp.type = 'file'; inp.accept = 'image/*'; inp.style.display = 'none';
         wrap.appendChild(inp);
-        wrap._mainUpInp = inp;
+        wrap._pickUpInp = inp;
       }
       inp.onchange = function(){
         var f = inp.files && inp.files[0];
         if (!f) return;
-        btn.disabled = true; btn.textContent = '上传中…';
+        tip.textContent = '上传中…';
         var rd = new FileReader();
         rd.onload = function(){
           fetch('/api/kitmain', {method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({model:k, data:rd.result, kind:'main'})})
+            body: JSON.stringify({model:k, data:rd.result, kind: kind === 'main' ? 'main' : 'size'})})
             .then(function(r){ return r.json(); })
             .then(function(j){
-              if (!j || !j.ok) throw new Error((j && j.msg) || '保存失败');
+              if (!j || !j.ok) throw new Error((j && j.msg) || '上传失败');
               K_MISS = false;
-              msg('k', '主图已收到，开始出图…');
-              showK();
-              genK(true, null, function(){ chainAfterK(); });
+              refresh();
             })
-            .catch(function(e){
-              btn.disabled = false; btn.textContent = '上传主图';
-              msg('k', '✗ 上传失败：' + (e.message || e), true);
-            });
+            .catch(function(e){ tip.textContent = '✗ 上传失败：' + (e.message || e); });
         };
         rd.readAsDataURL(f);
       };
       inp.click();
+    }
+    ov.querySelector('#pick_go').onclick = function(){
+      /* 尺寸图没选时先确认一次，防误点（铁律：宽高深要印卡底，缺尺寸图走手绘） */
+      fetch('/api/kitcands?model=' + encodeURIComponent(k), {cache:'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          var cur = (j && j.cur) || {};
+          if (!cur.main){ tip.textContent = '先选主图（或点「上传」塞一张）再出图'; return; }
+          if (!cur.size){
+            tip.textContent = '';
+            launch(true);      /* 尺寸图没选 → 按「无尺寸图出图」处理（img4 走手绘线稿） */
+            return;
+          }
+          launch(false);
+        })
+        .catch(function(){ launch(false); });
     };
-    return d;
+    ov.querySelector('#pick_nosize').onclick = function(){ launch(true); };
+    refresh();
   }
   /* 科科好 → 东星斑 → 文案三（2026-11-23 用户令「生成顺序是文案科科好了再到东星斑
      再到文案三；图也是科科生成好了主图尺寸都选好了，东星斑和文案三直接用」） */
@@ -6662,6 +7080,15 @@ function openBaoView(k){
       kGen = false;
       setCancelVis('k', false); clearFail('k');
       if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
+      /* 2026-11-26 用户令「AI选图跟代码选图全部删除，下载完了就全部铺出来我来选」：
+         后端抓图完成返回 need_pick（缺主图/缺尺寸图）→ 开选图面板人工点选；
+         选完 pickdone=1 接力渲染，东星斑/文案三在选完出图后才接着跑。 */
+      if (res && res.need_pick){
+        msg('k', (res.msg || '抓图完成——请在选图面板点选主图和尺寸图') + '；面板关了点栏头「选图」重开');
+        showK();
+        openPickPanel(res.missing || [], res.msg || '');
+        return;
+      }
       msg('k', res && res.cached ? '缓存秒出' : (okMsg || '✓ 蓝底四张完成'));
       /* 2026-11-24 用户问「怎么又要我上传」：生成中途开窗时 img_1 未出 → K_MISS=true，
          之后 img_1 出来了窗口还停在「上传主图」（完成回调只重画不重判）。
@@ -7075,6 +7502,14 @@ function openBaoView(k){
       }
     });
   });
+  /* 栏头「选图」键（2026-11-26 用户令「还没选呢怎么可以关掉」）：面板随时可重开——
+     铺的是 /api/kitcands 现状，选没选过都照实画。 */
+  (function(){
+    var bp = wrap.querySelector('#bao_pick');
+    if (bp) bp.addEventListener('click', function(){
+      openPickPanel([], '手动打开——选完点「出图」，实在没合适的尺寸图点「没尺寸图？自动画」');
+    });
+  })();
   /* 样机切换钮（2026-11-17 用户令）：点一下该列「全新机」全变「样机」，再点切回 */
   [['mjd_k', 'k', '#1d4ed8', '#c7d2fe', '#eef2ff'],
    ['mjd_s', 's', '#6d28d9', '#ddd6fe', '#f5f3ff'],
@@ -7148,9 +7583,9 @@ function openBaoView(k){
       fetch(kImg(1), {cache: 'no-store'}).then(function(r){
         K_MISS = !r.ok;
         if (!r.ok){
-          showK();          /* 缺主图 → 科科第一格换「上传主图」 */
+          showK();          /* 缺主图 → 正常四格照画（上传/选图统一走选图面板） */
           if (!kAuto){
-            msg('k', '上次生成失败——点「重新生成」或「上传主图」再试', true);
+            msg('k', '上次生成失败——点「重新生成」再试；缺主图/尺寸图点栏头「选图」', true);
             /* 2026-11-25 用户令：蓝底失败后东星斑/文案三也不再自动接跑（原「聚光不受
                牵连」口径作废）——先把蓝底修好再整链重跑 */
             return;
@@ -9791,8 +10226,10 @@ function exBarHTML(it){
   h += '<div class="exbar">'
     + '<button class="exmini" data-extag="' + esc(c) + '" title="给这台机器起别名、加自定义标签">🏷 标签/别名</button>'
     + '<button class="exmini" data-exhist="' + esc(c) + '" title="这台机器改过几次价，改错了能一键退回">价格历史</button>'
-    + (AUTH && AUTH.role === 'admin' ? '<button class="exmini" data-excmp="' + esc(c) + '" title="所有闲鱼号（所有人的号）各定的什么价、差多少——只有管理号能看">号价对比</button>' : '')
-    + (AUTH && AUTH.role === 'admin' ? '<button class="exmini" data-exnat="' + esc(c) + '" title="发往不读表，直接定死「全国 · 100运费」；再点一次取消">'
+    /* 2026-11-26 用户令「把这两个也做成权限」：从写死 admin 改成权限键（账号管理里勾给谁谁有；
+       管理号/升级的管理员 pok 恒真 = 永远有） */
+    + (pok('hjdb') ? '<button class="exmini" data-excmp="' + esc(c) + '" title="所有闲鱼号（所有人的号）各定的什么价、差多少">号价对比</button>' : '')
+    + (pok('natforce') ? '<button class="exmini" data-exnat="' + esc(c) + '" title="发往不读表，直接定死「全国 · 100运费」；再点一次取消">'
       + ((EX.natforce && EX.natforce[c]) ? '📍发全国·已定死' : '📍定死发全国') + '</button>' : '')
     + '<button class="exmini" data-exparam="' + esc(c) + '" title="官网抓到的原始参数、标题、卖点">参数对照</button>'
     + '<button class="exmini" data-excands="' + esc(c) + '" title="出图前先挑一张主图，别让 AI 自己选">挑主图</button>'

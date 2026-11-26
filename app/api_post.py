@@ -5,6 +5,7 @@ ApiPostMixin.do_POST——_send 经 MRO 复用 ApiGetMixin 的。
 import base64
 import json
 import os
+import shutil
 import sys
 import threading
 import urllib.parse
@@ -16,6 +17,15 @@ from cloud import stock_pull_cloud
 from paths import wp
 from state import read_state, set_state
 from updater import _app_install_bg, _suball_bg, _updateall_bg, do_update
+
+
+def _mk_refresh_bg():
+    """登录/换号后刷新拿货价加价值（2026-11-26）：worker /mk 拉最新，失败静默。"""
+    try:
+        import cloud as _cl
+        _cl.markup_get(refresh=True)
+    except Exception:
+        pass
 
 
 class ApiPostMixin:
@@ -47,6 +57,9 @@ class ApiPostMixin:
                 # 按角色重画原生菜单：子账号只留 账号管理/退出登录
                 threading.Thread(target=rebuild_menu_for,
                                  args=(d.get("role"),), daemon=True).start()
+                # 2026-11-26 拿货价加价：登录/换号立即刷新本机加价值（平时 10 分钟缓存）
+                # worker 管理号改了 mk → 子用户这台机下次登录或最迟 10 分钟跟进
+                threading.Thread(target=_mk_refresh_bg, daemon=True).start()
             except Exception as e:
                 state.LOG.append("权限同步失败：%s" % e)
             self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
@@ -186,7 +199,6 @@ class ApiPostMixin:
                     if not (os.path.isfile(sp) and os.path.abspath(sp).startswith(os.path.abspath(root))):
                         continue
                     ext = os.path.splitext(fn)[1].lower() or ".jpg"
-                    import shutil
                     shutil.copyfile(sp, os.path.join(dst, "%02d%s" % (i + 1, ext)))
                     cnt += 1
                 try:
@@ -347,6 +359,72 @@ class ApiPostMixin:
             except Exception as e:
                 r = {"ok": False, "msg": extras.rep(e)}
             self._send(200, json.dumps(r, ensure_ascii=False))
+            return
+
+        # ---------- 选图面板手选落盘（2026-11-26 用户令「全部铺出来我来选主图跟尺寸图」） ----------
+        # 点选候选图 → 复制为 官网/主图_手选.<ext> / 官网/尺寸图_手选.<ext>（清掉同槽
+        # 旧变体保证 _find 命中唯一）→ _manual_overrides 立即应用落 product.png /
+        # sizeimg.jpg。skipsize=1 = 用户明确「无尺寸图出图」，只记态不落盘。
+        if u.path == "/api/kitpick":
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                d = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+            except Exception:
+                d = {}
+            model = str(d.get("model") or "").strip()
+            if not model:
+                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
+                return
+            import kitset as _kp
+            try:
+                mdir = _kp.model_dir(model)
+            except Exception as e:
+                self._send(400, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+                return
+            if str(d.get("skipsize") or "") in ("1", "true"):
+                self._send(200, json.dumps({"ok": True, "skipsize": True}, ensure_ascii=False))
+                return
+            kind = str(d.get("kind") or "")
+            rel = str(d.get("p") or "").replace("\\", "/").strip()
+            src = os.path.abspath(os.path.join(mdir, rel))
+            if not src.startswith(os.path.abspath(mdir) + os.sep) or not os.path.isfile(src):
+                self._send(400, json.dumps({"ok": False, "msg": "候选路径不合法或文件不存在"},
+                                           ensure_ascii=False))
+                return
+            od = os.path.join(mdir, "官网")
+            os.makedirs(od, exist_ok=True)
+            _ext = os.path.splitext(src)[1].lower() or ".jpg"
+            _kind_stem = "主图_手选" if kind == "main" else "尺寸图_手选"
+            # 清掉本槽全部旧变体（上传的 主图.png 和历史手选 主图_*.png 一起清，防 _find 挑错）
+            for f in os.listdir(od):
+                _st, _ex = os.path.splitext(f)
+                if _ex.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+                    continue
+                _base = _st.replace("_手选", "")
+                if kind == "main" and (_st == "主图" or _st.startswith("主图")):
+                    try:
+                        os.remove(os.path.join(od, f))
+                    except Exception:
+                        pass
+                elif kind == "size" and (_st == "尺寸图" or _st.startswith("尺寸图") or
+                                         _st.startswith("尺寸") or _st == "zol_0"):
+                    try:
+                        os.remove(os.path.join(od, f))
+                    except Exception:
+                        pass
+            dst = os.path.join(od, _kind_stem + _ext)
+            try:
+                shutil.copyfile(src, dst)
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "msg": "落盘失败：%r" % e},
+                                           ensure_ascii=False))
+                return
+            _kp._manual_overrides(mdir, lambda s: None)
+            okm = os.path.isfile(os.path.join(mdir, "product.png"))
+            oks = os.path.isfile(os.path.join(mdir, "sizeimg.jpg"))
+            self._send(200, json.dumps({"ok": True, "kind": kind, "main": okm, "size": oks,
+                                        "ready": (okm and (oks or kind == "main"))},
+                                       ensure_ascii=False))
             return
 
         # ---------- 手动塞主图/尺寸图（2026-11-23 用户令「四层都没有就让我塞进去跟主图」） ----------
