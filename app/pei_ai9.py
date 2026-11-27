@@ -1170,8 +1170,37 @@ def _spot_kit_data(info):
         # 首图底部卖点行=旧聚光口径 cfg['features_line']（2026-11-26 用户令
         # 「首图的字还是按原来的字，不能改」——不新造文案）
         dk["feat"] = str(cfg.get("features_line") or "").strip()
-        dk["cells"] = [tuple(c) for c in (cfg.get("cells") or [])
-                       if isinstance(c, (list, tuple)) and len(c) >= 3][:6]
+        # 2026-11-26 用户令「AI 写两份卖点不能一样的」：东星斑列的聚光图卖点卡
+        # 印东星斑份（copywriter kind=l 参数干货体 v7 缓存的 points），蓝底图印
+        # 科科份（cfg.cells，买家利益种草体）——两份各印各的。v7_l 还没生成
+        # （首抓就渲聚光）回退 cfg.cells 兜底，绝不空卡。
+        _dxb_pts = []
+        try:
+            import copywriter as _cw
+            import io as _io2
+            _nm = _cw._safe_dir(_cw.norm_model(dk["model"]) or dk["model"])
+            _lf = os.path.join(_cw.copy_root(), "%s_l_v7.json" % _nm)
+            if os.path.isfile(_lf):
+                _ld = json.load(_io2.open(_lf, encoding="utf-8")) or {}
+                _dxb_pts = [str(x).strip().replace("dB(A)", "分贝").replace("dB", "分贝")
+                            for x in (_ld.get("points") or []) if str(x).strip()]
+        except Exception:
+            _dxb_pts = []
+        if len(_dxb_pts) >= 4:
+            _cs = []
+            for _i, _s in enumerate(_dxb_pts[:6]):
+                if "，" in _s:
+                    _nm2, _ds2 = _s.split("，", 1)
+                elif "," in _s:
+                    _nm2, _ds2 = _s.split(",", 1)
+                else:
+                    _nm2, _ds2 = _s, _s
+                _cs.append(("%02d" % (_i + 1), _nm2[:12], _ds2))
+            dk["cells"] = _cs
+        else:
+            dk["cells"] = [tuple(c) for c in (cfg.get("cells") or [])
+                           if isinstance(c, (list, tuple)) and len(c) >= 3][:6]
+        # 东星斑份卖点同时喂给聚光文案区（points 兜底链沿用 set.json）
         try:
             dk["points"] = [str(x).strip() for x in (_st.get("points") or [])
                             if str(x).strip()]

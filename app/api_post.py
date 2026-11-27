@@ -487,6 +487,15 @@ class ApiPostMixin:
                         fh.write(base64.b64decode(m.group(1)))
                 state.LOG.append("手动塞图：%s ← %s（%d KB）"
                                  % (model, os.path.basename(fp), len(m.group(1)) // 1370))
+                # 2026-11-27 ZQD 实锤（用户「上传本地图他不会变」）：上传链漏调
+                # _manual_overrides——kitpick（点候选图）落盘后会调，上传却不调，
+                # sizeimg.jpg/product.png 还是旧图，选图面板槽位跟出图全不认新图。
+                # 补齐：主图→product.png、尺寸图→清洗→sizeimg.jpg，与 kitpick 同口径。
+                if kind != "spot1":
+                    try:
+                        _ks._manual_overrides(_ks.model_dir(model), lambda s: None)
+                    except Exception:
+                        pass
                 self._send(200, json.dumps({"ok": True, "saved": fp}, ensure_ascii=False))
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))

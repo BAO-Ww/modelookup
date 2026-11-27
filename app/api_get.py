@@ -157,13 +157,35 @@ class ApiGetMixin:
                     except Exception as e:
                         # 2026-10-29 Mac 实锤：job 里炸了 app.log 啥都没有，远程没法查——
                         # 失败必记日志 + 上报诊断，再把异常抛回给 jobman 记进 job 状态
+                        # 2026-11-26 TB 实锤 app.log 不存在上报恒空 → extra 带版本+traceback+
+                        # kitset 目录文件头（KDX1 与否/手选图在不在），云端直接能看到死因
                         if isinstance(e, jobman.CancelledError):
                             raise
                         try:
+                            import traceback as _tbf
                             state.LOG.append("[蓝底] 生成失败：%r" % e)
+                            _kd = {}
+                            try:
+                                _kroot = kitset.model_dir(model)
+                                for _dp, _dn, _fl in os.walk(_kroot):
+                                    for _f in _fl[:60]:
+                                        _fp = os.path.join(_dp, _f)
+                                        try:
+                                            with io.open(_fp, "rb") as _fh:
+                                                _head = _fh.read(4).hex()
+                                            _kd[os.path.relpath(_fp, _kroot)] = "%dB %s" % (
+                                                os.path.getsize(_fp), _head)
+                                        except OSError:
+                                            pass
+                            except Exception:
+                                pass
+                            _extra = {"ver": APP_VERSION, "err": repr(e)[:400],
+                                      "tb": "".join(_tbf.format_exception(e))[-1800:],
+                                      "kitdir": _kd}
                             import cloud
                             threading.Thread(target=cloud.client_log_upload,
-                                             args=("kitset:fail %s" % model,), daemon=True).start()
+                                             args=("kitset:fail %s" % model, _extra),
+                                             daemon=True).start()
                         except Exception:
                             pass
                         raise
@@ -249,7 +271,9 @@ class ApiGetMixin:
             return
 
         # ---------- 白字套图 · 打开产物文件夹（2026-11-03 用户令「生成完了直接打开文件夹」） ----------
-        # open=1 → 白字\（带 tone=blue/purple → 白字\蓝底\ / 白字\紫底\）；open=model → 型号根（peiwork\<型号>）
+        # open=1 → 白字\（带 tone=blue/purple → 白字\蓝底\ / 白字\紫底\）；open=model → 型号根
+        # 2026-11-26 用户令「婷的文件存储跟宝的一样」：型号根开 kitset\<型号>\（官网/欣盛/
+        # 说明书/聚光/蓝底/白字 全在），白字\ 走 pubwork.dir_of 收口（kitset 优先旧 peiwork 回退）
         if path == "/api/kitwhite":
             q = urllib.parse.parse_qs(u.query)
             model = (q.get("model") or [""])[0].strip()
@@ -260,14 +284,18 @@ class ApiGetMixin:
                 return
             try:
                 import pubwork
+                import kitset
                 from paths import reveal
-                base = pubwork.mdir(model)
                 if op == "model":
-                    wd = base
-                else:
-                    wd = os.path.join(base, "白字")
-                    if tone in ("blue", "purple"):
-                        wd = os.path.join(wd, "蓝底" if tone == "blue" else "紫底")
+                    wd = kitset.model_dir(model)
+                    reveal(wd if os.path.isdir(wd) else pubwork.mdir(model))
+                    self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
+                    return
+                sub = "白字"
+                if tone in ("blue", "purple"):
+                    sub = os.path.join("白字", "蓝底" if tone == "blue" else "紫底")
+                wd = pubwork.dir_of(model, sub)
+                base = pubwork.mdir(model)
                 reveal(wd if os.path.isdir(wd) else base)
                 self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             except Exception as e:
@@ -742,6 +770,32 @@ class ApiGetMixin:
                 import kitset
                 base = kitset.model_dir(parts[0])
                 parts = parts[1:]
+            elif len(parts) >= 2 and parts[1] == "白字":
+                # 2026-11-26 用户令「婷的文件存储跟宝的一样」：白字产物在 kitset/<型号>/白字/，
+                # 旧 peiwork/<型号>/白字/ 历史图回退兼容（读侧统一，前端零改动）
+                import kitset as _ks
+                _rel = parts[1:]
+                _cands = [os.path.join(_ks.model_dir(parts[0]), *_rel),
+                          os.path.join(pubwork.mdir(parts[0]), *_rel)]
+                fp = next((c for c in _cands if os.path.isfile(c)), None)
+                if not fp:
+                    self._send(404, b"not found", "text/plain; charset=utf-8")
+                    return
+                ext = os.path.splitext(fp)[1].lower()
+                ctype = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                         ".webp": "image/webp", ".bmp": "image/bmp"}.get(ext, "application/octet-stream")
+                with io.open(fp, "rb") as f:
+                    raw = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                try:
+                    self.wfile.write(raw)
+                except Exception:
+                    pass
+                return
             else:
                 base = pubwork.sroot()
             fp = os.path.join(base, *parts)

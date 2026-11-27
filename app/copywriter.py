@@ -24,6 +24,7 @@ STYLE3_X = """
 图片：copy/<型号>/img_01.jpg...（官网图优先，最多 10 张），由 api_get /copyimg 提供服务。
 零第三方依赖：urllib + gzip + re + json + sqlite3。参考实现：haier_scraper/collect.py（接口已验证）。
 """
+import base64
 import gzip
 import html as _html_lib
 import io
@@ -695,16 +696,6 @@ def fetch_xinsheng(model, log):
 _XS_API_URL = ("https://ys.longyangdq.cn/client/Products/index?iShopId=&terminaltype=PC&token=&id=%s")
 _XS_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
           "Chrome/131.0.0.0 Safari/537.36")
-# 参数表图通常在详情长图末尾（CWC8-B57GHU1 实锤：9 张里倒数第 2 张是「产品参数」表）——
-# 从后往前问，命中即停，最多看 4 张省视觉调用。
-_XS_IMG_PROBE_MAX = 4
-_XS_PARAM_PROMPT = (
-    "这是家电产品详情长图。请判断它是不是「规格/产品参数表」（含电压/功率/容量/尺寸等"
-    "两列或多列键值表格）。只输出纯JSON不要解释："
-    '{"is_params": true或false, "rows": [["参数名","参数值"], ...]}。'
-    "是参数表时 rows 逐行完整读出所有键值；不是时 is_params=false、rows=[]。")
-
-
 # ---------------------------------------------------------------- 海尔电子说明书站参数
 # 2026-11-21 用户令「参数也可以去 hzy.haier.com/cn/vipcode/eleInstruction 找」：
 # 链路 型号 → getProductBrandNameByProductCode（拿平台码 productCode/propertyExist）
@@ -1679,137 +1670,118 @@ def _xs_api_via_browser(pid, log):
     return data or None
 
 
+def _prop_lines_vision(txt, out):
+    """从 4.6V-Flash 回答里抠「参数名:值」行，去重追加进 out（ [(k,v)] ）。"""
+    for line in (txt or "").splitlines():
+        line = re.sub(r"^[\s*`\-•\d.、)]+", "", line.strip())
+        m = re.match(r"^([\u4e00-\u9fa5A-Za-z0-9（）()／/]{2,16})[：:]\s*(\S{1,40})$", line)
+        if not m:
+            continue
+        k, v = m.group(1).strip(), m.group(2).strip("；;，,。 ")
+        if not v or len(v) > 30:
+            continue
+        if any(w in v.lower() for w in ("http", "www.", ".com", ".cn")):
+            continue
+        if (k, v) not in out:
+            out.append((k, v))
+
+
 def _xs_img_params(model, xs, log):
-    """欣盛详情长图读参数（2026-11-21 用户令「读取欣盛图片的参数」）：
-    Products 接口 oProductSub.mobileDescription 里的详情长图通常带「产品参数」表，
-    视觉链（Qwen→GLM-4V→商汤）读出来落 groups。结构化 lsProductParameters 常为空
-    （CWC8-B57GHU1 实锤），图片是唯一参数源。成功返回 [(k,v)...]，失败返回 []。"""
-    pid = (xs or {}).get("pid") if isinstance(xs, dict) else None
-    if not pid:
-        return []
-    data = _xs_api_via_browser(pid, log)
-    if not data:
-        return []
-    sub = data.get("oProductSub") or {}
-    md = str(sub.get("mobileDescription") or "")
-    urls = [u for u in re.findall(r'src="([^"]+)"', md) if u.startswith("http")]
-    if not urls:
-        log("欣盛详情长图 0 张，图片读参跳过")
-        return []
-    log("欣盛详情长图 %d 张，开始视觉找参数表（从后往前最多 %d 张）"
-        % (len(urls), _XS_IMG_PROBE_MAX))
-    import base64 as _b64
-    rows = []
-    probed = 0
-    for u in reversed(urls):
-        if probed >= _XS_IMG_PROBE_MAX:
-            break
-        probed += 1
-        try:
-            req = urllib.request.Request(u, headers={"User-Agent": _XS_UA,
-                                                     "Referer": "https://ys.longyangdq.cn/"})
-            raw = urlopen_ssl(req, timeout=25).read()
-        except Exception as e:
-            log("详情图下载失败：%s" % str(e)[:60])
-            continue
-        du = "data:image/jpeg;base64," + _b64.b64encode(raw).decode("ascii")
-        try:
-            txt = _vision_call_auto(du, _XS_PARAM_PROMPT, log)
-        except Exception as e:
-            log("视觉读图失败：%s" % str(e)[:80])
-            continue
-        if not txt:
-            continue
-        try:
-            j = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
-        except Exception:
-            continue
-        if not j.get("is_params"):
-            continue
-        for kv in (j.get("rows") or []):
-            if isinstance(kv, (list, tuple)) and len(kv) >= 2:
-                k, v = str(kv[0]).strip(), str(kv[1]).strip()
-                if k and v and len(k) <= 20:
-                    rows.append((k, v))
-        if rows:
-            log("欣盛详情图读出参数 %d 条（第 %d 张）" % (len(rows), len(urls) - probed + 1))
-            break
-    return rows
-
-
-def _vision_call_auto(data_url, prompt, log):
-    """视觉链统一入口：优先 kitset._vision_key（Mac 零配置兜底），失败再裸调。"""
-    try:
-        from pei_core import _vision_call as _vc
-    except Exception:
-        return None
-    key = None
+    """欣盛详情长图读参（2026-11-27 用户令复活：「欣盛看图读参数的也给他一个，
+    这一下就有很多参数」）。视觉模型 = 硅基 Qwen3.5-4B（pei_core._vision_call
+    现役通道；GLM-4.6V-Flash 免费档带图 429 实锤后用户拍板「不要了」，已拆）。
+    图源：kitset 详情图目录（欣盛 → 官网）两级，前 8 张。
+    两级提取：拼图一次调用 → 读空逐张前 3 张。返回 [(k, v)]（可能空，不拦出图）。"""
     try:
         import kitset as _ks
-        key = _ks._vision_key()
-    except Exception:
-        key = None
-    return _vc(key, data_url, prompt, log=log)
-
-
-def _montage_pages(pages, cols=4):
-    """把说明书页缩略图拼成一张带页码的大图（2026-11-23 用户令「还是老样子，
-    拼成一张大的让视觉去找」）。pages=[(页码, 文件路径)]，返回 base64 dataURL 或 None。"""
-    try:
-        import base64
+        import pei_core
         from PIL import Image, ImageDraw, ImageFont
-    except Exception:
-        return None
-    tiles = []
-    for no, fp in pages:
-        try:
-            t = Image.open(fp).convert("RGB")
-        except Exception:
-            continue
-        t.thumbnail((320, 460))
-        tiles.append((no, t))
-    if not tiles:
-        return None
-    cw = max(t.width for _n, t in tiles) + 10
-    ch = max(t.height for _n, t in tiles) + 34
-    rows = max(1, (len(tiles) + cols - 1) // cols)
-    board = Image.new("RGB", (cw * cols, ch * rows), "white")
-    dr = ImageDraw.Draw(board)
-    try:
-        fnt = ImageFont.truetype(r"C:\Windows\Fonts\arialbd.ttf", 24)
-    except Exception:
-        try:
-            fnt = ImageFont.truetype("arialbd.ttf", 24)
-        except Exception:
-            fnt = ImageFont.load_default()
-    for i, (no, t) in enumerate(tiles):
-        r, c = divmod(i, cols)
-        x, y = c * cw, r * ch
-        board.paste(t, (x + (cw - t.width) // 2, y + 30 + (ch - 30 - t.height) // 2))
-        dr.rectangle([x, y, x + 52, y + 28], fill=(200, 0, 0))
-        dr.text((x + 10, y + 2), str(no), fill="white", font=fnt)
-    buf = io.BytesIO()
-    board.save(buf, "JPEG", quality=82)
-    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
+        def _vis(du, prompt, _lg=None):
+            return pei_core._vision_call(_ks._vision_key(), du, prompt, log=log)
 
-# ------------------------------------------------ 扫描版说明书 OCR 挑页（2026-11-23）
-# 用户给的方案（tesseract + 关键词打分）实测有效：C8U12G3 的 32 页里 p30 得 80 分
-# 唯一过阈值（真尺寸图页），目录页被 -100 排除，零误判。tesseract 本机没装，换
-# RapidOCR（纯 Python + onnxruntime，中文模型自带，不用装外部二进制）。
-# 速度：实测 3.6s/页（缩图没用，瓶颈在推理；多线程更慢，ONNX 已吃满多核）。
-# 优化：尺寸页几乎都在书末（合格证/技术数据之前）→ 从末页倒着扫，命中就停，
-# 通常只 OCR 3~5 页；OCR 文本按型号缓存 30 天，同一本说明书只扫一次。
-_OCR_CATS = ("滚筒洗衣机", "波轮洗衣机", "洗衣机", "干衣机", "洗干一体机", "冰箱", "冷柜",
-             "冰吧", "空调", "热水器", "洗碗机", "油烟机", "燃气灶", "集成灶", "消毒柜",
-             "电视", "净化器", "除湿机", "电风扇")
-_OCR_W = {
-    "size": [("产品尺寸", 50), ("外形尺寸", 50), ("整机尺寸", 50), ("安装尺寸", 50)],
-    "struct": [("安装要求", 25), ("示意图", 20), ("安装间隙", 25), ("前方开阖", 20)],
-    "value": [("mm", 10), ("毫米", 10)],
-    "spec": [("技术数据", 60), ("规格表", 40), ("额定电压", 25), ("额定功率", 25), ("能效", 15)],
-}
-_OCR_NEG = [("目录", -100), ("索引", -100), ("目 录", -100)]
+        nm = _ks.norm_model(model)
+        cands = []
+        for sub in ("欣盛", "官网"):
+            dd = os.path.join(_ks.kit_root(), nm, sub)
+            if os.path.isdir(dd):
+                for f in sorted(os.listdir(dd)):
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")) and not f.startswith("_"):
+                        cands.append(os.path.join(dd, f))
+            if cands:
+                break
+        if not cands:
+            log("欣盛图读参：详情图目录是空的，跳过")
+            return []
+        cands = cands[:8]
+        log("欣盛图读参（Qwen3.5 看图）：%d 张详情图参与" % len(cands))
+        props, seen = [], set()
+        # —— 第 1 级：拼一版，1 次调用直接提取 ——
+        if len(cands) >= 3:
+            try:
+                tiles = []
+                for p in cands:
+                    t = Image.open(p).convert("RGB")
+                    t.thumbnail((640, 640), Image.LANCZOS)
+                    tiles.append(t)
+                COLS = 4
+                ROWS = max(1, (len(tiles) + COLS - 1) // COLS)
+                cw = max(t.width for t in tiles) + 8
+                ch = max(t.height for t in tiles) + 30
+                board = Image.new("RGB", (cw * COLS, ch * ROWS), "white")
+                dr = ImageDraw.Draw(board)
+                try:
+                    fnt = ImageFont.truetype(r"C:\Windows\Fonts\arialbd.ttf", 26)
+                except Exception:
+                    fnt = ImageFont.load_default()
+                for i, t in enumerate(tiles):
+                    r, c = divmod(i, COLS)
+                    x, y = c * cw, r * ch
+                    board.paste(t, (x + (cw - t.width) // 2, y + 28 + (ch - 28 - t.height) // 2))
+                    dr.rectangle([x, y, x + 46, y + 27], fill=(200, 0, 0))
+                    dr.text((x + 12, y + 1), str(i + 1), fill="white", font=fnt)
+                buf = io.BytesIO()
+                board.save(buf, "JPEG", quality=88)
+                du = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+                txt = _vis(du,
+                    "这张大图里有 %d 个红色数字编号的格子，每格是一张家电产品详情图。"
+                    "凡印有「产品参数/规格」的格子（参数表格、规格表、成段的参数名+数值文字），"
+                    "把其中的参数逐条列出，每行格式严格为「参数名:值」（如「额定容积:100L」）。"
+                    "多个格子的参数合并连续输出；只输出图中明确印出的参数，不要编造；"
+                    "纯产品照片、卖点海报、场景图里的宣传语和大数字不要输出。"
+                    "整张图里没有任何参数就只输出两个字：无" % len(tiles), log)
+                if txt and txt.strip()[:1] != "无":
+                    _prop_lines_vision(txt, props)
+                log("欣盛图读参：拼图直接读出 %d 条" % len(props))
+            except Exception as e:
+                log("欣盛图读参：拼图提取失败（%s），退回逐张读" % str(e)[:60])
+        # —— 第 2 级：拼图没读出 → 逐张前 3 张高清兜底 ——
+        if not props:
+            for i in range(min(3, len(cands))):
+                try:
+                    im = Image.open(cands[i]).convert("RGB")
+                    im.thumbnail((1100, 1100), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    im.save(buf, "JPEG", quality=90)
+                    du = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+                    txt = _vis(du,
+                        "这是家电产品详情图。把图中印出的「产品参数/规格」逐条列出，"
+                        "每行格式严格为「参数名:值」，例如「额定容积:100L」。"
+                        "只输出图中明确印出的参数表格/规格文字，不要编造；"
+                        "宣传卖点、省多少钱、节能百分比这类营销数字不要输出。"
+                        "图中没有参数信息就只输出两个字：无", log)
+                    if not txt or txt.strip()[:1] == "无":
+                        continue
+                    _prop_lines_vision(txt, props)
+                    if props:
+                        break
+                except Exception as e:
+                    log("欣盛图读参：第 %d 张失败（%s）" % (i + 1, str(e)[:60]))
+        log("欣盛图读参：合计 %d 条" % len(props))
+        return props
+    except Exception as e:
+        log("欣盛图读参失败（不影响主链）：%s" % str(e)[:80])
+        return []
 
 
 def _ocr_pick(pages, mdir, model, log):
@@ -2090,117 +2062,19 @@ def _book_scanned_vision(imgs, mdir, model, log):
             log("扫描版 OCR 挑页完成：尺寸页 %d / 参数 %d 条" % (len(size_imgs), len(rows)))
             return size_imgs, dims, rows
 
-    def _page_du(fp, maxw=1500):
-        try:
-            import base64
-            from PIL import Image as _PI
-            im = _PI.open(fp).convert("RGB")
-            if im.width > maxw:
-                im = im.resize((maxw, int(im.height * maxw * 1.0 / im.width)), _PI.LANCZOS)
-            buf = io.BytesIO()
-            im.save(buf, "JPEG", quality=86)
-            return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception:
-            return None
-
-    _t0 = time.time()
-    # ① 一张大图找页（用户令「拼成一张大的让视觉去找」）：6 列，格子上标真实页码
-    du = _montage_pages(pages, cols=6)
-    txt = None
-    if du:
-        txt = _vision_call_auto(
-            du,
-            "这张大图是一本家电说明书的全部页面缩略图，每格左上角红底白字是页码。请找两类页：\n"
-            "A = 产品尺寸示意图页：画着**本型号一台机器**的外形线稿，带尺寸标注线和毫米数字，或带 W/H/D 字母+数字表格；\n"
-            "B = 产品规格表页：表格列出能力/容量、电压、功率、产品尺寸、净重、能效等级之类的技术参数。\n"
-            "注意：多个型号/系列挤在一张的参数汇总总表（表里出现多个型号或「XX系列」字样）"
-            "不算 A 也不算 B——那是全系杂值表，标了字母也不是本型号的尺寸。\n"
-            "只输出两行，严格按下面格式（页码用格子上的红底数字，多个用逗号分隔，没有就写 0）：\n"
-            "A: 30\nB: 31\n不要输出任何其他文字。", log)
-    a_list, b_list = [], []
-    for ln in str(txt or "").splitlines():
-        ln = ln.replace("：", ":")
-        m = re.match(r"\s*([AB])\s*[:：]\s*(.+)$", ln, re.I)
-        if not m:
-            continue
-        nums = [int(x) for x in re.findall(r"\d{1,2}", m.group(2))]
-        if m.group(1).upper() == "A":
-            a_list = [n for n in nums if n]
-        else:
-            b_list = [n for n in nums if n]
-    log("视觉挑页初筛：尺寸页候选 %s / 规格页候选 %s（%.0fs）"
-        % (a_list or 0, b_list or 0, time.time() - _t0))
-
-    # ② 尺寸页硬门：必须读出 ≥2 个毫米数字才算（防止把部件图/封面当尺寸图）
-    for n in a_list[:3]:
-        fp = page_fp.get(n)
-        du1 = _page_du(fp) if fp else None
-        if not du1:
-            continue
-        nums = _vision_call_auto(
-            du1,
-            "这页如果画着产品尺寸示意图，读出图上字母（W/H/D/D1/D2 等）对应的毫米数；"
-            "只输出每行一条「字母=数字」，例如 W=600。没有尺寸标注就只输出 0。"
-            "注意：如果这页是多个型号/系列挤在一张的参数汇总总表（表里出现多个型号或"
-            "「XX系列」字样），它不是本型号的尺寸图，无论有没有字母和数字都只输出 0。", log)
-        vals = {}
-        for ln in str(nums or "").splitlines():
-            mm = re.match(r"\s*([A-Za-z]\d?)\s*[=:：]\s*(\d{2,4})", ln)
-            if mm:
-                vals[mm.group(1).upper()] = int(mm.group(2))
-        if len(vals) >= 2:
-            size_imgs.append(("说明书PDF 尺寸图 第%d页" % n, fp))
-            dims.append({"node": "说明书PDF 第%d页" % n,
-                         "labels": list(vals.keys()),
-                         "vals": {model: [vals[k] for k in vals]}})
-            log("视觉挑页：尺寸示意图 = 第 %d 页（%s）"
-                % (n, "，".join("%s=%d" % (k, v) for k, v in vals.items())))
-            break
-        log("第 %d 页读不出毫米数，不当尺寸页" % n)
-
-    # ③ 规格表读参数（品类/容量/能效/保修），只收真规格项
-    _SPEC_KEYS = ("产品类型", "产品类别", "类别", "型号", "额定电压", "额定功率", "功率",
-                  "容量", "容积", "能效", "洗净比", "水压", "净重", "毛重", "重量",
-                  "尺寸", "保修", "噪音", "耗电", "加热", "转速", "脱水")
-    for n in b_list[:2]:
-        fp = page_fp.get(n)
-        du2 = _page_du(fp) if fp else None
-        if not du2:
-            continue
-        out = _vision_call_auto(
-            du2,
-            "这是家电说明书的规格/技术参数表页。把表格里属于产品规格的项逐行输出，"
-            "格式严格为「参数名=参数值」，参数名照原文（如 产品类型/型号/额定电压/额定功率/容量/"
-            "能效等级/产品尺寸/净重/保修年限）。安装距离、注意事项、符号说明一律不要。"
-            "只输出表里真有的内容，没有的不要编，一行一条。", log)
-        got = []
-        for ln in str(out or "").splitlines():
-            mm = re.match(r"\s*([\u4e00-\u9fa5A-Za-z（）()·／/]{2,14})\s*[=:：]\s*(.{1,40}?)\s*$", ln)
-            if not mm:
-                continue
-            k, v = mm.group(1).strip(), mm.group(2).strip()
-            if not v or len(v) > 40:
-                continue
-            if not any(w in k for w in _SPEC_KEYS):
-                continue
-            if all(k != r[0] for r in got):
-                got.append((k, v))
-        if got:
-            rows = got
-            log("视觉挑页：规格表 = 第 %d 页，读出 %d 条参数" % (n, len(got)))
-            break
-    if mdir and (size_imgs or rows):
-        # 只缓存成功结果（2026-11-23 C8U12G3 实锤：视觉挑页失败也落缓存会把
-        # 空结果锁 30 天，以后永远挑不到）
+    # 2026-11-27 用户令「视觉链全部删除」：拼图找页/读表视觉支已撤——
+    # OCR 挑页（_ocr_pick）命中的上面早退已返回；没命中的直接空手而归
+    # （尺寸走官网/ZOL 层，参数走官网/欣盛 API/ZOL 层），不挡出货。
+    if mdir:
         try:
             with io.open(cache, "w", encoding="utf-8") as f:
-                json.dump({"model": model, "size_imgs": size_imgs, "dim_table": dims,
-                           "rows": rows, "ts": time.time()}, f, ensure_ascii=False)
+                json.dump({"model": model, "size_imgs": [], "dim_table": [],
+                           "rows": [], "src": "novision", "ts": time.time()}, f, ensure_ascii=False)
         except Exception:
             pass
-    log("扫描版视觉挑页完成：尺寸页 %d / 规格参数 %d 条（共 %.0fs）"
-        % (len(size_imgs), len(rows), time.time() - _t0))
-    return size_imgs, dims, rows
+    log("视觉挑页已下马（2026-11-27），OCR 没命中，说明书参数/尺寸走其他层")
+    return [], [], []
+
 # ---------------------------------------------------------------- GLM 文案
 def _chat(prompt):
     k = _api_key()
@@ -2212,6 +2086,62 @@ def _chat(prompt):
         "Content-Type": "application/json", "Authorization": "Bearer " + k})
     with urlopen_ssl(req, timeout=60) as r:
         return json.loads(r.read().decode("utf-8"))["choices"][0]["message"]["content"]
+
+
+def _chat_web(prompt, timeout=150):
+    """GLM 联网对话（2026-11-27 用户令「没有参数和卖点的就把型号给AI让他去找」）：
+    带 web_search 工具真上网搜。**模型保持 glm-4.5-flash**——2026-11-27 下午对照
+    实验实锤：4.6V-Flash 免费档一挂 web_search 就 429（纯文本却正常），
+    4.5-flash 挂搜索一直正常。免费档限频 → 35s 退避重试，最多 4 次。"""
+    k = _api_key()
+    if not k:
+        raise RuntimeError("没拿到 GLM key（云端没配 / 没登录 / 本机无 glm_key.txt）")
+    body = json.dumps({"model": GLM_MODEL, "messages": [{"role": "user", "content": prompt}],
+                       "temperature": 0.3, "thinking": THINK_OFF,
+                       "tools": [{"type": "web_search",
+                                  "web_search": {"enable": True, "search_count": 8}}]}).encode("utf-8")
+    req = urllib.request.Request(API_URL, data=body, headers={
+        "Content-Type": "application/json", "Authorization": "Bearer " + k})
+    for _i in range(4):
+        try:
+            with urlopen_ssl(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8"))["choices"][0]["message"]["content"]
+        except Exception as e:
+            if "429" in str(e) and _i < 3:
+                time.sleep(35)
+                continue
+            raise
+
+
+Z1_MODEL = "THUDM/GLM-Z1-9B-0414"
+
+
+def _z1_chat(prompt, timeout=240):
+    """硅基流动 GLM-Z1-9B-0414（2026-11-27 用户令「机型参数跟卖点/科科东星斑文案
+    用硅基流动的 GLM-Z1」）：文案主模型从智谱 glm-4.5-flash 整体切到硅基 GLM-Z1
+    （推理模型：思考链在 reasoning_content 字段，content 是正文；不联网——参数
+    卖点必须由调用方喂真实资料，裸发型号它必编）。key 走 aikeys.sf_key（env →
+    本机 sf_key.txt → 云端 /aikey 下发）。返回正文文本或抛异常。"""
+    import aikeys as _ak
+    k = (_ak.sf_key() or "").strip()
+    if not k:
+        raise RuntimeError("没拿到硅基流动 key（env/本机 sf_key.txt/云端都没配）")
+    body = json.dumps({"model": Z1_MODEL,
+                       "messages": [{"role": "user", "content": prompt}],
+                       "temperature": 0.6, "max_tokens": 4096}).encode("utf-8")
+    req = urllib.request.Request("https://api.siliconflow.cn/v1/chat/completions",
+                                 data=body, headers={
+        "Content-Type": "application/json", "Authorization": "Bearer " + k})
+    with urlopen_ssl(req, timeout=timeout) as r:
+        d = json.loads(r.read().decode("utf-8"))
+    msg = ((d.get("choices") or [{}])[0].get("message") or {})
+    txt = str(msg.get("content") or "")
+    # 保险剥思维链（个别版本 <think> 会混进 content；正常版本正文本来就干净）
+    txt = re.sub(r"<think>[\s\S]*?</think>", "", txt).strip()
+    # Z1-9B JSON 瑕疵自愈（2026-11-27 实锤：偶发把 "k": 写成 "k:"——键名引号吞冒号，
+    # json.loads 直接炸）。修法：引号内以冒号结尾的短键名（"k:"/"v:"）补回闭引号。
+    txt = re.sub(r'"([A-Za-z_]\w{0,8}):"', r'"\1":', txt)
+    return txt
 
 
 PROMPT = """你是闲鱼家电卖家文案写手。产品：{pname}（型号 {model}）。
@@ -2457,8 +2387,13 @@ def glm_copy(model, kind, data, log):
     # 2026-10-13 用户反馈「小红书/闲鱼拉胯」整改：质量闸（剔空洞口号/一句话配文）
     # + 质量不够自动重试一次（两次取分高那次），AI 解析失败也不再炸整单
     best, best_score = None, -1
-    if not _api_key():
-        log("没拿到 GLM key（云端没配 / 没登录）：AI 裸写跳过，只用官网实抓 + 欣盛兜底")
+    try:
+        import aikeys as _ak
+        _has_z1 = bool((_ak.sf_key() or "").strip())
+    except Exception:
+        _has_z1 = False
+    if not _has_z1:
+        log("没拿到硅基流动 key（env/本机 sf_key.txt/云端都没配）：AI 裸写跳过，只用官网实抓 + 欣盛兜底")
     for attempt in range(2):
         try:
             _ptxt = PROMPT.format(model=model, pname=data.get('pname') or model, brand=brand,
@@ -2468,7 +2403,8 @@ def glm_copy(model, kind, data, log):
                 _ptxt += _ban_block
             if kind == 'x':
                 _ptxt += STYLE3_X
-            raw = _chat(_ptxt)
+            # 2026-11-27 用户令：文案模型切硅基 GLM-Z1-9B-0414（_chat/glm-4.5-flash 退役）
+            raw = _z1_chat(_ptxt)
             m = re.search(r'\{.*\}', raw, re.S)
             ai = json.loads(m.group(0)) if m else {}
         except Exception as e:
@@ -2595,18 +2531,23 @@ def _ptkey(s):
 # 整段括号剥掉（正常括号如「（一级能效）」不动，因为后面没数字也不是 key:value）。
 _META_PAREN_RE = re.compile(r"[（(][^（()）]{0,30}?(?:[:：=]|\d)[^（()）]{0,30}[）)]")
 _ANY_PAREN_RE = re.compile(r"[（(]([^（()）]{1,30})[）)]")
+# 来源标注词（2026-11-27 ZQD 实锤「（参数表实测）/（执行标准证书）」印上卖点卡）：
+# 括号里是 AI 自报的证据来源不是卖点，一律剥
+_SRC_PAREN_RE = re.compile(r"[（(][^（()）]{0,20}?(?:实测|证书|标注|参数表|说明书|官网|来源|执行标准|认证)[^（()）]{0,20}[）)]")
 
 
 def _strip_meta_paren(line):
     """剥掉卖点里的参数原名括号标注，并清理留下的多余空格/重复标点。
 
-    两把尺：① 括号里带「参数名:值」或数字 → 剥（（洗净比:1.28）、（12kg））；
-            ② 括号内容在括号前已经写过 → 剥（一级能效等级（一级能效）这种纯重复）。
+    三把尺：① 括号里带「参数名:值」或数字 → 剥（（洗净比:1.28）、（12kg））；
+            ② 括号内容在括号前已经写过 → 剥（一级能效等级（一级能效）这种纯重复）；
+            ③ 括号里带来源标注词（（参数表实测）（执行标准证书））→ 剥。
     """
     s = str(line or "")
     for _ in range(3):                      # 可能连着两层括号
         before = s
         s = _META_PAREN_RE.sub("", s)
+        s = _SRC_PAREN_RE.sub("", s)
 
         def _rep(m):
             inner, head = m.group(1), s[:m.start()]

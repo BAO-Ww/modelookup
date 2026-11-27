@@ -1484,12 +1484,20 @@ def dir_of(model, sub=""):
 
     聚光四件套 2026-10-29 已从 peiwork 迁到 kitset/<型号>/AI6张_聚光（写入端 = kitset.spot_dir），
     但读侧三处（打开文件夹 / 取图 / 列库）还挂在旧 peiwork 根 → 点开文件夹是空的、页面显示没图。
-    这里统一收口：聚光一律走 kitset，其余风格照旧走素材根 peiwork。"""
+    这里统一收口：聚光一律走 kitset，其余风格照旧走素材根 peiwork。
+    白字套图 2026-11-26 用户令「婷的文件存储肯定是跟宝的是一样的」：产物迁 kitset/<型号>/白字/
+    （跟蓝底/聚光同一屋檐，抓取图库也在 kitset 的 官网/欣盛/中关村/说明书 分文件夹）——
+    读侧同收口：kitset 有该子目录就读 kitset，老型号还没迁过就读旧 peiwork 回退。"""
     sub = (sub or "").replace("/", os.sep).strip(os.sep)
     # 2026-10-31：聚光一律走 kitset（新版文件夹叫「聚光」；旧名 AI6张_聚光 兼容收进来）
     if sub and sub.split(os.sep)[0] in (SPOT_SUB, "AI6张_聚光"):
         import kitset
         return os.path.join(kitset.model_dir(model), sub)
+    if sub and sub.split(os.sep)[0] == "白字":
+        import kitset
+        kd = os.path.join(kitset.model_dir(model), sub)
+        if os.path.isdir(kd):
+            return kd
     return os.path.join(mdir(model), sub) if sub else mdir(model)
 
 

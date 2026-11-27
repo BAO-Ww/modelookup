@@ -869,7 +869,12 @@ def sellpoints(info, exclude=None):
             if not _raw_v:
                 add(vol + "套容量")
         else:
-            add(vol + "升总容积，冷藏冷冻分储")
+            # 冰箱才讲「分储」（2026-11-27 ZQD100F-C7MAGU1 消毒柜实锤：通用分支
+            # 把 100升消毒柜写成「冷藏冷冻分储」冰箱话术——真参数池 0 证据）
+            if "冰箱" in cat or "冷柜" in cat or "冰柜" in cat:
+                add(vol + "升总容积，冷藏冷冻分储")
+            else:
+                add(vol + "升大容量")
     # 加热/动力类（2026-11-14 用户令「加热快怎么个快法要写明白」：按容量算整胆时间）
     heat = num_of("加热功率", "额定功率", "输入功率")
     if heat and "热水器" in cat:
@@ -1691,62 +1696,6 @@ def bg_mismatch_slots(paths, tol=96):
     return bad, ref
 
 
-# 2026-11-12 用户令：商汤 SenseNova 重新接回来，当**第三兜底**（Qwen 挂了、GLM 也不行时）。
-# 实测 sensenova-6.8-flash-lite 带 thinking=disabled：1.7s 出正文（答「否」，2 token）；
-# **不带该参数会一路 reasoning 到 max_tokens 烧完、content 永远是空串**，所以必须显式关思考。
-SN_BASE = "https://token.sensenova.cn/v1"
-SN_VISION_MODEL = "sensenova-6.8-flash-lite"
-
-
-def _sn_key():
-    """商汤 key（见 aikeys：env ML_SN_KEY → 本机 sn_key.txt → 缓存/云端 /aikey 下发）。"""
-    try:
-        import aikeys
-        return (aikeys.sn_key() or "").strip()
-    except Exception:
-        return ""
-
-
-def _sn_vision(api_key, data_url, prompt):
-    """商汤 SenseNova 6.8-flash-lite 看图（OpenAI 兼容 /chat/completions）。
-    thinking 显式关掉，否则 reasoning 吃光 max_tokens、content 空串返回。"""
-    req = urllib.request.Request(
-        SN_BASE + "/chat/completions",
-        data=json.dumps({
-            "model": SN_VISION_MODEL,
-            "messages": [{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": data_url}},
-                {"type": "text", "text": prompt}]}],
-            "temperature": 0.2,
-            "max_tokens": 1200,
-            "thinking": {"type": "disabled"},
-        }, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer " + str(api_key).strip(),
-                 "User-Agent": "Mozilla/5.0"})
-    with urlopen_ssl(req, timeout=90) as r:
-        d = json.loads(r.read())
-    m = d["choices"][0]["message"]
-    return (m.get("content") or "").strip() or None
-
-
-def _zhipu_vision(api_key, data_url, prompt):
-    req = urllib.request.Request(
-        "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-        data=json.dumps({
-            "model": "glm-4v-flash",
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": data_url}}]}],
-            "temperature": 0.3,
-        }, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer " + str(api_key).strip()})
-    with urlopen_ssl(req, timeout=60) as r:
-        d = json.loads(r.read())
-    return d["choices"][0]["message"]["content"]
-
-
 # 2026-11-11 用户令「Qwen3.5-4B 免费能用就用它首选」：视觉首选切硅基流动
 # Qwen/Qwen3.5-4B（官方定价页实锤 输入¥0/输出¥0，原生多模态，实测判定/读数全对），
 # 商汤 SenseNova 从视觉链撤下（常 429 限流、共享池排队）。
@@ -1956,39 +1905,13 @@ def _vision_attempt(fn, api_key, data_url, prompt, log=None):
 
 
 def _vision_call(api_key, data_url, prompt, log=None):
-    """视觉调用分发（2026-11-12 用户令）：Qwen3.5-4B（硅基，免费首选）
-    → GLM-4V（智谱）→ SenseNova 6.8-flash-lite（商汤，末位兜底）。
-    都没有/都失败返回 None（有错则抛最后一个）。"""
-    pairs = []
+    """视觉调用（2026-11-27 用户令「视觉选图只要 Qwen3.5-4B」）：只走硅基流动
+    Qwen/Qwen3.5-4B 一条通道，GLM-4V/商汤兜底全部退役。没 key 返回 None，
+    调用失败抛异常（调用方自行兜底）。"""
     _sfk = _sf_key()
-    if _sfk:
-        pairs.append(("Qwen3.5-4B", _qwen_vision, _sfk))
-    if api_key and str(api_key).strip():
-        pairs.append(("GLM-4V", _zhipu_vision, api_key))
-    _snk = _sn_key()
-    if _snk:
-        pairs.append(("SenseNova", _sn_vision, _snk))
-    if not pairs:
+    if not _sfk:
         return None
-    _last_err = None
-    for _pname, _fn, _k in pairs:
-        try:
-            txt = _vision_attempt(_fn, _k, data_url, prompt, log=log)
-            if txt:
-                return txt
-        except Exception as e:
-            _last_err = e
-            try:
-                if log:
-                    # 2026-11-04 用户令：兜底流水别吓人——Qwen 限流切 GLM 是正常机制，
-                    # 横幅上写人话；原始报错保留在 _last_err，真全失败时才抛
-                    log("AI 判图切到备用通道，正常继续")
-            except Exception:
-                pass
-    if _last_err:
-        raise _last_err
-    return None
-
+    return _vision_attempt(_qwen_vision, _sfk, data_url, prompt, log=log) or None
 
 def _parse_pick(text, cands, names=None):
     s = (text or "").strip()
@@ -2815,127 +2738,6 @@ def make_zip(sel_dir, info, out_path):
 
 
 # ---------------- AI 选图 + 去黑底 ----------------
-_BGFB = [0]        # PIL 去背兜底计数（2026-10-24 显性化：首张触发时往 state.LOG 留一条）
-def _has_qr(path):
-    """pyzbar 检测二维码（可选依赖，没装就当没二维码）"""
-    try:
-        from pyzbar.pyzbar import decode as _decode
-    except Exception:
-        return False
-    try:
-        im = load_rgb(path)
-        im.thumbnail((800, 800))
-        return len(_decode(im)) > 0
-    except Exception:
-        return False
-
-
-def _image_score(path):
-    """对单图打分：越大越好。综合 文件大小 / 尺寸 / 平均亮度(白度) / 比例(正方形加分) / 黑底惩罚"""
-    try:
-        im = load_rgb(path)
-        w, h = im.size
-        if min(w, h) < 200 or max(w, h) < 300:
-            return None, "尺寸太小"
-        sz = os.path.getsize(path)
-        if sz < 20_000:
-            return None, "文件太小"
-        # 缩略求平均亮度
-        thumb = im.copy()
-        thumb.thumbnail((40, 40))
-        pixels = list(thumb.getdata())
-        avg = sum(sum(p) for p in pixels) / (40 * 40 * 3)  # 0-255
-        # 长宽比
-        aspect = min(w, h) / max(w, h)  # 0-1
-        # 综合分
-        score = 0.0
-        score += min(sz / 200_000.0, 1.0) * 100      # 文件大
-        score += aspect * 60                            # 偏正方形
-        # 白底加分；中度暗中度惩罚；黑底大扣
-        if avg > 200:
-            score += 120
-        elif avg > 150:
-            score += 60
-        elif avg > 100:
-            score += 0
-        elif avg > 60:
-            score -= 80
-        else:
-            score -= 220
-        # 分辨率
-        score += min((w * h) / 1_000_000.0, 1.0) * 40
-        if _has_qr(path):
-            return None, "含二维码"
-        return score, ("黑底" if avg < 60 else "ok")
-    except Exception as e:
-        return None, "异常: %s" % e
-
-
-def select_topk(imgdir, k=6):
-    """启发式从 imgdir 挑出评分最高的前 k 张图，返回 [(filename, score, reason), ...]"""
-    if not os.path.isdir(imgdir):
-        return []
-    cands = []
-    for fn in os.listdir(imgdir):
-        if not fn.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-            continue
-        if fn.startswith("_"):
-            continue
-        path = os.path.join(imgdir, fn)
-        sc, reason = _image_score(path)
-        if sc is None:
-            continue
-        cands.append((fn, sc, reason))
-    cands.sort(key=lambda r: -r[1])
-    return cands[:k]
-
-
-def normalize_bg_to_bytes(in_path, force=False):
-    """去背景 + 贴白底。返回 JPEG bytes；force=True 总是处理，否则已经很白就跳过。
-    实现：rembg（u2net）成功用 rembg，否则回退到 PIL 提亮。
-    2026-10-24 显性化：frozen exe 没带 rembg 时永远走 PIL 兜底——首张留痕 state.LOG，
-    别让「去背效果变差」无声发生（效果略降但功能在，不拦流程）。"""
-    from io import BytesIO
-    try:
-        im = load_rgb(in_path)
-        # 检查是否已经够白
-        thumb = im.copy(); thumb.thumbnail((40, 40))
-        pixels = list(thumb.getdata())
-        avg = sum(sum(p) for p in pixels) / (40 * 40 * 3)
-        if not force and avg > 210:
-            return None
-        # 优先 rembg
-        try:
-            import rembg
-            out = rembg.remove(im)  # returns bytes (PNG)
-            rgba = Image.open(BytesIO(out)).convert("RGBA")
-            bg = Image.new("RGB", rgba.size, "white")
-            bg.paste(rgba, mask=rgba.split()[3])
-            buf = BytesIO()
-            bg.save(buf, format="JPEG", quality=92)
-            return buf.getvalue()
-        except Exception:
-            _BGFB[0] += 1
-            if _BGFB[0] == 1:
-                try:
-                    import state as _st
-                    _st.LOG.append("[发布图] rembg 没装（安装版不带），AI 去背用 PIL 提亮兜底——能出图但效果略降")
-                except Exception:
-                    pass
-            # 回退：把图按一定阈值提亮（暗→更白）但保留高对比
-            def lift(v):
-                if v < 50: return 255
-                if v < 80: return 245
-                return min(255, int(v * 1.15 + 18))
-            im2 = im.point(lift)
-            buf = BytesIO()
-            im2.save(buf, format="JPEG", quality=92)
-            return buf.getvalue()
-    except Exception:
-        return None
-
-
-# ---------------- AI 读懂产品（GLM-4V，机型专属卖点） ----------------
 def _parse_ai9_copy(text):
     """解析 zhipu_ai9_copy / zhipu_product_read 返回的 JSON（兼容 ```json 包裹）。"""
     try:
@@ -3017,7 +2819,8 @@ def _extract_json_array(text):
 
 
 def qa_render(api_key, image_paths, info=None, log=None):
-    """用 GLM-4V 对生成的成片做视觉质检，返回问题列表（每项 {slot,issue,severity,code}）。
+    """对生成的成片做视觉质检（2026-11-27 视觉链收敛后只走 Qwen3.5-4B），返回问题列表
+    （每项 {slot,issue,severity,code}）。
     code 为确定性布局类枚举（text_overlap/text_clip/product_clip）或需人工类（style_mismatch/broken/text_mismatch），
     空串表示模型未给、由消费方按 issue 反推。只保留「有具体问题描述」的条目。
     无 key / 失败 -> 返回 None；没问题 -> 返回 []。"""

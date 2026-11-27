@@ -2029,7 +2029,6 @@ var PERM_DEFS = [
   ['supplier',    '货源',              '入口与面板', '显示货源标签'],
   ['calc',        '定价格子',          '入口与面板', '闲鱼定价 / 已发布 / 复制'],
   ['pubview',     '已发布筛选',        '入口与面板', '只看自己发布的 / 没库存筛选'],
-  ['copy',        '写文案',            '入口与面板', '闲鱼 / 小红书配文'],
   ['xysj',        '闲鱼数据',          '入口与面板', '内嵌数据管家'],
   ['xyops',       '闲鱼链接',          '入口与面板', '编辑宝贝 / 查看宝贝'],
   ['xysoft',      '链接软件内打开',    '入口与面板', '勾上=闲鱼链接在软件里打开；不勾=浏览器打开'],
@@ -4187,7 +4186,6 @@ function renderItem(it){
     + '<span class="acts">'
     + (!svRO && (!SUBVIEW || SUBVIEW.u === '0' || svInfo) ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + ((marked || svInfo) ? '取消发布' : '标记已发布') + '</button>' : '')
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
-    + (pok('copy') ? '<button class="copy" data-copydoc="' + esc(it.c) + '" data-copykind="' + esc(it.k || 'z') + '" title="打开闲鱼配文 PRO：抓真实参数写文案 + AI 出发布图（15:59 用户要的常驻入口）">写文案</button>' : '')
     + (pok('tbyp') ? '<button class="copy" data-tbdoc="' + esc(it.c) + '" data-tbkind="' + esc(it.k || 'z') + '" title="打开配文：型号一键出图出文案（独立权限，管理号决定给谁用）">配文</button>' : '')
     + (pok('tbyp') ? '<button class="copy" data-whiteview="' + esc(it.c) + '" title="婷套图（独立工具）：同一张首图换底色/字色——蓝底白字、紫底白字两个，不动本家蓝底；显示开关「婷」控制这个入口">婷</button>' : '')
     + (pok('kitset') ? '<button class="copy" data-baodoc="' + esc(it.c) + '" title="宝套图（独立工具）：蓝底四张 + 暗角聚光四张，一个窗里全看到">宝</button>' : '')
@@ -6120,32 +6118,37 @@ function openWhiteView(k){
     +   '<span id="wv_msg" style="font-size:11.5px;color:#9fe0a8"></span>'
     +   '<button id="wv_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
     + '</div>'
-    + '<div style="flex:1;overflow:auto;padding:12px 16px"><div style="max-width:1280px;margin:0 auto;display:flex;gap:10px;align-items:stretch;min-height:100%">'
-    +   '<div style="flex:0 0 auto;width:max-content;display:flex;flex-direction:column;gap:10px">'
-    +     '<div style="flex:1;min-height:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px;display:flex;flex-direction:column;text-align:left">'
-    +       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
-    +         '<div style="font-weight:700;font-size:13px">蓝底白字 <span style="font-weight:400;font-size:11.5px;color:#8a929e">微改版 · 点图看大图</span></div>'
-    +         '<span style="flex:1"></span>'
-    +         '<button data-wvopen="blue" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
-    +         '<button data-wvregen="blue" style="border:1px solid #93c5fd;background:#dbeafe;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
-    +       '</div>'
-    +       '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="wv_grid_blue"></div>'
+    + '<div style="flex:1;overflow:hidden;padding:12px 16px;display:flex"><div style="max-width:1760px;margin:0 auto;width:100%;display:flex;gap:10px;align-items:stretch;min-height:0">'
+    +   /* 2026-11-26 用户令「宝跟婷所有布局都一样」：婷窗改宝窗同款三列横排——
+           列1 蓝底白字四张 / 列2 紫底白字四张 / 列3 文案；栏头按键排+样式值抄宝窗 */
+      '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
+    +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
+    +       '<b style="font-size:13px;color:#1d4ed8">蓝底白字</b>'
+    +       '<span style="flex:1"></span>'
+    +       '<button data-wvopen="blue" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+    +       '<button data-wvpick="blue" title="铺出抓到的全部候选图，点选主图/尺寸图；面板关了随时点这里重开（同宝窗）" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">选图</button>'
+    +       '<button data-wvregen="blue" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
     +     '</div>'
-    +     '<div style="flex:1;min-height:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px;display:flex;flex-direction:column;text-align:left">'
-    +       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:0 0 auto">'
-    +         '<div style="font-weight:700;font-size:13px">紫底白字 <span style="font-weight:400;font-size:11.5px;color:#8a929e">胶囊换紫 · 点图看大图</span></div>'
-    +         '<span style="flex:1"></span>'
-    +         '<button data-wvopen="purple" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
-    +         '<button data-wvregen="purple" style="border:1px solid #c4b5fd;background:#ede9fe;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
-    +       '</div>'
-    +       '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="wv_grid_purple"></div>'
-    +     '</div>'
+    +     '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="wv_grid_blue"></div>'
     +   '</div>'
-    +   '<div style="flex:1;min-width:400px;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 16px;display:flex;flex-direction:column">'
-    +     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b style="font-size:13px">文案（同配文一套）</b>'
-    +       '<span style="font-size:11px;color:#9a9ea6">话术版本 · 标题三选一 · 商品描述</span></div>'
+    +   '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
+    +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
+    +       '<b style="font-size:13px;color:#6d28d9">紫底白字</b>'
+    +       '<span style="flex:1"></span>'
+    +       '<button data-wvopen="purple" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+    +       '<button data-wvpick="purple" title="铺出抓到的全部候选图，点选主图/尺寸图；面板关了随时点这里重开（同宝窗）" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">选图</button>'
+    +       '<button data-wvregen="purple" style="border:1px solid #c7d2fe;background:#eef2ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
+    +     '</div>'
+    +     '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="wv_grid_purple"></div>'
+    +   '</div>'
+    +   '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
+    +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto">'
+    +       '<b style="font-size:13px;color:#1d4ed8">文案（同配文一套）</b>'
+    +       '<span style="font-size:11px;color:#9a9ea6">话术版本 · 标题三选一 · 商品描述</span>'
+    +     '</div>'
     +     '<div id="wv_copy" style="font-size:11.5px;color:#8a929e;flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column">加载中…</div>'
     +   '</div>'
+    + '</div>'
     + '</div></div>';
   document.body.appendChild(wrap);
   wrap.querySelector('#wv_close').addEventListener('click', function(){ wrap.remove(); });
@@ -6192,29 +6195,32 @@ function openWhiteView(k){
   /* 2026-11-05 Mac 修复：同宝窗——WebKit 把 max-content 列里 aspect-ratio 格子的
      最大内容贡献算成 0，四张缩略图会全叠在一起。改成 JS 给像素轨道。 */
   function wvFit(){
-    var tones = ['blue', 'purple'], cell = 0;
+    var tones = ['blue', 'purple'], cell = 0, card0 = null;
     for (var i = 0; i < 2; i++){
       var g0 = wrap.querySelector('#wv_grid_' + tones[i]);
       if (!g0) return;
-      var card0 = g0.parentNode, hd0 = card0.children[0];
+      card0 = g0.parentNode;
+      var hd0 = card0.children[0];
       var availH0 = card0.clientHeight - hd0.offsetHeight - 8 - 26;
       if (availH0 < 100) return;
       var c0 = Math.floor((availH0 - 6) / 2);
       if (!cell || c0 < cell) cell = c0;
     }
-    var maxByWidth = Math.floor(((wrap.clientWidth - 40) * 0.52 - 6) / 2);
+    /* 2026-11-26 用户截图实锤「图片太大铺满整页互相叠压」：宽度上限改按真实列宽
+       （三等分列，扣卡内边距28+格距6），不再用旧两列时代的 0.52 屏宽系数——
+       那系数放行 ~350px 格子，网格比列宽宽出一倍，直接溢出卡片盖住邻列。
+       列宽不钉死（flex:1 三等分），网格居中，密度跟宝窗缩略图一致。 */
+    var maxByWidth = Math.floor((card0.clientWidth - 28 - 6) / 2);
     if (cell > maxByWidth) cell = maxByWidth;
     if (cell < 60) cell = 60;
     var w = cell * 2 + 6;
     tones.forEach(function(t){
       var g = wrap.querySelector('#wv_grid_' + t);
       if (!g) return;
-      var card = g.parentNode;
       g.style.gridTemplateColumns = 'repeat(2,' + cell + 'px)';
       g.style.gridTemplateRows = 'repeat(2,' + cell + 'px)';
       g.style.width = w + 'px';
       g.style.margin = '0 auto';
-      card.style.width = (w + 26) + 'px';
     });
   }
   function wvRefit(){ wvFit(); requestAnimationFrame(wvFit); }
@@ -6297,6 +6303,28 @@ function openWhiteView(k){
     return '/api/kitimg/' + encodeURIComponent(k) + '/' +
       String(p || '').split('/').map(encodeURIComponent).join('/');
   }
+  /* 2026-11-26 用户令「单击打开大图，大图里接设主图按键」——同宝窗 pickZoom 口径 */
+  function tpickZoom(p, cap, onPick){
+    var old = document.getElementById('tpick_zoom'); if (old) old.remove();
+    var z = document.createElement('div'); z.id = 'tpick_zoom';
+    z.style.cssText = 'position:fixed;inset:0;background:rgba(14,18,26,.82);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+    z.innerHTML = '<div style="display:flex;flex-direction:column;gap:10px;align-items:center">'
+      + '<div style="color:#e8eaee;font-size:12.5px;font-weight:600">' + esc(cap) + '<span style="font-weight:400;color:#9aa3b0;margin-left:10px">点空白处关闭</span></div>'
+      + '<img src="' + tpickImgUrl(p) + '?t=' + Date.now() + '" style="max-width:88vw;max-height:76vh;border-radius:12px;display:block;background:#fff">'
+      + (onPick
+        ? '<div style="display:flex;gap:10px">'
+          + '<button data-zk="main" style="border:0;background:#1d4ed8;color:#fff;border-radius:9px;padding:9px 22px;font-size:13px;font-weight:700;cursor:pointer">✓ 设为主图</button>'
+          + '<button data-zk="size" style="border:1px solid #b98f1f;background:#fdf6e3;color:#8a6a10;border-radius:9px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer">设为尺寸图</button>'
+          + '</div>'
+        : '')
+      + '</div>';
+    z.addEventListener('click', function(ev){
+      var b = ev.target.closest ? ev.target.closest('button[data-zk]') : null;
+      z.remove();
+      if (b && onPick) onPick(b.getAttribute('data-zk'));
+    });
+    document.body.appendChild(z);
+  }
   function tpickSlot(kind, cur, label, color){
     var has = !!cur;
     return '<div style="width:112px;height:84px;flex:none;background:#f6f8fb;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center">'
@@ -6319,7 +6347,7 @@ function openWhiteView(k){
     pan.innerHTML =
       '<div style="padding:14px 18px 10px;border-bottom:1px solid #eef1f6;display:flex;align-items:center;gap:10px">'
       + '<b style="font-size:15px;color:#1a2230">选图 · ' + esc(k) + '（婷套图）</b>'
-      + '<span style="color:#8a929e;font-size:12px">点图=设为主图；要当尺寸图点卡片右下「设尺寸图」；没有合适的直接上传。</span>'
+      + '<span style="color:#8a929e;font-size:12px">点图看大图，大图里一键「设为主图/设为尺寸图」；没有合适的直接上传。</span>'
       + '<span style="flex:1"></span>'
       + '<button id="tpick_x" style="border:0;background:#f1f3f8;border-radius:8px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#5a6472">收起</button></div>'
       + '<div style="display:flex;gap:12px;padding:12px 18px 6px">'
@@ -6328,6 +6356,7 @@ function openWhiteView(k){
       + '</div>'
       + '<div id="tpick_grid" style="flex:1;overflow:auto;padding:8px 18px 6px;display:flex;flex-wrap:wrap;gap:10px;align-content:flex-start"></div>'
       + '<div style="padding:12px 18px;border-top:1px solid #eef1f6;display:flex;gap:10px;align-items:center">'
+      + '<button id="tpick_skip" title="关掉面板，这次不出图；已选的图保留，随时点栏头「选图」回来继续" style="border:1px solid #cbd3e0;background:#fff;color:#5a6472;border-radius:9px;padding:8px 14px;font-size:12.5px;cursor:pointer">不出了</button>'
       + '<span id="tpick_tip" style="color:#8a929e;font-size:12px;flex:1">' + esc(note || '') + '</span>'
       + '<button id="tpick_nosize" style="border:1px solid #cbd3e0;background:#fff;border-radius:9px;padding:8px 14px;font-size:12.5px;cursor:pointer;color:#5a6472">没尺寸图？自动画</button>'
       + '<button id="tpick_go" style="border:0;background:#1d4ed8;color:#fff;border-radius:9px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer">出图</button></div>';
@@ -6352,6 +6381,8 @@ function openWhiteView(k){
       }
       tpickClose();
     };
+    /* 2026-11-26 用户令「要有一个我可以关掉的按键，直接不出了」：同宝窗的放弃出口 */
+    ov.querySelector('#tpick_skip').onclick = function(){ tpickClose(); };
     function paintSlots(cur){
       tcur.main = cur.main || null;
       tcur.size = cur.size || null;
@@ -6382,12 +6413,15 @@ function openWhiteView(k){
             d.style.cssText = 'position:relative;flex:0 0 calc(33.333% - 10px);border:2px solid '
               + (isMain ? '#16a34a' : (isSize ? '#d4b34a' : '#e7ebf2'))
               + ';border-radius:10px;overflow:hidden;background:#fbfcfe;cursor:pointer';
+            /* 2026-11-26 用户令：来源彩色角标（右上角）+ 双击看大图——同宝窗面板口径 */
+            var _sc = ({'官网': '#1d4ed8', '说明书': '#0f766e', '欣盛': '#b45309', '中关村': '#6d28d9'})[it.src] || '#64748b';
             d.innerHTML =
-              '<div style="height:210px;background:#fff;display:flex;align-items:center;justify-content:center">'
+              '<div style="height:210px;background:#fff;display:flex;align-items:center;justify-content:center;position:relative">'
               + '<img loading="lazy" src="' + tpickImgUrl(it.p) + '" style="max-width:100%;max-height:206px;object-fit:contain">'
+              + '<b style="position:absolute;top:6px;right:6px;background:' + _sc + ';color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.25)">' + esc(it.src) + '</b>'
               + '</div>'
               + '<div style="padding:6px 10px 8px;display:flex;align-items:center;gap:8px">'
-              + '<span style="color:#6a7382;font-size:10.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(it.p) + '">' + esc(it.src) + ' · ' + it.w + '×' + it.h + '</span>'
+              + '<span style="color:#6a7382;font-size:10.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(it.p) + '">' + it.w + '×' + it.h + ' · 点击看大图</span>'
               + '<button data-k="size" style="flex:none;border:1px solid #b98f1f;background:#fdf6e3;color:#8a6a10;border-radius:7px;padding:3px 10px;font-size:11px;cursor:pointer">设尺寸图</button>'
               + '</div>';
             if (isMain || isSize){
@@ -6411,7 +6445,7 @@ function openWhiteView(k){
                   ttip.textContent = '✗ ' + (e.message || e);
                 });
             }
-            d.addEventListener('click', function(){ pickOne('main'); });
+            d.addEventListener('click', function(){ tpickZoom(it.p, it.src + ' · ' + it.w + '×' + it.h, function(kind){ pickOne(kind); }); });
             var bsz = d.querySelector('button[data-k="size"]');
             bsz.addEventListener('click', function(ev){ ev.stopPropagation(); pickOne('size', bsz); });
             grid.appendChild(d);
@@ -6452,13 +6486,18 @@ function openWhiteView(k){
       fetch('/api/kitset?model=' + encodeURIComponent(k) + '&pickdone=1' + (skip ? '&skipsize=1' : '') + '&bg=1')
         .then(function(r){ return r.json(); })
         .then(function(j){
+          /* 2026-11-26 TB 实锤：busy 响应（该型号已在生成中）婷窗原来当失败 throw，
+             轮询没接管=「选完不出图」假死——busy 也要接上 pollJob 等它跑完续 wvStart */
+          if (j && j.busy){
+            pollJob('kitset:' + k, function(res){
+              if (msg) msg.textContent = '✓ 蓝底好了，续跑' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + '…';
+              wvStart(tone, btn);
+            }, function(err){
+              if (msg){ msg.textContent = '✗ ' + ((err && err.message) || '出图失败'); msg.style.color = '#fca5a5'; }
+            });
+            return;
+          }
           if (!j || !j.ok) throw new Error((j && j.msg) || '启动失败');
-          pollJob('kitset:' + k, function(res){
-            if (msg) msg.textContent = '✓ 蓝底好了，续跑' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + '…';
-            wvStart(tone, btn);
-          }, function(err){
-            if (msg){ msg.textContent = '✗ ' + ((err && err.message) || '出图失败'); msg.style.color = '#fca5a5'; }
-          });
         })
         .catch(function(e){
           if (msg){ msg.textContent = '✗ ' + e; msg.style.color = '#fca5a5'; }
@@ -6517,6 +6556,15 @@ function openWhiteView(k){
      手动补跑用卡右上「重新生成」；「打开文件夹」开对应 蓝/紫 子文件夹 */
   wrap.querySelectorAll('[data-wvregen]').forEach(function(el){
     el.addEventListener('click', function(){ wvStart(el.getAttribute('data-wvregen'), el); });
+  });
+  /* 2026-11-26 用户令「婷的布局也改得跟宝的一样」：蓝/紫两卡栏头加「选图」键，
+     随时重开选图面板（同宝窗栏头 #bao_pick 的口径） */
+  wrap.querySelectorAll('[data-wvpick]').forEach(function(el){
+    el.addEventListener('click', function(){
+      var tone = el.getAttribute('data-wvpick');
+      openPickPanelT([], '点图看大图，大图里一键「设为主图/设为尺寸图」；没有合适的直接上传。',
+                     tone, wrap.querySelector('[data-wvregen="' + tone + '"]'));
+    });
   });
   wrap.querySelectorAll('[data-wvopen]').forEach(function(el){
     el.addEventListener('click', function(){ wvOpenFolder(el.getAttribute('data-wvopen')); });
@@ -6828,6 +6876,30 @@ function openBaoView(k){
     return '/api/kitimg/' + encodeURIComponent(k) + '/' +
       String(p || '').split('/').map(encodeURIComponent).join('/');
   }
+  /* 2026-11-26 用户令「单击打开大图显示，然后再这里接一个设主图按键」：
+     点卡=先开大图看清细节，大图底部一键「设为主图/设为尺寸图」落定；
+     点空白处关闭，点按键=落定并关。单击选图的旧口径作废。 */
+  function pickZoom(p, cap, onPick){
+    var old = document.getElementById('pick_zoom'); if (old) old.remove();
+    var z = document.createElement('div'); z.id = 'pick_zoom';
+    z.style.cssText = 'position:fixed;inset:0;background:rgba(14,18,26,.82);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+    z.innerHTML = '<div style="display:flex;flex-direction:column;gap:10px;align-items:center">'
+      + '<div style="color:#e8eaee;font-size:12.5px;font-weight:600">' + esc(cap) + '<span style="font-weight:400;color:#9aa3b0;margin-left:10px">点空白处关闭</span></div>'
+      + '<img src="' + pickImgUrl(p) + '?t=' + Date.now() + '" style="max-width:88vw;max-height:76vh;border-radius:12px;display:block;background:#fff">'
+      + (onPick
+        ? '<div style="display:flex;gap:10px">'
+          + '<button data-zk="main" style="border:0;background:#1d4ed8;color:#fff;border-radius:9px;padding:9px 22px;font-size:13px;font-weight:700;cursor:pointer">✓ 设为主图</button>'
+          + '<button data-zk="size" style="border:1px solid #b98f1f;background:#fdf6e3;color:#8a6a10;border-radius:9px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer">设为尺寸图</button>'
+          + '</div>'
+        : '')
+      + '</div>';
+    z.addEventListener('click', function(ev){
+      var b = ev.target.closest ? ev.target.closest('button[data-zk]') : null;
+      z.remove();
+      if (b && onPick) onPick(b.getAttribute('data-zk'));
+    });
+    document.body.appendChild(z);
+  }
   function pickSlotHtml(kind, cur, label, color){
     var has = !!cur;
     return '<div style="width:112px;height:84px;flex:none;background:#f6f8fb;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center">'
@@ -6849,7 +6921,7 @@ function openBaoView(k){
     pan.innerHTML =
       '<div style="padding:14px 18px 10px;border-bottom:1px solid #eef1f6;display:flex;align-items:center;gap:10px">'
       + '<b style="font-size:15px;color:#1a2230">选图 · ' + esc(k) + '</b>'
-      + '<span style="color:#8a929e;font-size:12px">抓到的图全在这——点图=设为主图；要当尺寸图点卡片右下「设尺寸图」；没有合适的直接上传。</span>'
+      + '<span style="color:#8a929e;font-size:12px">抓到的图全在这——点图看大图，大图里一键「设为主图/设为尺寸图」；没有合适的直接上传。</span>'
       + '<span style="flex:1"></span>'
       + '<button id="pick_x" style="border:0;background:#f1f3f8;border-radius:8px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#5a6472">收起</button></div>'
       + '<div style="display:flex;gap:12px;padding:12px 18px 6px">'
@@ -6858,6 +6930,7 @@ function openBaoView(k){
       + '</div>'
       + '<div id="pick_grid" style="flex:1;overflow:auto;padding:8px 18px 6px;display:flex;flex-wrap:wrap;gap:10px;align-content:flex-start"></div>'
       + '<div style="padding:12px 18px;border-top:1px solid #eef1f6;display:flex;gap:10px;align-items:center">'
+      + '<button id="pick_skip" title="关掉面板，这次不出图；已选的图保留，随时点栏头「选图」回来继续" style="border:1px solid #cbd3e0;background:#fff;color:#5a6472;border-radius:9px;padding:8px 14px;font-size:12.5px;cursor:pointer">不出了</button>'
       + '<span id="pick_tip" style="color:#8a929e;font-size:12px;flex:1">' + esc(note || '') + '</span>'
       + '<button id="pick_nosize" style="border:1px solid #cbd3e0;background:#fff;border-radius:9px;padding:8px 14px;font-size:12.5px;cursor:pointer;color:#5a6472">没尺寸图？自动画</button>'
       + '<button id="pick_go" style="border:0;background:#1d4ed8;color:#fff;border-radius:9px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer">出图</button></div>';
@@ -6885,6 +6958,9 @@ function openBaoView(k){
       }
       pickClose();
     };
+    /* 2026-11-26 用户令「要有一个我可以关掉的按键，就是直接不出了」：显式放弃出口——
+       任何时候可点，关面板不出图；已选手选图保留（_manual_overrides 在盘上），栏头「选图」可回 */ 
+    ov.querySelector('#pick_skip').onclick = function(){ pickClose(); };
     /* 2026-11-26 用户令「还没选呢怎么可以关掉」：点面板外面不再关——手滑碰一下
        就全没了太伤，只认「收起」键和「出图」（出图/无尺寸图出图在 launch 里 pickClose）。 */
     var grid = ov.querySelector('#pick_grid');
@@ -6945,12 +7021,16 @@ function openBaoView(k){
             d.style.cssText = 'position:relative;flex:0 0 calc(33.333% - 10px);border:2px solid '
               + (isMain ? '#16a34a' : (isSize ? '#d4b34a' : '#e7ebf2'))
               + ';border-radius:10px;overflow:hidden;background:#fbfcfe;cursor:pointer';
+            /* 2026-11-26 用户令「不告诉我哪些是哪个网站抓取的」：来源上彩色角标
+               （右上角，官网蓝/说明书青/欣盛橙/中关村紫/其他灰），一眼分清来源 */
+            var _sc = ({'官网': '#1d4ed8', '说明书': '#0f766e', '欣盛': '#b45309', '中关村': '#6d28d9'})[it.src] || '#64748b';
             d.innerHTML =
-              '<div style="height:210px;background:#fff;display:flex;align-items:center;justify-content:center">'
+              '<div style="height:210px;background:#fff;display:flex;align-items:center;justify-content:center;position:relative">'
               + '<img loading="lazy" src="' + pickImgUrl(it.p) + '" style="max-width:100%;max-height:206px;object-fit:contain">'
+              + '<b style="position:absolute;top:6px;right:6px;background:' + _sc + ';color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.25)">' + esc(it.src) + '</b>'
               + '</div>'
               + '<div style="padding:6px 10px 8px;display:flex;align-items:center;gap:8px">'
-              + '<span style="color:#6a7382;font-size:10.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(it.p) + '">' + esc(it.src) + ' · ' + it.w + '×' + it.h + '</span>'
+              + '<span style="color:#6a7382;font-size:10.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(it.p) + '">' + it.w + '×' + it.h + ' · 点击看大图</span>'
               + '<button data-k="size" style="flex:none;border:1px solid #b98f1f;background:#fdf6e3;color:#8a6a10;border-radius:7px;padding:3px 10px;font-size:11px;cursor:pointer">设尺寸图</button>'
               + '</div>';
             if (isMain || isSize){
@@ -6974,7 +7054,7 @@ function openBaoView(k){
                   tip.textContent = '✗ ' + (e.message || e);
                 });
             }
-            d.addEventListener('click', function(){ pickOne('main'); });
+            d.addEventListener('click', function(){ pickZoom(it.p, it.src + ' · ' + it.w + '×' + it.h, function(kind){ pickOne(kind); }); });
             var bsz = d.querySelector('button[data-k="size"]');
             bsz.addEventListener('click', function(ev){ ev.stopPropagation(); pickOne('size', bsz); });
             grid.appendChild(d);

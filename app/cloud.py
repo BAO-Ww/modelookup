@@ -20,9 +20,11 @@ from paths import wp
 from payload import rebuild
 
 
-def client_log_upload(reason):
+def client_log_upload(reason, extra=None):
     """客户端诊断上送（2026-10-25 Mac 空数据实锤用的）：把本机关键文件清单 +
     状态 + app.log 尾部传到 worker /clientlog（KV 每用户一份覆盖写）。
+    2026-11-26 补 extra：kitset 出图失败时带 版本号/异常 traceback/kitset 目录文件
+    头（KDX1 与否）——TB 实锤 app.log 不存在时上报恒空，黑盒没法查。
     失败静默——诊断通道绝不能反过来制造新问题。"""
     try:
         d = wp("")
@@ -40,12 +42,16 @@ def client_log_upload(reason):
         if os.path.isfile(lp):
             tail = io.open(lp, encoding="utf-8", errors="ignore").read()[-6000:]
         st = state.read_state()
-        cloud_req("/clientlog", "POST",
-                  {"reason": reason, "files": files,
-                   "state": {k: st.get(k) for k in
-                             ("status", "msg", "price_at", "stock_at", "data_alert")},
-                   "log": tail},
-                  timeout=30)
+        body = {"reason": reason, "files": files,
+                "state": {k: st.get(k) for k in
+                          ("status", "msg", "price_at", "stock_at", "data_alert")},
+                "log": tail}
+        if extra:
+            try:
+                body["extra"] = json.dumps(extra, ensure_ascii=False, default=str)[:6000]
+            except Exception:
+                pass
+        cloud_req("/clientlog", "POST", body, timeout=30)
     except Exception:
         pass
 
