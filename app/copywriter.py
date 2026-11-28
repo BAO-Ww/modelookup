@@ -31,7 +31,9 @@ import io
 import json
 import os
 import re
+import random
 import sqlite3
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -74,6 +76,35 @@ THINK_OFF = {"type": "disabled"}
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
+
+# 2026-11-27 用户令「爬虫要藏着爬」：被 WAF 盯上的头号特征是同 IP 机枪式连发。
+# 全局礼貌限速：对同一目标域名，两次直连请求之间强制随机间隔 0.5~1.2s（抖动避免
+# 完美等间隔被识别成脚本）；不同域名互不拖累；线程安全（并发线程按预约槽位排队）。
+_FETCH_THROTTLE_LOCK = threading.Lock()
+_FETCH_THROTTLE_LAST = {}      # host -> 已预约的最早可发时刻
+_FETCH_THROTTLE_MIN = 0.5
+_FETCH_THROTTLE_MAX = 1.2
+
+
+def _polite_wait(url):
+    """直连请求前调用：同域名按随机间隔排队（藏着爬）。AI 接口/CF 代抓不在此列。"""
+    try:
+        if not (url or "").lower().startswith(("http://", "https://")):
+            return
+        host = urllib.parse.urlparse(url).netloc.lower()
+        if not host:
+            return
+        with _FETCH_THROTTLE_LOCK:
+            now = time.time()
+            gap = random.uniform(_FETCH_THROTTLE_MIN, _FETCH_THROTTLE_MAX)
+            slot = max(now, _FETCH_THROTTLE_LAST.get(host, 0.0) + gap)
+            _FETCH_THROTTLE_LAST[host] = slot
+        if slot > now:
+            time.sleep(slot - now)
+    except Exception:
+        pass
+
+
 # 官网三站检索（collect.py 验证过的 code/siteId，2026-10-12 实测仍可用）
 SITES = {
     'haier':   {'home': 'https://www.haier.com',     'code': '3e6bff6304c547dba650d9941aa472c0', 'siteId': '2',  'name': '海尔'},
@@ -109,6 +140,7 @@ def fetch(url, extra_headers=None, binary=False, retries=1, timeout=15):
         headers.update(extra_headers)
     last = None
     for i in range(retries + 1):
+        _polite_wait(url)   # 藏着爬：直连前同域名排队
         try:
             req = urllib.request.Request(url, headers=headers)
             with urlopen_ssl(req, timeout=timeout) as r:
@@ -201,6 +233,7 @@ def fetch(url, extra_headers=None, binary=False, retries=1, timeout=15):
                 return _relay_fetch(url, headers, binary=binary, timeout=timeout)
             except Exception as _re:
                 last = _re    # 代抓也不成才落回直连
+        _polite_wait(url)   # 藏着爬：直连前同域名排队
         try:
             req = urllib.request.Request(url, headers=headers)
             with urlopen_ssl(req, timeout=timeout) as r:
@@ -839,6 +872,7 @@ def _book_pdf(model, url, pcode, log):
     pdf_fp = os.path.join(mdir, "电子说明书.pdf")
     if not os.path.isfile(pdf_fp):
         try:
+            _polite_wait(url)
             req = urllib.request.Request(url, headers={
                 "User-Agent": _XS_UA, "Referer": "https://hzy.haier.com/"})
             with urlopen_ssl(req, timeout=60) as r:
@@ -999,38 +1033,76 @@ def _book_dump(model, imgs, size_imgs, log):
     for _n, u in list(imgs or []) + list(size_imgs or []):
         if u and u not in urls:
             urls.append(u)
-    added = 0
-    for u in urls:
+    def _fn_of(u):
         pr = urllib.parse.urlparse(u)
         _bn = os.path.basename(urllib.parse.unquote(pr.path)) or ""
         _bn = re.sub(r"[^0-9A-Za-z._-]", "_", _bn)
         if _bn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-            fn = _bn
-        else:
-            import hashlib
-            fn = "img_%s%s" % (hashlib.md5(u.encode()).hexdigest()[:10],
-                               os.path.splitext(_bn)[1] or ".jpg")
-        fp = os.path.join(_dir, fn)
-        if os.path.isfile(fp) and os.path.getsize(fp) > 3000:
-            continue   # 已下过（幂等，不重下不重复）
-        hdr = {"User-Agent": _XS_UA, "Referer": "%s://%s/" % (pr.scheme, pr.netloc)}
+            return _bn
+        import hashlib
+        return "img_%s%s" % (hashlib.md5(u.encode()).hexdigest()[:10],
+                             os.path.splitext(_bn)[1] or ".jpg")
+
+    added = 0
+
+    def _small_img_ok(raw):
+        """小体积图甄别（2026-11-28 CWC8 实锤 119x237 真内容图只有 1392 字节）：
+        PNG 解宽高、JPEG 认图头——尺寸 >=60px 或体积 >=800 字节且是真图就留，
+        真 1x1 占位/装饰 icon 才丢。"""
+        if not raw or len(raw) < 300:
+            return False
         try:
-            with urlopen_ssl(urllib.request.Request(u, headers=hdr), timeout=20) as r:
+            if raw[:8] == b"\x89PNG\r\n\x1a\n" and len(raw) >= 24:
+                import struct as _s
+                w, h = _s.unpack(">II", raw[16:24])
+                return int(w) >= 60 and int(h) >= 60
+            if raw[:2] == b"\xff\xd8":
+                return len(raw) >= 800
+            if raw[:4] in (b"RIFF", b"GIF8"):
+                return len(raw) >= 800
+        except Exception:
+            return False
+        return False
+
+    def _grab(u, tmo):
+        nonlocal added
+        fp = os.path.join(_dir, _fn_of(u))
+        if os.path.isfile(fp) and os.path.getsize(fp) > 3000:
+            return True   # 已下过（幂等，不重下不重复）
+        pr = urllib.parse.urlparse(u)
+        hdr = {"User-Agent": _XS_UA, "Referer": "%s://%s/" % (pr.scheme, pr.netloc)}
+        _polite_wait(u)
+        try:
+            with urlopen_ssl(urllib.request.Request(u, headers=hdr), timeout=tmo) as r:
                 raw = r.read()
         except Exception:
-            continue
-        if not raw or len(raw) < 3000:   # 图标/占位小图不占席位
-            continue
+            return False
+        if not raw:
+            return False
+        if len(raw) < 3000 and not _small_img_ok(raw):
+            return True   # 图标/占位小图不占席位
         try:
             with io.open(fp, "wb") as f:
                 f.write(raw)
         except Exception:
-            continue
+            return False
         added += 1
+        return True
+
+    # 2026-11-28 用户令「说明书的图没有下载全面」：CWC8-B27WEU1 实锤 91 张落 77——
+    # 下载失败静默 continue 没人管。第一轮过后对失败 URL 补漏重试一轮（超时放宽），
+    # 终态还缺就明说缺几张，不再默默吞掉。
+    _miss = [u for u in urls if not _grab(u, 20)]
+    if _miss:
+        if log:
+            log("说明书图第一轮缺 %d 张，补漏重试…" % len(_miss))
+        _miss = [u for u in _miss if not _grab(u, 40)]
     if log:
-        log("说明书图落盘：新增 %d 张（目录现有 %d 张图）"
+        log("说明书图落盘：新增 %d 张（目录现有 %d 张图）%s"
             % (added, len([f for f in os.listdir(_dir)
-                           if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))])))
+                           if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))]),
+               "" if not _miss else "；仍有 %d 张下载失败：%s"
+               % (len(_miss), " ".join(_fn_of(u) for u in _miss[:6]))))
 
 
 def _book_fetch(model, log):
@@ -1043,6 +1115,7 @@ def _book_fetch(model, log):
     def _post(path, data):
         u = ("https://hzy.haier.com/vipCode/%s?vipCode_domainName=&vipCode_ssotoken="
              "&vipCode_userId=" % path)
+        _polite_wait(u)
         req = urllib.request.Request(u, data=urllib.parse.urlencode(data).encode(),
                                      headers={**hdrs,
                                               "Content-Type": "application/x-www-form-urlencoded",
@@ -1105,6 +1178,7 @@ def _book_fetch(model, log):
     base = "%s://%s/app/api/%s/casarteSUMEBookMap/%s/static/html-casarte/" % (
         pr.scheme, pr.netloc, ind, urllib.parse.quote(pc))
     try:
+        _polite_wait(base)
         req = urllib.request.Request(base + "casarteSUMEBookMap.json", headers=hdrs)
         with urlopen_ssl(req, timeout=20) as r:
             tree = json.loads(r.read().decode("utf-8", "replace"))
@@ -1135,13 +1209,15 @@ def _book_fetch(model, log):
 
     _walk(tree)
     nodes = nodes[:80]
-    # 并发拉 SMO 页（67 页顺序拉 ~20s，8 并发 ~3s）
+    # 拉全部 SMO 页（藏着爬 2026-11-27：8 并发机枪式连发是 WAF 头号特征，
+    # 改 2 路 + _polite_wait 同域随机间隔排队；慢一点但稳）
     pages = {}
     _hrefs = [h for _n, h in nodes]
 
     def _get(h):
         u = h if h.startswith("http") else base + h.lstrip("./")
         u = _url_esc(u)
+        _polite_wait(u)
         try:
             req = urllib.request.Request(u, headers=hdrs)
             with urlopen_ssl(req, timeout=15) as r:
@@ -1151,11 +1227,20 @@ def _book_fetch(model, log):
 
     try:
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=8) as ex:
+        with ThreadPoolExecutor(max_workers=2) as ex:
             for (n, h), html in zip(nodes, ex.map(_get, _hrefs)):
                 pages[h] = html
     except Exception:
         for n, h in nodes:
+            pages[h] = _get(h)
+    # 2026-11-28 用户令「说明书的图没有下载全面」：CWC8-B27WEU1 实锤书尾页
+    # （程序运行/预约/智能物联/疑问解答）并发+限速下超时拉空，该页 img 全漏——
+    # 拉空的页补一轮串行重试（单线程慢一点，但尾部页不会整页丢）。
+    _empty = [h for h in _hrefs if not (pages.get(h) or "").strip()]
+    if _empty:
+        if log:
+            log("说明书 %d 页第一轮拉空，串行补漏重试…" % len(_empty))
+        for h in _empty:
             pages[h] = _get(h)
     # 逐页解析：参数行 / 图 / 说明文字 / 尺寸数值表
     imgs, size_imgs, rows, manual, dim_tables = [], [], [], [], []
@@ -1289,6 +1374,7 @@ def _book_washerh5(model, model_eff, url, pcode, nm_eff, hdrs, log):
     pr = urllib.parse.urlparse(url)
     _base = "%s://%s%s" % (pr.scheme, pr.netloc, pr.path.rsplit("/", 1)[0] + "/")
     try:
+        _polite_wait(_base)
         req = urllib.request.Request(_url_esc(_base + "prod.json"), headers=hdrs)
         with urlopen_ssl(req, timeout=20) as r:
             tree = json.loads(r.read().decode("utf-8", "replace"))
@@ -1462,6 +1548,7 @@ def _hzy_params(model, log):
     def _post(path, data):
         u = ("https://hzy.haier.com/vipCode/%s?vipCode_domainName=&vipCode_ssotoken="
              "&vipCode_userId=" % path)
+        _polite_wait(u)
         req = urllib.request.Request(u, data=urllib.parse.urlencode(data).encode(),
                                      headers=hdrs)
         with urlopen_ssl(req, timeout=20) as r:
@@ -1507,6 +1594,7 @@ def _hzy_params(model, log):
                 return []
             base = "%s://%s/app/api/%s/casarteSUMEBookMap/%s/static/html-casarte/" % (
                 pr.scheme, pr.netloc, ind, urllib.parse.quote(pc))
+            _polite_wait(base)
             req = urllib.request.Request(base + "casarteSUMEBookMap.json",
                                          headers={"User-Agent": _XS_UA, "Referer": u})
             with urlopen_ssl(req, timeout=20) as r:
@@ -1536,6 +1624,7 @@ def _hzy_params(model, log):
             rows2, seen2 = [], set()
             for h in targets[:3]:
                 try:
+                    _polite_wait(h if h.startswith("http") else base)
                     req2 = urllib.request.Request(
                         base + h.lstrip("./") if not h.startswith("http") else h,
                         headers={"User-Agent": _XS_UA, "Referer": u})
@@ -1559,6 +1648,7 @@ def _hzy_params(model, log):
 
     try:
         purl = url.split("?")[0].rsplit("/", 1)[0] + "/prod.json"
+        _polite_wait(purl)
         req = urllib.request.Request(purl, headers={"User-Agent": _XS_UA,
                                                     "Referer": url})
         with urlopen_ssl(req, timeout=20) as r:
@@ -1706,7 +1796,11 @@ def _xs_img_params(model, xs, log):
             dd = os.path.join(_ks.kit_root(), nm, sub)
             if os.path.isdir(dd):
                 for f in sorted(os.listdir(dd)):
-                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")) and not f.startswith("_"):
+                    # 主图/尺寸图/手选图是选图面板落盘的成品（用户拍的照片），
+                    # 不是详情参数长图——喂给视觉只会读出一堆尺寸数字
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")) \
+                            and not f.startswith("_") \
+                            and not any(w in f for w in ("主图", "尺寸图", "手选", "product", "sizeimg")):
                         cands.append(os.path.join(dd, f))
             if cands:
                 break
@@ -2113,14 +2207,13 @@ def _chat_web(prompt, timeout=150):
             raise
 
 
-Z1_MODEL = "THUDM/GLM-Z1-9B-0414"
+Z1_MODEL = "Qwen/Qwen3-8B"   # 2026-11-27 用户拍板换模型：A/B 实锤 Qwen3-8B 卖点 4/5 全真 vs Z1-9B 0/5 全空话（_ab_result.json）
 
 
 def _z1_chat(prompt, timeout=240):
-    """硅基流动 GLM-Z1-9B-0414（2026-11-27 用户令「机型参数跟卖点/科科东星斑文案
-    用硅基流动的 GLM-Z1」）：文案主模型从智谱 glm-4.5-flash 整体切到硅基 GLM-Z1
-    （推理模型：思考链在 reasoning_content 字段，content 是正文；不联网——参数
-    卖点必须由调用方喂真实资料，裸发型号它必编）。key 走 aikeys.sf_key（env →
+    """硅基流动 Qwen/Qwen3-8B（2026-11-27 用户拍板换模型：A/B 实锤 Qwen3-8B 卖点
+    4/5 全真 vs GLM-Z1-9B 0/5 全空话；科科份/东星斑份同走此函数）。不联网——参数
+    卖点必须由调用方喂真实资料，裸发型号它必编。key 走 aikeys.sf_key（env →
     本机 sf_key.txt → 云端 /aikey 下发）。返回正文文本或抛异常。"""
     import aikeys as _ak
     k = (_ak.sf_key() or "").strip()
@@ -2158,6 +2251,8 @@ PROMPT = """你是闲鱼家电卖家文案写手。产品：{pname}（型号 {mo
 3) points：正好5-8条卖点（聚光用）。【真实数据】是你唯一的事实来源：每条必须锚定至少一个真实参数（数字或参数名/参数值），数字一个都不许编、参数表里没有的维度一个字都不许写，每条≤36字。
    写法（2026-11-20 用户令「把参数塞给你、全部按参数来写」，实锤「周末采购一周食材」）：每条卖点就是一条参数事实的行家表述——把【真实数据】参数表里的参数逐条写成卖点（参数名+参数值进句子），语序/措辞每条换着来、别一个模子；但只许写参数本身和它对应的机器事实，绝不许写生活场景、使用画面、心理感受和效果承诺（「周末采购一周食材」「装满不拥挤」「百搭又耐看」「摆哪都显质感」这类一句都不许出现）。
    依然禁止：编造【真实数据】里没有的数字或功能；把尺寸/外形/净重当卖点；极限词；括号标注参数名。
+   服务/物流/保障类一句不许写（2026-11-27 用户令）：发货地、原厂发货、全国联保、正品保障、售后、
+   送货安装——这些是标题服务词的事，不是卖点；卖点只写机器本身的参数和功能。
    差异化硬要求（2026-11-14 用户令「卖点全是大同小异的要AI干嘛」）：先从【真实数据】里找出这台机器跟同品类其他型号**最不一样**的
    2-3 个参数（容量档位、功率、能效等级、核心技术、特色功能、适用场景数字），把它们写成前 2-3 条；
    所有同品类机型都一样的基础参数（如普通保温、常规安全防护）最多写 1 条；五条卖点放在一起必须能看出「这是这一台，不是随便哪台」。
@@ -2204,7 +2299,14 @@ def _facts_text(data, model):
         # 绝不让文案整单炸（参数库捷径形状实锤过 not enough values to unpack）
         if not isinstance(kv, (list, tuple)):
             continue
-        _pairs = [x for x in kv if isinstance(x, (list, tuple)) and len(x) == 2]
+        # 2026-11-27 ZQD 实锤：「发货地/销售平台/APP:手册」垃圾行不喂 AI
+        # （AI 看见发货地就写出「山东原厂发货」伪卖点）。同 kitset._param_row_ok 闸。
+        try:
+            import kitset as _ksf
+            _pairs_all = [x for x in kv if isinstance(x, (list, tuple)) and len(x) == 2]
+            _pairs = [x for x in _pairs_all if _ksf._param_row_ok(x[0], x[1])]
+        except Exception:
+            _pairs = [x for x in kv if isinstance(x, (list, tuple)) and len(x) == 2]
         if not _pairs:
             continue
         lines.append("[%s] %s" % (g, "；".join("%s:%s" % (a, b) for a, b in _pairs)))
@@ -2281,6 +2383,12 @@ def _verify(ai, facts, nums_set, bans=(), grounded=(), model=''):
     def ok(line):
         if _is_size_line(line):
             return False
+        # 2026-11-27 晚 A/B 实锤：ZQD 真数据没有能效，Z1/Qwen 两家标题都编出
+        # 「家用一级能效/一级节能标准」——中文声明词（X级/能效/变频/风冷/无霜）
+        # 数字闸拦不住，单独过闸：facts 里找不到这个声明就不许写。
+        for _c in re.findall(r"[一二三四五]级|能效|变频|定频|风冷|无霜|水效", str(line)):
+            if _c not in facts:
+                return False
         for w in NO_WORDS:
             if w in line:
                 return False
@@ -2304,6 +2412,10 @@ def _verify(ai, facts, nums_set, bans=(), grounded=(), model=''):
 
     def ok_pt(line):
         if not ok(line):
+            return False
+        # 2026-11-27 晚 ZQD 实锤「山东原厂发货，质量有保障」上卖点卡：服务/物流/保障
+        # 类不算卖点——那是标题服务词的活。卖点只许写机器本身。
+        if re.search(r"发货|联保|保修|正品|原厂|售后|上门|送装|送货|安装", str(line)):
             return False
         if not NUM_RE.search(line):      # 没数字：真参数命中可过，纯形容词空话照剔
             if not any(g and g in line for g in grounded):
@@ -2370,10 +2482,17 @@ def glm_copy(model, kind, data, log):
     # （「洗烘一体」「一级能效」是真参数不带数字，不该被当空话剔）。值为「暂无数据」
     # 的参数整条不算（机器可能压根没有，AI 提了反而是编造）。
     grounded = set()
+    try:
+        import kitset as _ksf          # 2026-11-27：垃圾键（发货地/销售平台）不进 grounded，
+        _row_ok = _ksf._param_row_ok   # 否则「山东青岛」当真参数放行无数字伪卖点
+    except Exception:
+        _row_ok = lambda a, b: True
     for _g, _kv in (data.get('groups') or []):
         if not isinstance(_kv, (list, tuple)):
             continue
         for _k2, _v2 in _kv:
+            if not _row_ok(str(_k2 or ''), str(_v2 or '')):
+                continue
             _v2 = str(_v2 or '').strip()
             if not _v2 or _v2 in ('暂无数据', '暂无', '无', '-', '/', '不支持'):
                 continue
@@ -2403,7 +2522,7 @@ def glm_copy(model, kind, data, log):
                 _ptxt += _ban_block
             if kind == 'x':
                 _ptxt += STYLE3_X
-            # 2026-11-27 用户令：文案模型切硅基 GLM-Z1-9B-0414（_chat/glm-4.5-flash 退役）
+            # 2026-11-27 用户拍板：文案模型切硅基 Qwen3-8B（A/B 实锤比 GLM-Z1-9B 强）
             raw = _z1_chat(_ptxt)
             m = re.search(r'\{.*\}', raw, re.S)
             ai = json.loads(m.group(0)) if m else {}
@@ -2493,6 +2612,11 @@ def _blue_params(model):
                 if isinstance(r0, (list, tuple)) and len(r0) >= 2:
                     k2, v2 = str(r0[0]).strip(), str(r0[1]).strip()
                     if k2 and v2 and v2 not in ("暂无数据", "暂无", "无", "-"):
+                        try:
+                            if not _ks._param_row_ok(k2, v2):   # 2026-11-27 垃圾键同闸
+                                continue
+                        except Exception:
+                            pass
                         out.append((k2, v2))
             if not out:
                 for k2, v2 in (cfg.get("params") or {}).items():
@@ -2704,12 +2828,19 @@ def build_desc(model, kk, data, pts, ship='nat'):
         L.append('·' + p)
     L.append('')
     flat = []
+    try:
+        import kitset as _ksf          # 2026-11-27 ZQD 实锤：发货地/销售平台垃圾行不进【参数】行
+        _row_ok = _ksf._param_row_ok
+    except Exception:
+        _row_ok = lambda a, b: True
     for _g, kv in (data.get('groups') or []):
         # 同 _facts_text 的防御：喂歪的组直接跳过（2026-11-10 参数库捷径实锤）
         if not isinstance(kv, (list, tuple)):
             continue
         for x in kv:
             if not (isinstance(x, (list, tuple)) and len(x) == 2):
+                continue
+            if not _row_ok(str(x[0]), str(x[1])):
                 continue
             a, b = x
             s = '%s %s' % (a, b)

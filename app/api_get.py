@@ -237,8 +237,19 @@ class ApiGetMixin:
                     items = []
             prod = "product.png" if os.path.isfile(os.path.join(mdir, "product.png")) else ""
             size = "sizeimg.jpg" if os.path.isfile(os.path.join(mdir, "sizeimg.jpg")) else ""
+            # 尺寸图2（2026-11-27 用户令：双机型号选两张合并）——手选文件存在就报相对路径
+            size2 = ""
+            for _d in (os.path.join(mdir, "官网"), mdir):
+                if size2 or not os.path.isdir(_d):
+                    continue
+                for _f in sorted(os.listdir(_d)):
+                    _st, _ex = os.path.splitext(_f)
+                    if _ex.lower() in (".jpg", ".jpeg", ".png", ".webp") and \
+                            (_st.startswith("尺寸图2") or _st.startswith("尺寸2")):
+                        size2 = os.path.relpath(os.path.join(_d, _f), mdir).replace("\\", "/")
+                        break
             self._send(200, json.dumps({"ok": True, "model": model, "items": items,
-                                        "cur": {"main": prod, "size": size}},
+                                        "cur": {"main": prod, "size": size, "size2": size2}},
                                        ensure_ascii=False))
             return
 
@@ -265,38 +276,6 @@ class ApiGetMixin:
             try:
                 from paths import open_url
                 open_url(tgt)
-                self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
-            except Exception as e:
-                self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
-            return
-
-        # ---------- 白字套图 · 打开产物文件夹（2026-11-03 用户令「生成完了直接打开文件夹」） ----------
-        # open=1 → 白字\（带 tone=blue/purple → 白字\蓝底\ / 白字\紫底\）；open=model → 型号根
-        # 2026-11-26 用户令「婷的文件存储跟宝的一样」：型号根开 kitset\<型号>\（官网/欣盛/
-        # 说明书/聚光/蓝底/白字 全在），白字\ 走 pubwork.dir_of 收口（kitset 优先旧 peiwork 回退）
-        if path == "/api/kitwhite":
-            q = urllib.parse.parse_qs(u.query)
-            model = (q.get("model") or [""])[0].strip()
-            tone = (q.get("tone") or [""])[0]
-            op = (q.get("open") or ["0"])[0]
-            if not model:
-                self._send(400, json.dumps({"ok": False, "msg": "缺 model"}, ensure_ascii=False))
-                return
-            try:
-                import pubwork
-                import kitset
-                from paths import reveal
-                if op == "model":
-                    wd = kitset.model_dir(model)
-                    reveal(wd if os.path.isdir(wd) else pubwork.mdir(model))
-                    self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
-                    return
-                sub = "白字"
-                if tone in ("blue", "purple"):
-                    sub = os.path.join("白字", "蓝底" if tone == "blue" else "紫底")
-                wd = pubwork.dir_of(model, sub)
-                base = pubwork.mdir(model)
-                reveal(wd if os.path.isdir(wd) else base)
                 self._send(200, json.dumps({"ok": True}, ensure_ascii=False))
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))

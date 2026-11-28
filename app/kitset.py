@@ -21,7 +21,7 @@ from collections import Counter
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
-from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch, _hzy_params, _xs_img_params, _book_fetch
+from copywriter import copy_root, fetch_official, fetch_xinsheng, fetch, _hzy_params, _xs_img_params, _book_fetch, _polite_wait
 from normalize import norm_model
 from renderlock import serialized
 import paths
@@ -347,6 +347,24 @@ def _clean_sizeimg(src, dst):
             return False
 
 
+def _clean_sizeimg_manual(src, dst):
+    """手选尺寸图轻清洗（2026-11-28 用户令「我选的尺寸图没有显示全，太大了」）：
+    用户亲手选的就是要全的——只裁白边，绝不切段（_trim_sizeimg_drawing 曾把
+    CWC8 886×1654 双视图竖图拦腰砍成 866×864）。失败退回直接复制。"""
+    try:
+        im = Image.open(src)
+        im = _autocrop_white(im, margin=10)
+        im.convert("RGB").save(dst, quality=92)
+        return True
+    except Exception:
+        try:
+            import shutil as _sh1
+            _sh1.copyfile(src, dst)
+            return True
+        except Exception:
+            return False
+
+
 def _crop_prod(img):
     """机图裁边成紧贴内容的 RGBA（透明 bbox / 白底转 alpha 再裁）。
     img1/img2 的定位预算必须用这份裁后尺寸——原图带透明边距时按原图算预算高偏小，
@@ -611,13 +629,32 @@ _PARAM_SELL_KEYS = ("能效", "容量", "容积", "噪音", "声功率", "功率
 _PARAM_TAIL_KEYS = ("电压", "频率", "净重", "毛重", "重量")
 
 
+# 2026-11-27 晚 ZQD100F 二次实锤：props 原始表混进「发货地/销售平台」电商元数据——
+# 不是机器参数，上卡就是垃圾；键名一票否决（值不判，键对了一律不收）。
+_PARAM_JUNK_KEY_RE = re.compile(
+    r"发货地|发货|销售平台|销售渠道|平台|商品编号|货号|条形码|条码|包装清单|清单")
+
+# 2026-11-27 ES60V-V1 实锤：环保声明 PDF 解析出 RoHS 样板文（「本表格依据SJ/T
+# 11364的规定编制」「GB/T 26572的限额要求以下」）——键值任一命中即垃圾行。
+_PARAM_DECL_RE = re.compile(
+    r"表格|依据|规定|编制|限量|限额|要求|SJ/?T|GB/?T|26572|11364|认证编号|CCC")
+
+
 def _param_row_ok(k, v):
     """参数卡垃圾行过滤（2026-11-27 ZQD 实锤）：官网参数表解析脏数据上卡——
-    「APP：手册」无信息量、「外形尺寸（长」+「×宽×高）」拆行 artifact。"""
+    「APP：手册」无信息量、「外形尺寸（长」+「×宽×高）」拆行 artifact、
+    「发货地：山东青岛」「销售平台：淘宝」是电商元数据不是机器参数。"""
     _JUNK_V = {"手册", "说明书", "详见说明书", "见说明书", "二维码", "是", "否",
                "支持", "有", "无", "-", "——", "暂无", "/"}
     k, v = str(k).strip(), str(v).strip()
     if not k or not v or v in _JUNK_V:
+        return False
+    if _PARAM_JUNK_KEY_RE.search(k) or k.upper() == "APP":
+        return False
+    # 2026-11-27 ES60V-V1 实锤：环保声明 PDF 解析出的 RoHS 样板文上卡当卖点——
+    # 「本表格依据SJ/T:11364的规定编制」「GB/T:26572的限额要求以下」。
+    # 参数名不会是句子：键含 表格/依据/规定/编制/限量/限额/要求 即垃圾。
+    if _PARAM_DECL_RE.search(k) or _PARAM_DECL_RE.search(v):
         return False
     if k.endswith("（") or k.endswith("(") or k.endswith("（长"):   # 拆行左半
         return False
@@ -634,7 +671,9 @@ def _curate_param_rows(rows, n=8):
         if not (isinstance(r0, (list, tuple)) and len(r0) >= 2):
             continue
         k, v = str(r0[0]).strip(), str(r0[1]).strip()
-        if not k or not v or k in seen or k == "尺寸":
+        # 2026-11-28 用户令「不要上面这个尺寸」：整机外形尺寸/产品尺寸这类尺寸行
+        # 跟卡底「尺寸（宽×高×深）」重复，一律不上参数列表（宽×深×高三围只在卡底）。
+        if not k or not v or k in seen or re.search(r"尺寸", k):
             continue
         if v in ("暂无数据", "暂无", "无", "-", "/"):
             continue
@@ -724,6 +763,8 @@ def _render_img2(cfg, prod, out, safe=False):
     else:
         _pill(d, 1020, 894, "以实物为准", _fp, h=42)
     d.rectangle([60, 960, 1020, 961], fill=LINE)
+    # 2026-11-28 用户纠错「你把我下面的删了」：底部尺寸行保留不删；
+    # 重复的是参数列表里的尺寸行，那边才要剔（见 _curate_param_rows）。
     wm_paper.stamp_save(C, out, 95)
 
 
@@ -744,7 +785,7 @@ def _serif(sz, bold=True):
 def _v8_points(points, params_rows, n=6):
     """V8 卖点池（2026-10-28 用户拍板）：话术卖点去重（kg/公斤归一）+ 官网参数补足到 6 条。
     参数条以「k：v」入池，渲染时值做主词、标签做灰小字。只影响卖点图，文案区不受影响。"""
-    out, seen = [], set()
+    out, seen, texts = [], set(), []
     for t in (points or []):
         t = str(t).strip()
         if not t:
@@ -755,11 +796,17 @@ def _v8_points(points, params_rows, n=6):
             continue
         seen.add(key)
         out.append(t)
+        texts.append(t)          # 2026-11-27 晚 ZQD 实锤：整句也进比对池——
+                                 # 「大容量收纳，100升装下全家食材」头部没有「100升」，
+                                 # 光比头部放跑了参数条「100升」重复上卡
     for k, v in (params_rows or []):
         if len(out) >= n:
             break
         # 2026-11-17 实锤卖点图补出「暂无数据/显示屏」卡：空值参数不进卖点池
         if str(v).strip() in ("暂无数据", "暂无", "无", "-", "/", "不支持", "否"):
+            continue
+        # 2026-11-27 ZQD 实锤：「发货地/销售平台」垃圾键不进卖点池（参数卡同款闸）
+        if not _param_row_ok(str(k), str(v)):
             continue
         # 2026-11-25 铁律：W1/D1/H1 预留口径不进卖点池（「620 宽度W1」卖点条难看）
         if _PARAM_RESERVED_RE.search(str(k)):
@@ -775,9 +822,16 @@ def _v8_points(points, params_rows, n=6):
             # 短值（是/支持/无）不做包含判定，免得「是」把什么都拦了。
             _vk = str(v).replace("kg", "公斤").replace("KG", "公斤").replace("Kg", "公斤")
             _vk = re.sub(r"\s+", "", _vk).lower()
-            if len(_vk) >= 3 and any(_vk in x or x in _vk for x in seen):
+            _pool = list(seen) + texts
+            if len(_vk) >= 3 and any(_vk in x or x in _vk for x in _pool):
+                continue
+            # 2026-11-27 ZQD 实锤：「宽*深*高 595*500*598」vs 卖点句里的「595*500*598」
+            # 前缀标签挡住整串比对——剥掉数字前的文字再比一次，命中同样算重复。
+            _vk2 = re.sub(r"^[^0-9]+", "", _vk)
+            if len(_vk2) >= 6 and any(_vk2 in x for x in _pool):
                 continue
             seen.add(_vk)
+            texts.append(t)
             out.append(t)
     return out[:n]
 
@@ -988,7 +1042,9 @@ def _render_img4(cfg, out, prod=None, safe=False):
         d.rounded_rectangle([500, 136, 580, 142], 3, fill=(212, 175, 108))
         simg = _rescue_prod(_autocrop_white(_flat_white(Image.open(cfg["sizeimg"])), margin=6), None)
         w, h = simg.size
-        sc = min(840.0 / w, 620.0 / h)
+        # 预算 880×720（2026-11-28 用户令「显示全面」）：a1b1d1 行删除后竖版
+        # 手选图（双视图 886×1654）能以 720 高完整放下，横版官方线稿略放大不吃亏
+        sc = min(880.0 / w, 720.0 / h)
         im2 = simg.resize((max(1, int(w * sc)), max(1, int(h * sc))), Image.LANCZOS)
         im2 = im2.filter(ImageFilter.UnsharpMask(radius=2, percent=60, threshold=2))
         sp = cfg.get("size_pills") or []
@@ -999,13 +1055,13 @@ def _render_img4(cfg, out, prod=None, safe=False):
                 im3 = _label_size_drawing(im2, int(nums[0]), int(nums[1]), int(nums[2]))
                 if im3.size != im2.size:
                     # 标注函数为写字垫了白边 → 整体缩回预算内
-                    sc3 = min(840.0 / im3.size[0], 620.0 / im3.size[1])
+                    sc3 = min(880.0 / im3.size[0], 720.0 / im3.size[1])
                     im2 = im3.resize((max(1, int(im3.size[0] * sc3)), max(1, int(im3.size[1] * sc3))), Image.LANCZOS)
                 else:
                     im2 = im3
             except Exception:
                 pass
-        _py4 = 180 + max(0, int((640 - im2.size[1]) / 2))
+        _py4 = 170 + max(0, int((720 - im2.size[1]) / 2))
         C.paste(im2, (int(540 - im2.size[0] / 2), _py4))
         # 底部两行：品牌+型号 / 宽高深——**铁律（2026-11-25 用户令「这个要在这里是
         # 铁律，每个型号都是」）：宽高深必须印在卡底，跟图注是否带尺寸文字无关**；
@@ -1016,29 +1072,8 @@ def _render_img4(cfg, out, prod=None, safe=False):
         if dims and all(dims):
             d.text((540, 972), "宽 %d mm · 高 %d mm · 深 %d mm" % tuple(dims),
                    font=_font(F_REG, _d4), fill=GRAY, anchor="mm")
-        # 图注字母对号行（2026-11-25 用户令「蓝底这里还是空的没有 a1=835mm」→
-        # 复令「聚光红色字就行，蓝底的字黑白，可以的话加个胶囊」）：聚光链保持
-        # 红字描摹稿；蓝底这行改黑白——浅灰胶囊底 + 深墨字，数据源同一个
-        # _dims_pair_text（数值表→权威三围对账→字母语义对位 a*=宽/b*=高/d*=深），
-        # 对不出（无权威三围/无数值表）就不画不编。贴图正下方自适应落位，
-        # 上限 878 不压卡底品牌行（918），胶囊超宽自动缩字号。
-        try:
-            _cap4 = _dims_pair_text((cfg.get("model") or "").strip(),
-                                    load_kinfo(cfg.get("model") or "") or {}) or ""
-            if _cap4:
-                _cs4 = 28
-                while _cs4 > 17 and d.textlength(_cap4, font=_font(F_BOLD, _cs4)) > 960:
-                    _cs4 -= 1
-                _f4 = _font(F_BOLD, _cs4)
-                _cw4 = d.textlength(_cap4, font=_f4)
-                _cy4 = min(872, _py4 + im2.size[1] + 30)
-                _ph4 = _cs4 + 26
-                d.rounded_rectangle([540 - _cw4 / 2 - 30, _cy4 - _ph4 / 2,
-                                     540 + _cw4 / 2 + 30, _cy4 + _ph4 / 2],
-                                    radius=(_cs4 + 26) / 2, fill=(240, 242, 246))
-                d.text((540, _cy4), _cap4, font=_f4, fill=INK, anchor="mm")
-        except Exception:
-            pass
+        # 图注字母对号行（a1=…b1=…d1=… 胶囊）已删——2026-11-28 用户令
+        # 「尺寸图上没有 a1b1d1 的就不要有这个」：卡底宽高深行足矣。
         # 底部红胶囊提示语（2026-11-14 用户定稿：拍前告知省市、好查库存）
         pei_core.hint_pill(C, pei_core.HINT_TEXT["blue"])
         wm_paper.stamp_save(C, out, 95)
@@ -1436,6 +1471,7 @@ def _http_text(url, referer=None):
                "Accept-Encoding": "gzip"}
     if referer:
         headers["Referer"] = referer
+    _polite_wait(url)
     req = urllib.request.Request(url, headers=headers)
     with urlopen_ssl(req, timeout=25) as r:
         data = r.read()
@@ -1681,7 +1717,7 @@ def _zol_archive(model, urls, log=None, cap=60):
     """中关村图集全量落盘到 kitset/<型号>/中关村/（2026-11-16 用户令「所有的都抓取放到 R2 里面」）。
 
     以前中关村图只当「候选」喂 _pick_prod，选完机图+尺寸图就 break → 大部分图根本没落盘，
-    用户翻图片库只见 官网/欣盛、没有 中关村。这里独立归档：并发 8 路、md5 去重、
+    用户翻图片库只见 官网/欣盛、没有 中关村。这里独立归档：并发 2 路限速（藏着爬）、md5 去重、
     目录已有 ≥10 张就当已归档直接跳过。返回本地路径列表（可直接当候选，省二次下载）。"""
     import hashlib
     from concurrent.futures import ThreadPoolExecutor
@@ -1720,7 +1756,7 @@ def _zol_archive(model, urls, log=None, cap=60):
                 return None
 
         got = 0
-        with ThreadPoolExecutor(max_workers=8) as ex:
+        with ThreadPoolExecutor(max_workers=2) as ex:
             for r in ex.map(_one, todo):
                 if not r:
                     continue
@@ -2050,10 +2086,11 @@ def _z1_collect(model, brand="", cat="", log=None):
 
 
 def _glm_params(model, log=None):
-    """GLM-4.6V-Flash 真联网搜参（2026-11-27 用户令「联网搜参换了」）：必应都
-    搜不到时的补参层。从「必应抓页喂 Z1 提炼」换成智谱 glm-4.6v-flash 挂
-    web_search 工具真上网搜（免费）。值仍走 _pairs_from_text 白名单硬闸——
-    只收真参数键，AI 编造的键进不了参数表。没搜到返回空，绝不比现状差。"""
+    """glm-4.5-flash 真联网搜参（2026-11-27 用户令「联网搜参换了」）：必应都
+    搜不到时的补参层。从「必应抓页喂 Z1 提炼」换成 copywriter._chat_web
+    （glm-4.5-flash 挂 web_search 工具真上网搜，免费；4.6V-Flash 挂搜索 429 实锤已拆）。
+    值仍走 _pairs_from_text 白名单硬闸——只收真参数键，AI 编造的键进不了参数表。
+    没搜到返回空，绝不比现状差。"""
     _glm_params._last_ok = False
     out = []
     try:
@@ -2067,7 +2104,7 @@ def _glm_params(model, log=None):
         out = []
     _glm_params._last_ok = bool(out)
     if log and out:
-        log("GLM-4.6V-Flash 联网搜参：%d 条" % len(out))
+        log("联网搜参（glm-4.5-flash web_search）：%d 条" % len(out))
     return out[:12]
 
 
@@ -2718,6 +2755,12 @@ def _gather_info_legacy(model, log, force=0):
 
 
 
+# 已知尺寸表（2026-10-29 建）：官网/中关村都拿不到尺寸时，先查这张手工表兜底。
+# v3.0.95 删视觉链区间时误吞了本定义，2026-11-27 从 v3.0.94 原样找回。
+_KNOWN_DIMS = {
+    "BCD-360WDCL": (630, 1905, 680),
+}
+
 def _ensure_dims_legacy(info, mdir, img_urls=None, log=None):
 
     """尺寸补漏（2026-10-29 用户令）：参数里没外形尺寸、又没有官方尺寸图时，
@@ -3005,6 +3048,21 @@ def _gather_info(model, log, force=0):
             info.setdefault("props", []).extend(_add)
             if log:
                 log("说明书补缺参数 %d 条（合计 %d 条）" % (len(_add), len(info.get("props") or [])))
+    # 说明书要点并入卖点池（2026-11-27 用户令「参数卖点全部合并成一份给AI」）：
+    # _book_fetch 从说明文字节点抠出的功能要点，跟官网卖点并集喂 AI 写两份文案
+    if book and (book.get("manual") or []):
+        _sp0 = [str(x).strip() for x in (info.get("selling") or [])]
+        _sp_have = {re.sub(r"\s+", "", x) for x in _sp0}
+        _sp_add = []
+        for _m in book["manual"]:
+            _ms = str(_m).strip()
+            if len(_ms) >= 4 and re.sub(r"\s+", "", _ms) not in _sp_have:
+                _sp_add.append(_ms)
+                _sp_have.add(re.sub(r"\s+", "", _ms))
+        if _sp_add:
+            info["selling"] = _sp0 + _sp_add[:8]
+            if log:
+                log("说明书要点并入卖点池 %d 条（合计 %d 条）" % (len(_sp_add[:8]), len(info.get("selling") or [])))
     # 品类以说明书为权威（2026-11-23 用户令「品类我说过文案所有都按说明书来」）：
     # 说明书规格页的「产品类型/类别」认出品类词就覆盖旧值——C8U12G3（卡萨帝双子
     # 滚筒洗衣机）被写成「储水式电热水器」实锤，就是没人拿说明书校正。
@@ -3308,8 +3366,7 @@ def _interior_ink(im):
 
 
 def _vision_key():
-    """视觉 key（2026-11-27 视觉兜底链下马后，仅供仍存活的 AI 选主图
-    （pei_core.zhipu_pick_images/zhipu_verify_whole）、成片自检（qa_render）与
+    """视觉 key（2026-11-27 用户令「AI 选主图 + 成片自检删」后，仅供仍存活的
     pubwork 详情图读参使用）：拿 copywriter 的 GLM key（env → 本机 glm_key.txt →
     内置兜底，三级必有一份），Mac 零配置也能用。"""
     try:
@@ -4267,12 +4324,40 @@ def _manual_overrides(mdir, log):
                 log("机图：用户手工放的 %s 优先（→ product.png，跳过 AI 选图）" % os.path.basename(front))
         except Exception:
             pass
-    # ② 尺寸图：尺寸图*/尺寸*/zol_数字 优先
-    size = _find(lambda s: s.startswith(("尺寸图", "尺寸")) or re.fullmatch(r"zol_\d+", s) is not None)
+    # ② 尺寸图：尺寸图*/尺寸*/zol_数字 优先；尺寸图2（2026-11-27 用户令「像 KF70/200
+    #    有两台机器，要选两个尺寸图合并起来放」）与尺寸图同时存在 → 纵向拼接成一张再清洗
+    size = _find(lambda s: (s.startswith(("尺寸图", "尺寸")) and
+                            not s.startswith(("尺寸图2", "尺寸2"))) or
+                           re.fullmatch(r"zol_\d+", s) is not None)
+    size2 = _find(lambda s: s.startswith(("尺寸图2", "尺寸2")))
+    if size2 and not size:
+        size, size2 = size2, None       # 只选了第二张 → 直接当尺寸图用
     if size:
         si = os.path.join(mdir, "sizeimg.jpg")
-        if _clean_sizeimg(size, si) and log:
-            log("尺寸图：用户手工放的 %s 优先（清洗 → sizeimg.jpg）" % os.path.basename(size))
+        _src = size
+        if size2:
+            try:
+                _m1 = Image.open(size).convert("RGB")
+                _m2 = Image.open(size2).convert("RGB")
+                _w = max(_m1.width, _m2.width)
+                _gap = 28
+                _cv = Image.new("RGB", (_w, _m1.height + _gap + _m2.height), "white")
+                _cv.paste(_m1, ((_w - _m1.width) // 2, 0))
+                _cv.paste(_m2, ((_w - _m2.width) // 2, _m1.height + _gap))
+                _src = os.path.join(mdir, "_size2_merge.png")
+                _cv.save(_src)
+                if log:
+                    log("尺寸图：两张手选纵向合并（%s + %s）" % (os.path.basename(size), os.path.basename(size2)))
+            except Exception:
+                size2 = None
+        if _clean_sizeimg_manual(_src, si) and log:
+            log("尺寸图：用户手工放的 %s%s 优先（轻清洗整图保留 → sizeimg.jpg）" % (
+                os.path.basename(size), (" + " + os.path.basename(size2)) if size2 else ""))
+        if _src != size:
+            try:
+                os.remove(_src)
+            except Exception:
+                pass
     return ok_prod
 
 
@@ -4629,6 +4714,16 @@ _AI_KK_PROMPT = """你是闲鱼家电卖家「科科」的文案写手。产品�
 """
 
 
+# 品类主张→参数证据表（2026-11-27 KF70「烘干机标题写热水器卖点」实锤）：卖点/标题
+# 出现左列品类词而参数池找不到右列任一证据词 = 品类跑偏，整条剔除。
+_CAT_CLAIMS = [
+    (re.compile(r"烘|干衣|衣物|晾晒"), ("烘干", "干衣", "除湿", "洗涤", "洗净比")),
+    (re.compile(r"洗碗|碗筷|碗篮"), ("洗碗机", "洗净比")),
+    (re.compile(r"洗衣|脱水|洗涤"), ("洗衣", "洗净比", "洗涤", "脱水")),
+    (re.compile(r"冷藏|冷冻|保鲜"), ("冷藏", "冷冻", "保鲜")),
+]
+
+
 def _ai_kk_copy(model, brand, cat, cap, dims, pd, info, sp, log=None):
     """科科份 AI 文案（2026-11-26 用户令「所有的型号，每次抓取下的所有数据全部给AI，
     让他写两份卖点不能一样的」）：蓝底链抓完数据把全量参数喂 GLM，写科科版
@@ -4677,6 +4772,12 @@ def _ai_kk_copy(model, brand, cat, cap, dims, pd, info, sp, log=None):
         params="\n".join(_params[:80])[:3500],
         sellpoints="；".join(str(x) for x in (sp or [])[:10])[:1200] or "（没有）",
     )
+    # 2026-11-27 KF70/200-FE7CU1 实锤（用户标题写「热泵烘干机」，参数表全是热水器
+    # 证据：制热水能力/水箱/COP）——品类以参数表为权威，标题错词不许带偏卖点
+    prompt += ("\n【品类纪律】品类以参数表为权威：所有卖点必须与参数表品类一致。"
+               "若标题或品类词与参数表冲突（例：标题写烘干机，参数表是 制热水能力/水箱/"
+               "热泵制热 → 热泵热水器），一律按参数表品类写卖点，标题里的错误品类词"
+               "绝不带进卖点。\n")
     try:
         # 2026-11-27 用户令：科科文案切硅基 GLM-Z1-9B-0414（与东星斑份同模型不同人设）
         raw = _cw._z1_chat(prompt)
@@ -4765,6 +4866,15 @@ def _ai_kk_copy(model, brand, cat, cap, dims, pd, info, sp, log=None):
                     log("科科卖点防编剔除（名词无据）：%s" % _p)
                     _bad = True
         if not _bad:
+            # 品类证据闸（2026-11-27 KF70 实锤「一家五口的衣物轻松装下」——热水器参数池
+            # 零烘干证据，AI 跟着用户标题「烘干机」跑偏）：整句品类主张词必须有参数池
+            # 证据才放行，没证据=品类跑偏，整条剔。
+            for _cre, _ev in _CAT_CLAIMS:
+                if _cre.search(_p) and not any(e in _fact_txt for e in _ev):
+                    log("科科卖点品类闸剔除（%s 无参数证据）：%s" % (_ev[0], _p))
+                    _bad = True
+                    break
+        if not _bad:
             _pts_ok.append(_p)
     points = _pts_ok
     if len(points) < 4:
@@ -4828,6 +4938,15 @@ def _ai_kk_copy(model, brand, cat, cap, dims, pd, info, sp, log=None):
                 points = _pts
     except Exception:
         pass
+    # AI 标题同过品类闸（用户标题错词 AI 别照抄成自己的标题；全剔=回退模板链）
+    _tts_ok = []
+    for _t in titles:
+        if any(_cre.search(_t) and not any(e in _fact_txt for e in _ev)
+               for _cre, _ev in _CAT_CLAIMS):
+            log("科科标题品类闸剔除：%s" % _t)
+            continue
+        _tts_ok.append(_t)
+    titles = _tts_ok
     log("AI 科科份：%d 条标题 + %d 条卖点（买家利益种草体）%s"
         % (len(titles), len(points), "+ 参数 %d 条" % len(_ai_rows) if _ai_rows else ""))
     return {"titles": titles, "points": points, "rows": _ai_rows}
@@ -5586,8 +5705,12 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
             if _sv:
                 size_pills.append("%s %s" % (_lab, re.sub(r"[^0-9*×.]", "", _sv).replace("*", " × ") + (" mm" if re.search(r"\d", _sv) else "")))
     sp = [str(x).strip() for x in pei_core.sellpoints(info) if str(x).strip()]
-    if not sp:
-        sp = [str(x).strip() for x in (info.get("selling") or []) if str(x).strip()]
+    # 2026-11-27 用户令「参数卖点全部合并成一份给AI」：info["selling"]（说明书要点/
+    # 联网搜参 selling）与参数提炼卖点并集去重，全喂 _ai_kk_copy
+    _sp_extra = [str(x).strip() for x in (info.get("selling") or []) if str(x).strip()]
+    for _sx in _sp_extra:
+        if _sx not in sp:
+            sp.append(_sx)
     # 卖点硬货化（2026-10-23 用户拍板样板口径）：img3 格子与文案区共用同一来源
     hard = _hard_points(info, pd, sp)
     # 2026-11-26 用户令「所有的型号，每次抓取下的所有数据全部给AI，让他写两份卖点
@@ -5641,6 +5764,10 @@ def _build_cfg(info, prod_size_ok=True, mdir=None, ai_dims=None, log=None):
         for s_ in (sp or [])[:8]:
             nm = re.split(r"[，,]", str(s_))[0].strip()
             nm = re.sub(r"(动力|功能|设计)$", "", nm)
+            # 说明书「安装注意事项」长句碎片不许进 pills（2026-11-27 KF70 实锤
+            # 「热水器安装时」上卡）：含警告/安装/电路类词的一律不要
+            if re.search(r"安装|注意|必须|禁止|严禁|电源|插座|断路|线路|漏电", nm):
+                continue
             if 2 <= len(nm) <= 7 and nm not in fpills:
                 fpills.append(nm)
             if len(fpills) >= 6:
@@ -5840,17 +5967,6 @@ def _spot_out_dir(model):
         return ""
 
 
-def _qa_blue(model, info, mdir, cfg, points, prod, log):
-    """蓝底四张 AI 复检（2026-10-29 用户令「蓝底也要接上」）：与聚光同一套
-    pei_core.qa_render 视觉质检（商汤优先→GLM 兜底，无 key 静默跳过不挡出货）。
-    压字/截断/出画等确定性布局问题用保守档（字号各缩一档）重渲该张一次；
-    风格/破图等需人工的只记日志。只复检一轮，不循环烧额度。
-
-    2026-11-14 用户令「把 AI 复检去掉」：成片复检拦不住烂图（ES50H-CK3(1) 老图实锤），
-    还白烧视觉额度 → 停用。函数保留，要恢复把下面这行 return 删掉即可。"""
-    return
-
-
 def sync_blue4_size(model, info, log=None):
     """蓝底 img_4 时间线对账：官方尺寸图比蓝底成品后到（聚光/ZOL 链路抓到的）时，
     蓝底参数图还是手绘旧版——按 mtime 自动重出（XQS100-BZ60E/CXW-258-C2910 实锤：
@@ -6022,7 +6138,7 @@ def _rerender_cached(model, mdir, old, log):
     _render_img3(cfg, points, os.path.join(bdir, "img_3.jpg"))
     _p("渲染 4/4 尺寸图…")
     _render_img4(cfg, os.path.join(bdir, "img_4.jpg"), prod)
-    # 2026-11-14 用户令：成片 AI 复检停用（_qa_blue 内部已 return），这里连进度条也不报
+    # 2026-11-27 用户令「AI 选主图 + 成片自检删」：成片复检整体下马，连进度条也不报
     _p("聚光尺寸图对账…")
     try:
         sync_spot_size(model, None, log)
@@ -6049,6 +6165,129 @@ def _rerender_cached(model, mdir, old, log):
     except Exception:
         pass
     return res
+
+
+def _pkey(k):
+    # 跨源键名归一（2026-11-24 引入口径）：剥括号段+空格再比——
+    # 官网「总容积(L)」vs 说明书「总容积」语义同键不重复收
+    return re.sub(r"[（(].*?[)）]", "", str(k)).replace(" ", "").strip()
+
+
+# 跨品类参数污染闸（2026-11-27 KF70/200-FE7CU1 实锤：联网搜参把烘干机的
+# 「循环风量 600m³/h」并进热泵热水器参数池，AI 照着写「烘得更均匀」）。
+# 左列=本机品类证据（既有参数键/值里命中即认），右列=该品类绝不该收的外类专属键。
+_CAT_POLLUTE = (
+    (re.compile(r"制热水|热泵制热|性能系数|COP|额定水压|电辅热|水箱"),
+     re.compile(r"烘干|干衣|洗净比|洗涤容量|除湿量|循环风量|碗|脱水率|洗净")),
+    (re.compile(r"洗净比|洗涤容量|脱水|洗衣"),
+     re.compile(r"制热水|热泵制热|性能系数|额定水压|电辅热|冷藏|冷冻|保鲜")),
+    (re.compile(r"冷藏|冷冻|保鲜"),
+     re.compile(r"制热水|热泵制热|洗净比|洗涤容量|烘干|除湿量|循环风量")),
+)
+
+
+def _cat_conflict(ks, props):
+    """新参数键 ks 是否与既有参数池品类冲突（冲突=拒收）。"""
+    _ev_txt = "".join(str(k) + str(v) for k, v in (props or []))
+    for _ere, _vre in _CAT_POLLUTE:
+        if _ere.search(_ev_txt) and _vre.search(str(ks)):
+            return True
+    return False
+
+
+def _pool_merge_extra(model, info, log=None):
+    """官网/说明书之外的参数并入主池（2026-11-27 用户令「官网说明书欣盛抓到的参数
+    卖点全部合并成一份给AI写文案、出参数卡」）：
+    ① 欣盛详情图读参（视觉调用 85s 起步，读一次缓存 _xs_read_params.json 复用；
+       详情图目录还没图时跳过且不记负缓存——选完图重文案时再试）；
+    ② 联网搜参（glm-4.5-flash 挂 web_search 真联网，白名单闸防编；空手 7 天负缓存）。
+    全部补缺键不覆盖；_ai_kk_copy 全量参数池与参数卡 rows（规则/AI 挑选）自动吃到。"""
+    log = log or (lambda s: None)
+    if info is None:
+        info = {}
+    props = info.setdefault("props", [])
+    _mdir = model_dir(model)
+
+    def _merge(rows, tag):
+        _n = 0
+        _have = {_pkey(k) for k, _v in props}
+        for k, v in (rows or []):
+            ks, vs = str(k).strip(), str(v).strip()
+            if ks and vs and _pkey(ks) not in _have:
+                # 跨品类污染闸（2026-11-27 KF70 实锤）：已有参数品类证据强时，
+                # 外品类专属键拒收，不给 AI 半点跑偏素材
+                if _cat_conflict(ks, props):
+                    if log:
+                        log("并池污染闸拒收（外品类键）：%s" % ks)
+                    continue
+                props.append((ks, vs))
+                _have.add(_pkey(ks))
+                _n += 1
+        if _n and log:
+            log("%s并入参数池：%d 条（合计 %d 条）" % (tag, _n, len(props)))
+        return _n
+
+    # ① 欣盛详情图读参（结果缓存：视觉链只跑一次）
+    _rp = os.path.join(_mdir, "_xs_read_params.json")
+    rows = None
+    if os.path.isfile(_rp):
+        try:
+            with io.open(_rp, encoding="utf-8") as f:
+                rows = json.load(f) or []
+        except Exception:
+            rows = None
+    if rows is None:
+        _any = False
+        for _d in ("欣盛", "官网"):
+            _dd = os.path.join(_mdir, _d)
+            try:
+                if os.path.isdir(_dd) and any(
+                        f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+                        and not f.startswith("_")
+                        and not any(w in f for w in ("主图", "尺寸图", "手选"))
+                        for f in os.listdir(_dd)):
+                    _any = True
+                    break
+            except Exception:
+                pass
+        if not _any:
+            if log:
+                log("欣盛读参跳过（详情图目录还没图，选完图重文案时会并入）")
+            rows = []
+        else:
+            try:
+                try:
+                    _xs = fetch_xinsheng(model, log)
+                except Exception:
+                    _xs = None
+                rows = _xs_img_params(model, _xs, log) or []
+                try:
+                    with io.open(_rp, "w", encoding="utf-8") as f:
+                        json.dump(rows, f, ensure_ascii=False)
+                    if log:
+                        log("欣盛读参结果已缓存（下次秒用，删 _xs_read_params.json 可重读）")
+                except Exception:
+                    pass
+            except Exception as e:
+                if log:
+                    log("欣盛读参失败：%r" % (e,))
+                rows = []
+    _merge(rows, "欣盛读参")
+    # ② 联网搜参（空手 7 天负缓存，与 legacy 链同 key）
+    if not _neg_get(_mdir, "glm_params"):
+        try:
+            _gp = _glm_params(model, log) or []
+        except Exception as e:
+            if log:
+                log("联网搜参失败：%r" % (e,))
+            _gp = []
+        if _gp:
+            _merge(_gp, "联网搜参")
+        else:
+            _neg_set(_mdir, "glm_params")
+            if log:
+                log("联网搜参没有结果（已记住，7 天内不再重复找）")
+    return info
 
 
 def generate(model, force=0, log=None, chain="book", copyonly=0, pickdone=0, skipsize=0,
@@ -6181,7 +6420,7 @@ def generate(model, force=0, log=None, chain="book", copyonly=0, pickdone=0, ski
                     info["props"] = zprops
             info, img_urls = _ensure_dims_legacy(info, mdir, img_urls, log)
         else:
-            log("抓参数/机图（官网→说明书）…")
+            log("抓参数/机图（顺序：官网→说明书站→欣盛，限速潜行中）…")
             # copyonly=1：参数重抓（文案重出要新数据），图源不强制（选图层短路不换主图）
             info, img_urls = _gather_info(model, log, force=1 if (force and not copyonly) else 0)
             # 尺寸补漏（2026-10-29 用户令「一个机器怎么可能没有尺寸」；2026-11-23 新链：
@@ -6247,6 +6486,10 @@ def generate(model, force=0, log=None, chain="book", copyonly=0, pickdone=0, ski
                                    % "、".join(_miss)}
                 prod = _prod2
     log("组装套图数据…")
+    # 2026-11-27 用户令「官网说明书欣盛抓到的参数卖点全部合并成一份给AI写文案
+    # 还有给出图的」：欣盛详情图读参+联网搜参在此并池（图已落盘，读参有料可看），
+    # _ai_kk_copy 全量参数池与参数卡 rows 自动吃到。
+    _pool_merge_extra(model, info, log)
     # 2026-11-24 用户令「别一张一张问 AI」：这里原来为给 img4 印「宽×高×深」两个数字，
     # 每次出图都问一次视觉 AI（Qwen 限流时 45s→180s+ 卡死实锤）。改成纯本地 OCR：
     # 只认带「宽/高/深」标签的数字；读不出就不印 pill（官方尺寸图上本来就有图注）。
@@ -6502,7 +6745,7 @@ def regen_one(model, n, log=None):
         apply_water(bdir)
     except Exception:
         pass
-    # 2026-11-14 用户令：单张也不再跑成片复检（_qa_blue 已停用）
+    # 2026-11-27 用户令「成片自检删」：单张也不再跑成片复检
     return {"ok": True, "n": n, "file": out, "blur": blur_warn(bdir)}
 
 

@@ -1719,7 +1719,7 @@ def pick_images(src_dir, cat=None):
     # 场景：关键词命中的实景照（带底也行），否则 None（img6 回退产品）。
     # 注意：不要用裸编号 "16" 当场景关键词——同编号在不同机型含义不同
     # （洗衣机 16.jpg 是内部结构渲染图，冰箱 16.jpg 才是厨房实景），离线无法分辨，
-    # 真正按内容挑实景照交给「AI 视觉选图」(generate 内 zhipu_pick_images)。
+    # 真正按内容挑实景照的「AI 视觉选图」已下马（2026-11-27 用户令），场景只认文件名关键词。
     scene = None
     for f in imgs:
         n = f.stem.lower()
@@ -2101,35 +2101,8 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
         front_f, angle_f, open_f, scene_f = pick_images(src_dir, cat=GEN_CAT)
         if not front_f:
             raise RuntimeError("素材目录没有可用的图片：%s" % src_dir)
-
-        # AI 视觉选图（有 key 时）：按内容挑真实实景照、纠正规则选图误判
-        # （如洗衣机 16.jpg 实为内部结构渲染图，规则选图误当场景；视觉模型能识别并排除）
-        ai_pick = None
-        if api_key and core is not None:
-            try:
-                ai_pick = core.zhipu_pick_images(api_key, src_dir, P.get("kind"))
-            except Exception:
-                ai_pick = None
-        if ai_pick:
-            def _vc(fn):
-                fp = Path(src_dir) / fn
-                return fp if (fp.exists() and _is_cutout(fp) and not _is_junk_cut(fp)) else None
-            def _vs(fn):
-                fp = Path(src_dir) / fn
-                return fp if (fp.exists() and _is_photo(fp)) else None
-            if ai_pick.get("front"):
-                front_f = _vc(ai_pick["front"]) or front_f
-            if ai_pick.get("angle"):
-                angle_f = _vc(ai_pick["angle"]) or angle_f
-            if ai_pick.get("open"):
-                open_f = _vc(ai_pick["open"]) or open_f
-            if ai_pick.get("scene"):
-                scene_f = _vs(ai_pick["scene"])
-            # 场景页标题随 AI 认出的真实场景走（阳台实拍 / 厨房实拍 / ...）
-            if ai_pick.get("scene_label"):
-                P["r_title"] = ai_pick["scene_label"]
-                if ai_pick.get("scene_sub"):
-                    P["r_sub"] = ai_pick["scene_sub"]
+        # 2026-11-27 用户令「AI 选主图删」：AI 视觉选图（zhipu_pick_images）整体下马，
+        # 只留规则选图 pick_images——蓝底选过的 product.png 优先口径不变。
 
     # 无真实实景照：回退「产品摆影棚」，标题不可用「阳台/厨房实拍」误导，改用中性「产品实拍」
     if not scene_f:
@@ -2210,116 +2183,6 @@ def generate(info, src_dir, out_dir, version="N", sell_price=None, bg_dir=None,
             paths.append(sheet)
     step(100, "套图已生成")
     return paths
-
-
-# ================= 自动优化（仅确定性布局类） =================
-# 自检(qa_render) 只出报告；这里把报告里的「确定性布局类」问题自动修掉：
-#   · text_overlap 文字压住机器/重叠  -> 缩小机器 + 略缩字号，腾出四周安全边距
-#   · product_clip  机器被画布裁掉     -> 缩小机器 + 下移顶部安全边距
-#   · text_clip     文字被截断/溢出     -> 缩小字号
-# 通过 tune 微调后只重渲出问题的槽位(slots)，不动其它张；复检(需 key)确认干净或达轮数上限。
-# AI/画质类（style_mismatch 风格不统一 / broken 破图 / text_mismatch 图文不符）标「需人工」，不处理。
-_QA_DET = {"text_overlap", "text_clip", "product_clip"}
-
-
-def _infer_code(issue):
-    """模型没回 code 时，从中文 issue 反推确定性布局类代码（否则归为需人工）。"""
-    t = issue or ""
-    if any(k in t for k in ("压", "重叠", "盖住", "挡住", "压住")):
-        return "text_overlap"
-    if any(k in t for k in ("裁", "缺边", "缺角", "被切", "切掉", "出画")):
-        return "product_clip"
-    if any(k in t for k in ("截断", "溢出", "出界", "太长", "放不下")):
-        return "text_clip"
-    return None
-
-
-def auto_optimize(api_key, info, src_dir, out_dir, style, issues,
-                  rounds=2, progress=None, log=None, skip_scale_slots=()):
-    """issues: qa_render 返回的问题列表（含 slot/issue/severity/code）。
-    返回 dict: {"fixed":[槽位], "remaining":[仍需人工的 issue], "tune":{...}, "rounds": n}。
-    skip_scale_slots：不许做缩放修复的槽位（尺寸图）。2026-11-10 用户令——
-    尺寸图缩小会让标注的毫米数字跟着变小，反而更看不清，出画该换图不是缩机器。
-    无 key 时仍按给定 issues 应用一轮保守微调（无法复检）。"""
-    def step(p, m):
-        if progress:
-            try:
-                progress(p, m)
-            except Exception:
-                pass
-
-    def lg(s):
-        if log:
-            try:
-                log(s)
-            except Exception:
-                pass
-
-    det, skipped = [], []
-    for it in (issues or []):
-        code = it.get("code") or _infer_code(it.get("issue"))
-        if code in _QA_DET and "slot" in it:
-            if code == "product_clip" and it["slot"] in (skip_scale_slots or ()):
-                skipped.append(it)
-                lg("  第 %s 张是尺寸图，不参与缩放修复（缩了标注数字更小），如真出画请换图"
-                   % it["slot"])
-                continue
-            det.append({"slot": it["slot"], "code": code,
-                        "issue": it.get("issue"), "severity": it.get("severity")})
-    if not det:
-        if skipped:
-            lg("自检只报了尺寸图的缩放类问题，不处理；其余无确定性布局问题")
-        else:
-            lg("自检无确定性布局类问题，无需自动优化")
-        return {"fixed": [], "remaining": [i for i in (issues or []) if i not in skipped],
-                "tune": {}, "rounds": 0}
-
-    affected = sorted(set(d["slot"] for d in det))
-    cur = {"machine_scale": 1.0, "top_pad": 0, "font_scale": 1.0}
-    remaining = list(issues or [])
-    done = 0
-    for r in range(max(1, rounds)):
-        done = r + 1
-        for d in det:
-            sev = d.get("severity")
-            f = 0.95 if sev == "高" else (0.97 if sev == "中" else 0.985)
-            if d["code"] == "text_overlap":
-                cur["machine_scale"] *= f
-                cur["font_scale"] *= 0.98
-            elif d["code"] == "product_clip":
-                cur["machine_scale"] *= (f - 0.02)
-                cur["top_pad"] += 10
-            elif d["code"] == "text_clip":
-                cur["font_scale"] *= f
-        # 2026-11-10 用户令：日志要能看出到底改了什么，不能只说「修了第几张」
-        lg("  第 %d 轮微调参数：机器×%.3f 字号×%.3f 顶部边距+%dpx（重渲第 %s 张）"
-           % (r + 1, cur["machine_scale"], cur["font_scale"], cur["top_pad"],
-              sorted(set(d["slot"] for d in det))))
-        step(20 + r * 30, "按自检结果微调重渲 第 %d/%d 轮 ..." % (r + 1, rounds))
-        paths = generate(info, src_dir, out_dir, style=style, slots=affected,
-                         tune=dict(cur), overview=False, api_key=api_key,
-                         progress=progress)
-        if not api_key or core is None:
-            lg("无 AI key，无法复检；已应用一轮微调")
-            # 无 key 无法复检，但确定性类已尝试修复，只把非确定性（需人工）项列为 remaining
-            remaining = [x for x in (issues or [])
-                         if (x.get("code") or _infer_code(x.get("issue"))) not in _QA_DET]
-            break
-        new = core.qa_render(api_key, paths, info)
-        if not new:                      # 复检无问题
-            remaining = []
-            break
-        det2 = [x for x in new
-                if (x.get("code") or _infer_code(x.get("issue"))) in _QA_DET
-                and x["slot"] in affected]
-        if not det2:                    # 确定性类已清，剩下的是需人工的
-            remaining = [x for x in new
-                         if (x.get("code") or _infer_code(x.get("issue"))) not in _QA_DET]
-            break
-        det = det2
-        remaining = new
-    lg("自动优化完成：修 %s，余 %d 项需人工" % (affected, len(remaining)))
-    return {"fixed": affected, "remaining": remaining, "tune": cur, "rounds": done}
 
 
 if __name__ == "__main__":

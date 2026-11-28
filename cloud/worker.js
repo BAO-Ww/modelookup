@@ -1876,24 +1876,30 @@ async function route(request, env, path, ctx) {
 
   // POST /kitdel?k=<型号>/<子目录/文件名> 删单键；?prefix=<型号>/ 删前缀下全部（上限 1000）。
   // 2026-11-20：串型号脏图清库用（335WLLFDEDBXU1 R2 46 张脏官网图）。仅管理号。
+  // 2026-11-27 用户令「把 R2 上面的全部删除掉」：?all=1 清空整个桶（宝链已砍 R2 层，桶里全是旧缓存）。
   if (path === "/kitdel" && (request.method === "POST" || request.method === "GET")) {
     if (!env.IMG) return jerr("图库未启用（worker 缺 IMG binding）", 503);
     const usersDel = await getUsers(env);
     if ((usersDel[who] || {}).role !== "admin") return jerr("只有管理号能删图", 403);
+    const all = url.searchParams.get("all") === "1";
     const prefix = url.searchParams.get("prefix") || "";
     const k1 = url.searchParams.get("k") || "";
-    if (!prefix && !k1) return jerr("缺 k 或 prefix 参数", 400);
+    if (!all && !prefix && !k1) return jerr("缺 k 或 prefix 参数", 400);
     let n = 0;
-    if (k1) {
+    if (k1 && !all) {
       await env.IMG.delete(k1);
       n = 1;
     } else {
       let cursor;
+      const _pre = all ? undefined : prefix;
       do {
-        const lst = await env.IMG.list({ prefix, limit: 1000, cursor });
-        for (const o of (lst.objects || [])) { await env.IMG.delete(o.key); n++; }
+        const lst = await env.IMG.list({ prefix: _pre, limit: 1000, cursor });
+        // R2 delete 支持一次最多 1000 键的批量删除，比逐键快一个量级
+        const keys = (lst.objects || []).map(o => o.key);
+        if (keys.length) await env.IMG.delete(keys);
+        n += keys.length;
         cursor = lst.truncated ? lst.cursor : undefined;
-      } while (cursor && n < 5000);
+      } while (cursor && n < 100000);
     }
     return J({ ok: true, deleted: n });
   }

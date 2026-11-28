@@ -663,6 +663,10 @@ mark.hlm{background:#fff3bf;color:inherit;padding:0 1px;border-radius:3px}
         <button class="chip" id="extwall">图片墙</button>
         <button class="chip" id="extjobs">后台任务</button>
         <button class="chip" id="extdiag" data-exdiag="1" title="云端体检：数据新鲜度 + 抓取流水 + 健康分（只有管理号能看）">云端体检</button>
+        <!-- 2026-11-27 用户令「给我一个按键，清理缓存出的，全部重新出」：清全部文案缓存+
+             每型号缓存（手选图/主图/说明书/抓取归档图保留），然后所有型号 force=1 重出。
+             服务端 /api/kitflush 仅管理号；后台 jobman 跑，任务面板可取消。 -->
+        <button class="chip" id="kitflushbtn" title="清掉全部文案缓存和抓取缓存（手选图/主图/说明书/抓取图保留），然后所有型号全部重新出——仅管理号，耗时较长，中途任务面板可取消">清缓存重出</button>
         <!-- 2026-10-31 22:03 用户令：变更日志 / 嫌疑价 / 表格视图 三个功能下线（入口与快捷键一并撤） -->
         <button class="chip" id="extver">更新日志</button>
         <button class="chip" id="extwater">水印</button>
@@ -4186,9 +4190,8 @@ function renderItem(it){
     + '<span class="acts">'
     + (!svRO && (!SUBVIEW || SUBVIEW.u === '0' || svInfo) ? '<button class="markbtn" data-mark="' + esc(it.c) + '">' + ((marked || svInfo) ? '取消发布' : '标记已发布') + '</button>' : '')
     + (pok('calc') ? '<button class="copy" data-copy="' + it._uid + '">复制</button>' : '')
-    + (pok('tbyp') ? '<button class="copy" data-tbdoc="' + esc(it.c) + '" data-tbkind="' + esc(it.k || 'z') + '" title="打开配文：型号一键出图出文案（独立权限，管理号决定给谁用）">配文</button>' : '')
-    + (pok('tbyp') ? '<button class="copy" data-whiteview="' + esc(it.c) + '" title="婷套图（独立工具）：同一张首图换底色/字色——蓝底白字、紫底白字两个，不动本家蓝底；显示开关「婷」控制这个入口">婷</button>' : '')
     + (pok('kitset') ? '<button class="copy" data-baodoc="' + esc(it.c) + '" title="宝套图（独立工具）：蓝底四张 + 暗角聚光四张，一个窗里全看到">宝</button>' : '')
+    + (_adm && pok('kitset') ? '<button class="copy" data-kitflush="' + esc(it.c) + '" title="只清这台的抓取/文案缓存并全部重出（手选图/主图/说明书/抓取图保留，约1-3分钟，仅管理号）">清缓存重出</button>' : '')
     + '<button class="markbtn gw" data-gwview="' + esc(it.c) + '" title="打开这台机器对应的官网产品页（没记录就用必应搜型号）">官网</button>'
     + '</span></div>'
     + '<div class="tags">'
@@ -4204,7 +4207,7 @@ function renderItem(it){
     /* 电机胶囊进徽章行（2026-11-10 用户令「把这个放到这里」）：跟在全新机/滞销标签后面 */
     + (motorHTML ? motorHTML : '')
     + '</div>'
-    + (nm ? '<div class="nm">' + hl(nm) + '</div>' : '')
+    + (nm ? '<div class="nm" data-nmcopy="' + esc(nm) + '" title="点一下复制标题" style="cursor:pointer">' + hl(nm) + '</div>' : '')
     + exTagsHTML(it.c)
     + '</div></div>'
     + (pok('calc') ? calcHTML(it) : '')
@@ -6100,489 +6103,6 @@ function pollJob(key, onDone, onErr, tick){
   return timer;
 }
 
-/* ================= 蓝底套图（2026-10-21，独立第三工具） ================= */
-/* 白字首图（2026-11-03 用户令：卡片按钮行独立入口，不塞配文窗）——
-   同蓝底机图与文字，只换首图胶囊/下划线底色：蓝底白字（同本家）、紫底白字。
-   走 /api/kitwhite（jobman），产物在 peiwork/<型号>/白字/，图走 /pubimg 预览 */
-function openWhiteView(k){
-  var old = document.getElementById('whiteview'); if (old) old.remove();
-  var wrap = document.createElement('div'); wrap.id = 'whiteview';
-  wrap.style.cssText = 'position:fixed;inset:0;background:#f7f7f5;z-index:70;display:flex;flex-direction:column;font-size:13px;color:#1c1e22';
-  wrap.innerHTML =
-    '<div style="display:flex;align-items:baseline;gap:10px;padding:8px 16px;background:#1c1e22;color:#e8eaee;flex:0 0 auto">'
-    +   '<b style="font-size:14px">婷套图</b>'
-    +   '<span style="font-size:12px;color:#8a929e">' + esc(k) + '</span>'
-    +   '<span style="font-size:11.5px;color:#8a929e">同蓝底机图与文案，胶囊微改换色；不动本家蓝底</span>'
-    +   '<span style="flex:1"></span>'
-    +   '<button id="wv_folder" title="打开这个型号的图片总文件夹" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;cursor:pointer">型号文件夹</button>'
-    +   '<span id="wv_msg" style="font-size:11.5px;color:#9fe0a8"></span>'
-    +   '<button id="wv_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
-    + '</div>'
-    + '<div style="flex:1;overflow:hidden;padding:12px 16px;display:flex"><div style="max-width:1760px;margin:0 auto;width:100%;display:flex;gap:10px;align-items:stretch;min-height:0">'
-    +   /* 2026-11-26 用户令「宝跟婷所有布局都一样」：婷窗改宝窗同款三列横排——
-           列1 蓝底白字四张 / 列2 紫底白字四张 / 列3 文案；栏头按键排+样式值抄宝窗 */
-      '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
-    +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
-    +       '<b style="font-size:13px;color:#1d4ed8">蓝底白字</b>'
-    +       '<span style="flex:1"></span>'
-    +       '<button data-wvopen="blue" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
-    +       '<button data-wvpick="blue" title="铺出抓到的全部候选图，点选主图/尺寸图；面板关了随时点这里重开（同宝窗）" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">选图</button>'
-    +       '<button data-wvregen="blue" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
-    +     '</div>'
-    +     '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="wv_grid_blue"></div>'
-    +   '</div>'
-    +   '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
-    +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
-    +       '<b style="font-size:13px;color:#6d28d9">紫底白字</b>'
-    +       '<span style="flex:1"></span>'
-    +       '<button data-wvopen="purple" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
-    +       '<button data-wvpick="purple" title="铺出抓到的全部候选图，点选主图/尺寸图；面板关了随时点这里重开（同宝窗）" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">选图</button>'
-    +       '<button data-wvregen="purple" style="border:1px solid #c7d2fe;background:#eef2ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
-    +     '</div>'
-    +     '<div style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="wv_grid_purple"></div>'
-    +   '</div>'
-    +   '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
-    +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto">'
-    +       '<b style="font-size:13px;color:#1d4ed8">文案（同配文一套）</b>'
-    +       '<span style="font-size:11px;color:#9a9ea6">话术版本 · 标题三选一 · 商品描述</span>'
-    +     '</div>'
-    +     '<div id="wv_copy" style="font-size:11.5px;color:#8a929e;flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column">加载中…</div>'
-    +   '</div>'
-    + '</div>'
-    + '</div></div>';
-  document.body.appendChild(wrap);
-  wrap.querySelector('#wv_close').addEventListener('click', function(){ wrap.remove(); });
-  function wvImg(tone, n){ return '/pubimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('白字') + '/' + encodeURIComponent(tone === 'blue' ? '蓝底' : '紫底') + '/img_' + n + '.jpg'; }
-  var NUMS = ['①','②','③','④'], LBS = ['主图','参数','卖点','尺寸'];
-  /* 图片区（2026-11-03 用户令：参考配文窗图片区——四张方形缩略图网格 + 左上角序号角标，点图看大图） */
-  function wvShow(){
-    ['blue', 'purple'].forEach(function(tone){
-      var g = wrap.querySelector('#wv_grid_' + tone);
-      if (!g) return;
-      g.innerHTML = '';
-      var _c = (tone === 'purple' ? '#6d28d9' : '#1d4ed8');
-      for (var n = 1; n <= 4; n++){
-        (function(nn){
-          /* 2026-11-03 用户令：格子缩到图片实际大小（正方形=行高），不留空底；
-             多余空间留在格子外面（列间距），格子内不再有大片空白 */
-          var cell = document.createElement('div');
-          cell.style.cssText = 'position:relative;width:100%;height:100%;background:#f7f8fa;border:1px solid #eceef2;border-radius:10px;overflow:hidden;cursor:zoom-in';
-          cell.title = (tone === 'blue' ? '蓝底白字' : '紫底白字') + ' · ' + LBS[nn-1] + '（点开看大图）';
-          var badge = document.createElement('div');
-          badge.textContent = nn;
-          badge.style.cssText = 'position:absolute;left:6px;top:6px;z-index:2;min-width:20px;height:20px;padding:0 5px;border-radius:6px;background:' + _c + ';color:#fff;font-size:11.5px;font-weight:700;line-height:20px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.25)';
-          cell.appendChild(badge);
-          var miss = document.createElement('div');
-          miss.textContent = '未生成';
-          miss.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;color:#b4b9c2';
-          cell.appendChild(miss);
-          var im = document.createElement('img');
-          im.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none';
-          im.onload = function(){ miss.style.display = 'none'; im.style.display = 'block'; };
-          im.onerror = function(){ im.style.display = 'none'; miss.style.display = 'flex'; };
-          im.src = wvImg(tone, nn) + '?t=' + Date.now();
-          cell.appendChild(im);
-          var cap = document.createElement('div');
-          cap.textContent = LBS[nn-1];
-          cap.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:3px 0;background:linear-gradient(transparent,rgba(0,0,0,.55));color:#fff;font-size:10.5px;text-align:center;letter-spacing:.5px';
-          cell.appendChild(cap);
-          cell.addEventListener('click', function(){ wvZoom(tone, nn); });
-          g.appendChild(cell);
-        })(n);
-      }
-    });
-  }
-  /* 2026-11-05 Mac 修复：同宝窗——WebKit 把 max-content 列里 aspect-ratio 格子的
-     最大内容贡献算成 0，四张缩略图会全叠在一起。改成 JS 给像素轨道。 */
-  function wvFit(){
-    var tones = ['blue', 'purple'], cell = 0, card0 = null;
-    for (var i = 0; i < 2; i++){
-      var g0 = wrap.querySelector('#wv_grid_' + tones[i]);
-      if (!g0) return;
-      card0 = g0.parentNode;
-      var hd0 = card0.children[0];
-      var availH0 = card0.clientHeight - hd0.offsetHeight - 8 - 26;
-      if (availH0 < 100) return;
-      var c0 = Math.floor((availH0 - 6) / 2);
-      if (!cell || c0 < cell) cell = c0;
-    }
-    /* 2026-11-26 用户截图实锤「图片太大铺满整页互相叠压」：宽度上限改按真实列宽
-       （三等分列，扣卡内边距28+格距6），不再用旧两列时代的 0.52 屏宽系数——
-       那系数放行 ~350px 格子，网格比列宽宽出一倍，直接溢出卡片盖住邻列。
-       列宽不钉死（flex:1 三等分），网格居中，密度跟宝窗缩略图一致。 */
-    var maxByWidth = Math.floor((card0.clientWidth - 28 - 6) / 2);
-    if (cell > maxByWidth) cell = maxByWidth;
-    if (cell < 60) cell = 60;
-    var w = cell * 2 + 6;
-    tones.forEach(function(t){
-      var g = wrap.querySelector('#wv_grid_' + t);
-      if (!g) return;
-      g.style.gridTemplateColumns = 'repeat(2,' + cell + 'px)';
-      g.style.gridTemplateRows = 'repeat(2,' + cell + 'px)';
-      g.style.width = w + 'px';
-      g.style.margin = '0 auto';
-    });
-  }
-  function wvRefit(){ wvFit(); requestAnimationFrame(wvFit); }
-  window.addEventListener('resize', wvRefit);
-  function wvZoom(tone, n){
-    var old = document.getElementById('wv_zoom'); if (old) old.remove();
-    var z = document.createElement('div'); z.id = 'wv_zoom';
-    z.style.cssText = 'position:fixed;inset:0;background:rgba(14,18,26,.8);z-index:90;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
-    z.innerHTML = '<div style="display:flex;flex-direction:column;gap:8px;align-items:center">'
-      + '<div style="color:#e8eaee;font-size:12.5px;font-weight:600">' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + ' · ' + NUMS[n-1] + ' ' + LBS[n-1] + '<span style="font-weight:400;color:#9aa3b0;margin-left:10px">点任意处关闭</span></div>'
-      + '<img src="' + wvImg(tone, n) + '?t=' + Date.now() + '" style="max-width:84vw;max-height:82vh;border-radius:12px;display:block;background:#fff"></div>';
-    z.addEventListener('click', function(){ z.remove(); });
-    document.body.appendChild(z);
-  }
-  function wvOpenFolder(tone){
-    /* 2026-11-03 用户令：蓝/紫分文件夹——带 tone 开对应子文件夹，不带开 白字\ 根 */
-    try { fetch('/api/kitwhite?model=' + encodeURIComponent(k) + (tone ? '&tone=' + tone : '') + '&open=1'); } catch (e) {}
-  }
-  var TB = null, shipMode = 'nat';
-  function renderTbCopyEmpty(){
-    wrap.querySelector('#wv_copy').innerHTML = '<span style="color:#9a9ea6">这个型号还没有配文文案——生成跑完（或到「配文」里打开一次）这里就有。</span>';
-  }
-  function renderTbCopy(){
-    var box = wrap.querySelector('#wv_copy');
-    if (!TB){ renderTbCopyEmpty(); return; }
-    var h2 = '<div style="flex:0 0 auto">';
-    h2 += '<div style="display:flex;gap:8px;margin-bottom:10px">'
-      + '<div data-wship="nat" style="flex:1;text-align:center;padding:6px;border:1px solid ' + (shipMode==='nat'?'#185fa5':'#d1d5db') + ';border-radius:8px;background:' + (shipMode==='nat'?'#185fa5':'#fff') + ';color:' + (shipMode==='nat'?'#fff':'#1f2328') + ';font-weight:600;cursor:pointer">全国版<br><span style="font-size:11.5px;font-weight:400;opacity:.85">可发货地区：全国</span></div>'
-      + '<div data-wship="rep" style="flex:1;text-align:center;padding:6px;border:1px solid ' + (shipMode==='rep'?'#185fa5':'#d1d5db') + ';border-radius:8px;background:' + (shipMode==='rep'?'#185fa5':'#fff') + ';color:' + (shipMode==='rep'?'#fff':'#1f2328') + ';font-weight:600;cursor:pointer">报备版<br><span style="font-size:11.5px;font-weight:400;opacity:.85">深圳 · 东莞 · 惠州 · 广州</span></div>'
-      + '</div>';
-    h2 += '<div style="font-weight:700;font-size:12.5px;margin-bottom:6px">标题（三选一）</div>';
-    (TB.titles || []).forEach(function(t){
-      h2 += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">'
-        + '<div style="flex:1;background:#fafbfc;border:1px solid #eef0f4;border-radius:6px;padding:5px 9px;line-height:1.5;font-size:12px">' + esc(t) + '</div>'
-        + '<button data-wtcopy="' + esc(t) + '" style="border:1px solid #d1d5db;background:#fff;color:#185fa5;border-radius:6px;padding:4px 10px;font-size:11.5px;flex:0 0 auto;cursor:pointer">复制</button></div>';
-    });
-    if (!(TB.titles || []).length) h2 += '<div style="color:#b42318;font-size:12px;margin-bottom:8px">标题还没生成出来</div>';
-    h2 += '<div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px"><b style="font-size:12.5px">商品描述</b>'
-      + '<button id="wv_descCopy" style="border:none;background:#185fa5;color:#fff;border-radius:6px;padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer">一键复制文案</button></div>';
-    h2 += '</div>';
-    h2 += '<textarea id="wv_desc" style="flex:1;min-height:160px;width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:7px;padding:7px 10px;font-size:12.5px;line-height:1.6;font-family:inherit;background:#fafbfc;color:#1f2328;resize:none"></textarea>';
-    box.innerHTML = h2;
-    box.querySelector('#wv_desc').value = shipMode === 'nat' ? (TB.desc_nat || '') : (TB.desc_rep || '');
-    box.querySelectorAll('[data-wship]').forEach(function(el){
-      el.onclick = function(){ shipMode = el.getAttribute('data-wship'); renderTbCopy(); };
-    });
-    box.querySelectorAll('[data-wtcopy]').forEach(function(el){
-      el.onclick = function(){
-        copySafe(el.getAttribute('data-wtcopy'), function(){ el.textContent = '已复制'; setTimeout(function(){ el.textContent = '复制'; }, 1200); });
-      };
-    });
-    var dc = box.querySelector('#wv_descCopy');
-    if (dc) dc.onclick = function(){ doCopy(box.querySelector('#wv_desc').value, dc); };
-  }
-  function loadTbCopy(){
-    var msg = wrap.querySelector('#wv_msg');
-    fetch('/api/copy?model=' + encodeURIComponent(k) + '&kind=z&bg=1')
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if (j && j.ok){
-          pollJob('copy:' + k + ':z', function(res){ TB = res; renderTbCopy(); },
-                  function(){ renderTbCopyEmpty(); },
-                  function(sec, st){ if (msg && st && st.prog) msg.textContent = '文案·' + st.prog; });
-        } else {
-          /* 已在生成中（配文窗正跑同一个 key）：直接跟着轮询 */
-          pollJob('copy:' + k + ':z', function(res){ TB = res; renderTbCopy(); },
-                  function(){ renderTbCopyEmpty(); });
-        }
-      })
-      .catch(function(){ renderTbCopyEmpty(); });
-  }
-  /* 婷窗选图面板（2026-11-26 用户令「婷的窗口也改成跟宝的窗口一样自行选图」）：
-     与宝窗同一套后端（/api/kitcands 清单、/api/kitpick 点选落盘、/api/kitmain 上传、
-     pickdone=1 接力渲染）——婷老链缺图 need_pick 时铺出来人工点选；独立 id 前缀
-     tpick_ 不与宝窗面板互撞。选完「出图」= 蓝底四张渲染完自动续跑白字（tone）。
-     铁律同宝窗：没选完不能关（收起键灰化+提示），面板外点击不关。 */
-  var tpickPanel = null;
-  function tpickClose(){ if (tpickPanel){ tpickPanel.remove(); tpickPanel = null; } }
-  function tpickImgUrl(p){
-    return '/api/kitimg/' + encodeURIComponent(k) + '/' +
-      String(p || '').split('/').map(encodeURIComponent).join('/');
-  }
-  /* 2026-11-26 用户令「单击打开大图，大图里接设主图按键」——同宝窗 pickZoom 口径 */
-  function tpickZoom(p, cap, onPick){
-    var old = document.getElementById('tpick_zoom'); if (old) old.remove();
-    var z = document.createElement('div'); z.id = 'tpick_zoom';
-    z.style.cssText = 'position:fixed;inset:0;background:rgba(14,18,26,.82);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
-    z.innerHTML = '<div style="display:flex;flex-direction:column;gap:10px;align-items:center">'
-      + '<div style="color:#e8eaee;font-size:12.5px;font-weight:600">' + esc(cap) + '<span style="font-weight:400;color:#9aa3b0;margin-left:10px">点空白处关闭</span></div>'
-      + '<img src="' + tpickImgUrl(p) + '?t=' + Date.now() + '" style="max-width:88vw;max-height:76vh;border-radius:12px;display:block;background:#fff">'
-      + (onPick
-        ? '<div style="display:flex;gap:10px">'
-          + '<button data-zk="main" style="border:0;background:#1d4ed8;color:#fff;border-radius:9px;padding:9px 22px;font-size:13px;font-weight:700;cursor:pointer">✓ 设为主图</button>'
-          + '<button data-zk="size" style="border:1px solid #b98f1f;background:#fdf6e3;color:#8a6a10;border-radius:9px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer">设为尺寸图</button>'
-          + '</div>'
-        : '')
-      + '</div>';
-    z.addEventListener('click', function(ev){
-      var b = ev.target.closest ? ev.target.closest('button[data-zk]') : null;
-      z.remove();
-      if (b && onPick) onPick(b.getAttribute('data-zk'));
-    });
-    document.body.appendChild(z);
-  }
-  function tpickSlot(kind, cur, label, color){
-    var has = !!cur;
-    return '<div style="width:112px;height:84px;flex:none;background:#f6f8fb;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center">'
-      + (has ? '<img src="' + tpickImgUrl(cur) + '?t=' + Date.now() + '" style="max-width:100%;max-height:100%;object-fit:contain">'
-             : '<span style="color:#aab2c0;font-size:11px">未选</span>')
-      + '</div>'
-      + '<div style="flex:1;min-width:0">'
-      + '<div style="font-size:12.5px;font-weight:600;color:' + color + '">' + label + (has ? ' · 已定' : ' · 待选') + '</div>'
-      + '<div style="margin-top:6px">'
-      + '<button id="tpick_up_' + kind + '" style="border:1px solid ' + color + ';background:#fff;color:' + color + ';border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">上传</button>'
-      + '</div></div>';
-  }
-  function openPickPanelT(missing, note, tone, btn){
-    tpickClose();
-    var msg = wrap.querySelector('#wv_msg');
-    var ov = document.createElement('div');
-    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:99990;display:flex;align-items:center;justify-content:center';
-    var pan = document.createElement('div');
-    pan.style.cssText = 'background:#fff;border-radius:14px;width:min(980px,94vw);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 18px 60px rgba(0,0,0,.35);overflow:hidden';
-    pan.innerHTML =
-      '<div style="padding:14px 18px 10px;border-bottom:1px solid #eef1f6;display:flex;align-items:center;gap:10px">'
-      + '<b style="font-size:15px;color:#1a2230">选图 · ' + esc(k) + '（婷套图）</b>'
-      + '<span style="color:#8a929e;font-size:12px">点图看大图，大图里一键「设为主图/设为尺寸图」；没有合适的直接上传。</span>'
-      + '<span style="flex:1"></span>'
-      + '<button id="tpick_x" style="border:0;background:#f1f3f8;border-radius:8px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#5a6472">收起</button></div>'
-      + '<div style="display:flex;gap:12px;padding:12px 18px 6px">'
-      + '<div id="tpick_slot_main" style="flex:1;display:flex;align-items:center;gap:10px;border:1.5px dashed #5b8def;border-radius:10px;padding:10px"></div>'
-      + '<div id="tpick_slot_size" style="flex:1;display:flex;align-items:center;gap:10px;border:1.5px dashed #d4b34a;border-radius:10px;padding:10px"></div>'
-      + '</div>'
-      + '<div id="tpick_grid" style="flex:1;overflow:auto;padding:8px 18px 6px;display:flex;flex-wrap:wrap;gap:10px;align-content:flex-start"></div>'
-      + '<div style="padding:12px 18px;border-top:1px solid #eef1f6;display:flex;gap:10px;align-items:center">'
-      + '<button id="tpick_skip" title="关掉面板，这次不出图；已选的图保留，随时点栏头「选图」回来继续" style="border:1px solid #cbd3e0;background:#fff;color:#5a6472;border-radius:9px;padding:8px 14px;font-size:12.5px;cursor:pointer">不出了</button>'
-      + '<span id="tpick_tip" style="color:#8a929e;font-size:12px;flex:1">' + esc(note || '') + '</span>'
-      + '<button id="tpick_nosize" style="border:1px solid #cbd3e0;background:#fff;border-radius:9px;padding:8px 14px;font-size:12.5px;cursor:pointer;color:#5a6472">没尺寸图？自动画</button>'
-      + '<button id="tpick_go" style="border:0;background:#1d4ed8;color:#fff;border-radius:9px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer">出图</button></div>';
-    ov.appendChild(pan);
-    document.body.appendChild(ov);
-    tpickPanel = ov;
-    var tcur = { main: null, size: null };
-    var tx = ov.querySelector('#tpick_x');
-    var ttip = ov.querySelector('#tpick_tip');
-    function paintX(){
-      /* 同宝窗：不用 disabled（不派发 click），视觉禁用 + 点击给铁律提示 */
-      var ready = !!(tcur.main && tcur.size);
-      tx.textContent = ready ? '收起' : '选完才能收起';
-      tx.style.cursor = ready ? 'pointer' : 'not-allowed';
-      tx.style.opacity = ready ? '1' : '.55';
-    }
-    if (missing && missing.length){ paintX(); }
-    tx.onclick = function(){
-      if (!(tcur.main && tcur.size)){
-        ttip.textContent = '铁律：主图/尺寸图还没选完，面板不能关——点大图选定；实在没有尺寸图点「没尺寸图？自动画」';
-        return;
-      }
-      tpickClose();
-    };
-    /* 2026-11-26 用户令「要有一个我可以关掉的按键，直接不出了」：同宝窗的放弃出口 */
-    ov.querySelector('#tpick_skip').onclick = function(){ tpickClose(); };
-    function paintSlots(cur){
-      tcur.main = cur.main || null;
-      tcur.size = cur.size || null;
-      paintX();
-      ov.querySelector('#tpick_slot_main').innerHTML = tpickSlot('main', cur.main, '主图', '#1d4ed8');
-      ov.querySelector('#tpick_slot_size').innerHTML = tpickSlot('size', cur.size, '尺寸图', '#8a6a10');
-      ov.querySelector('#tpick_up_main').onclick = function(){ tUpload('main'); };
-      ov.querySelector('#tpick_up_size').onclick = function(){ tUpload('size'); };
-    }
-    function refresh(){
-      fetch('/api/kitcands?model=' + encodeURIComponent(k), {cache:'no-store'})
-        .then(function(r){ return r.json(); })
-        .then(function(j){
-          if (!j || !j.ok) throw new Error((j && j.msg) || '清单读取失败');
-          paintSlots(j.cur || {});
-          var items = j.items || [];
-          var cur = j.cur || {};
-          ttip.textContent = '候选 ' + items.length + ' 张' + (cur.main ? '' : ' · 主图待选') + (cur.size ? '' : ' · 尺寸图待选（实在没有就点「没尺寸图？自动画」，画好照样印三围）');
-          var grid = ov.querySelector('#tpick_grid');
-          grid.innerHTML = '';
-          if (!items.length){
-            grid.innerHTML = '<div style="width:100%;padding:40px 0;text-align:center;color:#8a929e;font-size:13px">没有抓到候选图——直接用上面的「上传」塞主图/尺寸图</div>';
-            return;
-          }
-          items.forEach(function(it){
-            var isMain = cur.main === it.p, isSize = cur.size === it.p;
-            var d = document.createElement('div');
-            d.style.cssText = 'position:relative;flex:0 0 calc(33.333% - 10px);border:2px solid '
-              + (isMain ? '#16a34a' : (isSize ? '#d4b34a' : '#e7ebf2'))
-              + ';border-radius:10px;overflow:hidden;background:#fbfcfe;cursor:pointer';
-            /* 2026-11-26 用户令：来源彩色角标（右上角）+ 双击看大图——同宝窗面板口径 */
-            var _sc = ({'官网': '#1d4ed8', '说明书': '#0f766e', '欣盛': '#b45309', '中关村': '#6d28d9'})[it.src] || '#64748b';
-            d.innerHTML =
-              '<div style="height:210px;background:#fff;display:flex;align-items:center;justify-content:center;position:relative">'
-              + '<img loading="lazy" src="' + tpickImgUrl(it.p) + '" style="max-width:100%;max-height:206px;object-fit:contain">'
-              + '<b style="position:absolute;top:6px;right:6px;background:' + _sc + ';color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.25)">' + esc(it.src) + '</b>'
-              + '</div>'
-              + '<div style="padding:6px 10px 8px;display:flex;align-items:center;gap:8px">'
-              + '<span style="color:#6a7382;font-size:10.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(it.p) + '">' + it.w + '×' + it.h + ' · 点击看大图</span>'
-              + '<button data-k="size" style="flex:none;border:1px solid #b98f1f;background:#fdf6e3;color:#8a6a10;border-radius:7px;padding:3px 10px;font-size:11px;cursor:pointer">设尺寸图</button>'
-              + '</div>';
-            if (isMain || isSize){
-              var tag = document.createElement('div');
-              tag.textContent = isMain ? '✓ 已定主图' : '✓ 已定尺寸图';
-              tag.style.cssText = 'position:absolute;top:6px;left:6px;background:'
-                + (isMain ? '#16a34a' : '#d4b34a') + ';color:#fff;border-radius:6px;padding:2px 8px;font-size:10.5px;font-weight:600';
-              d.appendChild(tag);
-            }
-            function pickOne(kind, b){
-              if (b){ b.disabled = true; b.textContent = '…'; }
-              fetch('/api/kitpick', {method:'POST', headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({model:k, kind:kind, p:it.p})})
-                .then(function(r){ return r.json(); })
-                .then(function(j2){
-                  if (!j2 || !j2.ok) throw new Error((j2 && j2.msg) || '落盘失败');
-                  refresh();
-                })
-                .catch(function(e){
-                  if (b){ b.disabled = false; b.textContent = '设尺寸图'; }
-                  ttip.textContent = '✗ ' + (e.message || e);
-                });
-            }
-            d.addEventListener('click', function(){ tpickZoom(it.p, it.src + ' · ' + it.w + '×' + it.h, function(kind){ pickOne(kind); }); });
-            var bsz = d.querySelector('button[data-k="size"]');
-            bsz.addEventListener('click', function(ev){ ev.stopPropagation(); pickOne('size', bsz); });
-            grid.appendChild(d);
-          });
-        })
-        .catch(function(e){ ttip.textContent = '✗ ' + (e.message || e); });
-    }
-    function tUpload(kind){
-      var inp = wrap._tpickUpInp;
-      if (!inp){
-        inp = document.createElement('input');
-        inp.type = 'file'; inp.accept = 'image/*'; inp.style.display = 'none';
-        wrap.appendChild(inp);
-        wrap._tpickUpInp = inp;
-      }
-      inp.onchange = function(){
-        var f = inp.files && inp.files[0];
-        if (!f) return;
-        ttip.textContent = '上传中…';
-        var rd = new FileReader();
-        rd.onload = function(){
-          fetch('/api/kitmain', {method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({model:k, data:rd.result, kind: kind === 'main' ? 'main' : 'size'})})
-            .then(function(r){ return r.json(); })
-            .then(function(j){
-              if (!j || !j.ok) throw new Error((j && j.msg) || '上传失败');
-              refresh();
-            })
-            .catch(function(e){ ttip.textContent = '✗ 上传失败：' + (e.message || e); });
-        };
-        rd.readAsDataURL(f);
-      };
-      inp.click();
-    }
-    function launch(skip){
-      tpickClose();
-      if (msg) msg.textContent = '选图完成，蓝底出图后自动续跑' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + '…';
-      fetch('/api/kitset?model=' + encodeURIComponent(k) + '&pickdone=1' + (skip ? '&skipsize=1' : '') + '&bg=1')
-        .then(function(r){ return r.json(); })
-        .then(function(j){
-          /* 2026-11-26 TB 实锤：busy 响应（该型号已在生成中）婷窗原来当失败 throw，
-             轮询没接管=「选完不出图」假死——busy 也要接上 pollJob 等它跑完续 wvStart */
-          if (j && j.busy){
-            pollJob('kitset:' + k, function(res){
-              if (msg) msg.textContent = '✓ 蓝底好了，续跑' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + '…';
-              wvStart(tone, btn);
-            }, function(err){
-              if (msg){ msg.textContent = '✗ ' + ((err && err.message) || '出图失败'); msg.style.color = '#fca5a5'; }
-            });
-            return;
-          }
-          if (!j || !j.ok) throw new Error((j && j.msg) || '启动失败');
-        })
-        .catch(function(e){
-          if (msg){ msg.textContent = '✗ ' + e; msg.style.color = '#fca5a5'; }
-        });
-    }
-    ov.querySelector('#tpick_go').onclick = function(){
-      fetch('/api/kitcands?model=' + encodeURIComponent(k), {cache:'no-store'})
-        .then(function(r){ return r.json(); })
-        .then(function(j){
-          var cur = (j && j.cur) || {};
-          if (!cur.main){ ttip.textContent = '先选主图（或点「上传」塞一张）再出图'; return; }
-          if (!cur.size){ launch(true); return; }
-          launch(false);
-        })
-        .catch(function(){ launch(false); });
-    };
-    ov.querySelector('#tpick_nosize').onclick = function(){ launch(true); };
-    refresh();
-  }
-  function wvStart(tone, btn){
-    var msg = wrap.querySelector('#wv_msg');
-    var _t = btn.textContent;
-    btn.disabled = true; btn.textContent = '生成中…';
-    if (msg){ msg.textContent = (tone === 'blue' ? '蓝底白字' : '紫底白字') + '已开始…'; msg.style.color = '#9fe0a8'; }
-    fetch('/api/kitwhite', {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({model: k, tone: tone})})
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if (!j || !j.ok){ throw new Error((j && j.msg) || '启动失败'); }
-        pollJob('kitwhite:' + k + ':' + tone, function(res){
-          btn.disabled = false; btn.textContent = _t;
-          /* 2026-11-26 用户令「婷的窗口也改成跟宝的窗口一样自行选图」：婷老链缺图
-             → 开选图面板人工点选，选完「出图」自动续跑本 tone 白字。 */
-          if (res && res.need_pick){
-            if (msg){ msg.textContent = res.msg || '抓图完成——请在选图面板点选主图/尺寸图'; msg.style.color = '#fcd34d'; }
-            openPickPanelT(res.missing || [], res.msg || '', tone, btn);
-            return;
-          }
-          if (msg) msg.textContent = '✓ ' + (tone === 'blue' ? '蓝底白字' : '紫底白字') + '四张完成';
-          wvShow();
-          /* 2026-11-04 用户令：生成完不再自动打开文件夹（想开点卡右上「打开文件夹」） */
-        }, function(err){
-          btn.disabled = false; btn.textContent = _t;
-          /* 2026-11-04 用户令：不弹阻塞大框——错误写进顶栏红字 */
-          if (msg){ msg.textContent = '✗ ' + ((err && err.message) || '婷套图失败'); msg.style.color = '#fca5a5'; }
-        }, function(sec, st){
-          if (msg && st && st.prog) msg.textContent = st.prog;
-        });
-      })
-      .catch(function(e){
-        btn.disabled = false; btn.textContent = _t;
-        if (msg){ msg.textContent = '✗ 请求失败：' + e; msg.style.color = '#fca5a5'; }
-      });
-  }
-  /* 2026-11-03 用户令：底部「生成蓝/紫底白字」两键撤掉——开窗缺哪套自动生成，
-     手动补跑用卡右上「重新生成」；「打开文件夹」开对应 蓝/紫 子文件夹 */
-  wrap.querySelectorAll('[data-wvregen]').forEach(function(el){
-    el.addEventListener('click', function(){ wvStart(el.getAttribute('data-wvregen'), el); });
-  });
-  /* 2026-11-26 用户令「婷的布局也改得跟宝的一样」：蓝/紫两卡栏头加「选图」键，
-     随时重开选图面板（同宝窗栏头 #bao_pick 的口径） */
-  wrap.querySelectorAll('[data-wvpick]').forEach(function(el){
-    el.addEventListener('click', function(){
-      var tone = el.getAttribute('data-wvpick');
-      openPickPanelT([], '点图看大图，大图里一键「设为主图/设为尺寸图」；没有合适的直接上传。',
-                     tone, wrap.querySelector('[data-wvregen="' + tone + '"]'));
-    });
-  });
-  wrap.querySelectorAll('[data-wvopen]').forEach(function(el){
-    el.addEventListener('click', function(){ wvOpenFolder(el.getAttribute('data-wvopen')); });
-  });
-  wrap.querySelector('#wv_folder').addEventListener('click', function(){
-    try { fetch('/api/kitwhite?model=' + encodeURIComponent(k) + '&open=model'); } catch (e) {}
-  });
-  wvShow(); wvRefit(); loadTbCopy();
-  /* 开窗自动生成（2026-11-03 用户令「点进来直接生成」）：缺哪套补哪套，
-     两种色调 job key 分开（kitwhite:<型号>:<tone>）可并行，互不抢锁 */
-  ['blue', 'purple'].forEach(function(tone){
-    /* 2026-11-23：HEAD 在本服务一律 501，会导致每次开窗都误判缺图重跑——改 GET */
-    fetch(wvImg(tone, 1), {cache: 'no-store'}).then(function(r){
-      if (!r.ok) wvStart(tone, wrap.querySelector('[data-wvregen="' + tone + '"]'));
-    }).catch(function(){});
-  });
-}
-
 /* ================= 宝套图（2026-11-04 用户令：蓝底+聚光合并成一个窗） =================
    左卡蓝底四张（1080×1080）、右卡暗角聚光四张，各自带 重新生成/打开文件夹，
    点图放大。生成完不自动开文件夹（2026-11-04 用户令）。缺哪套开窗自动补哪套。 */
@@ -6590,19 +6110,10 @@ function openBaoView(k){
   var old = document.getElementById('baoview'); if (old) old.remove();
   var wrap = document.createElement('div'); wrap.id = 'baoview';
   wrap.style.cssText = 'position:fixed;inset:0;background:#f7f7f5;z-index:70;display:flex;flex-direction:column;font-size:13px;color:#1c1e22';
+  /* 2026-11-27 用户令：顶部黑条整条删除——进度全部下放到每列自己的进度条
+     （#bao_prog_*，生成到哪一步在干嘛一一列出），关闭钮浮在右上角。 */
   wrap.innerHTML =
-    '<div style="display:flex;align-items:baseline;gap:10px;padding:8px 16px;background:#1c1e22;color:#e8eaee;flex:0 0 auto">'
-    +   '<b style="font-size:14px">宝套图</b>'
-    +   '<span style="font-size:12px;color:#8a929e">' + esc(k) + '</span>'
-    +   '<span id="bao_msg_k" style="font-size:11.5px;color:#9fe0a8"></span>'
-    +   '<span id="bao_msg_s" style="font-size:11.5px;color:#fcd34d"></span>'
-    +   /* 2026-11-11 用户令：顶栏只留标题/型号/进度/关闭，说明文字删；
-           来源+AI状态从文案页顶栏挪上来（#bao_topslot，copyView 挂载时搬入） */
-      '<span id="bao_topslot" style="display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap"></span>'
-    +   '<span style="flex:1"></span>'
-    +   '<button id="bao_close" style="border:1px solid #4a4d55;background:none;color:#c9cdd4;border-radius:6px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer">关闭</button>'
-    + '</div>'
-    + '<div style="flex:1;overflow:hidden;padding:12px 16px;display:flex"><div style="max-width:1760px;margin:0 auto;width:100%;display:flex;gap:10px;align-items:stretch;min-height:0">'
+      /* 2026-11-28 用户令：往上延升不留白——原 40px 顶距是删掉的黑条/关闭钮遗留 */'<div style="flex:1;overflow:hidden;padding:10px 16px 12px;display:flex"><div style="max-width:1760px;margin:0 auto;width:100%;display:flex;gap:10px;align-items:stretch;min-height:0">'
     +   /* 2026-11-17 用户令：三列（第三列直接复制科科一份）；「打开文件夹/重新生成」
            按钮从图卡头挪到栏头，「蓝底套图/暗角聚光」卡头字样删掉。
            坑：注释不能夹在两个加号中间——会变一元加把字符串转成 NaN（11-14 实锤）。 */
@@ -6611,41 +6122,45 @@ function openBaoView(k){
       +       '<b style="font-size:13px;color:#1d4ed8">科科文案</b>'
       +       '<span style="flex:1"></span>'
       +       '<button data-baocancel="k" style="border:1px solid #f0b9b3;background:#fff;color:#d92d20;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer;display:none">取消</button>'
-      +       '<button data-baoopen="k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
-      +       '<button id="bao_pick" title="铺出抓到的全部候选图，点选主图/尺寸图；面板没选完被关掉也随时点这里重开" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">选图</button>'
-      +       '<button data-baogen="k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
       +       '<button id="mjd_k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">样机</button>'
       +       '<button id="cpk_k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制文案</button>'
-      +       '<button id="cp4_k" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制图片</button>'
       +     '</div>'
+      +     '<div id="bao_prog_k" style="display:none;background:#f6f8fc;border:1px solid #e3e8f0;border-radius:10px;padding:6px 10px;margin-bottom:8px;flex:0 0 auto"></div>'
       +     '<div id="bao_cpy_k" style="flex:0 1 auto;min-height:0;overflow:auto;cursor:copy"></div>'
-      +     baoCard('k')
+      +     baoCard('k', '科科图片',
+              '<button data-baoopen="k" title="打开这套图的保存文件夹" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+            + '<button id="cp4_k" style="' + 'border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer' + '">复制图片</button>'
+            + '<button id="bao_pick" title="铺出抓到的全部候选图，点选主图/尺寸图；面板没选完被关掉也随时点这里重开" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">选图</button>'
+            + '<button id="bimg_k" title="四张图整套重渲染（用现有文案，文案不动）" style="' + 'border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer' + '">重新生成图</button>')
       +   '</div>'
       +   '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
       +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
       +       '<b style="font-size:13px;color:#6d28d9">东星斑文案</b>'
       +       '<span style="flex:1"></span>'
       +       '<button data-baocancel="s" style="border:1px solid #f0b9b3;background:#fff;color:#d92d20;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer;display:none">取消</button>'
-      +       '<button data-baoopen="s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
-      +       '<button data-baogen="s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
       +       '<button id="mjd_s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">样机</button>'
       +       '<button id="cpk_s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制文案</button>'
-      +       '<button id="cp4_s" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制图片</button>'
       +     '</div>'
+      +     '<div id="bao_prog_s" style="display:none;background:#faf9ff;border:1px solid #ddd6fe;border-radius:10px;padding:6px 10px;margin-bottom:8px;flex:0 0 auto"></div>'
       +     '<div id="bao_cpy_s" style="flex:0 1 auto;min-height:0;overflow:auto;cursor:copy"></div>'
-      +     baoCard('s')
+      +     baoCard('s', '东星斑图片',
+              '<button data-baoopen="s" title="打开这一列的保存文件夹" style="border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+            + '<button id="cp4_s" style="' + 'border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer' + '">复制图片</button>'
+            + '<button id="bimg_s" title="这一列四张图整套 AI 重出（约 1-2 分钟）" style="' + 'border:1px solid #ddd6fe;background:#f5f3ff;color:#6d28d9;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer' + '">重新生成图</button>')
       +   '</div>'
       +   '<div style="flex:1;min-width:0;background:#fff;border:1px solid #e8e8e4;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;min-height:0">'
       +     '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex:0 0 auto;flex-wrap:wrap;row-gap:4px">'
       +       '<b style="font-size:13px;color:#1d4ed8">文案三</b>'
       +       '<span style="flex:1"></span>'
-      +       '<button id="baogen3" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">重新生成</button>'
       +       '<button id="mjd_k2" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">样机</button>'
       +       '<button id="cpk_k2" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制文案</button>'
-      +       '<button id="cp4_k2" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer">复制图片</button>'
       +     '</div>'
+      +     '<div id="bao_prog_k2" style="display:none;background:#f6f8fc;border:1px solid #e3e8f0;border-radius:10px;padding:6px 10px;margin-bottom:8px;flex:0 0 auto"></div>'
       +     '<div id="bao_cpy_k2" style="flex:0 1 auto;min-height:0;overflow:auto;cursor:copy"></div>'
-      +     baoCard('k2')
+      +     baoCard('k2', '文案三图片',
+              '<button data-baoopen="k" title="跟科科同一套图，打开同一个文件夹" style="border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;cursor:pointer">打开文件夹</button>'
+            + '<button id="cp4_k2" style="' + 'border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer' + '">复制图片</button>'
+            + '<button id="bimg_k2" title="跟科科同一套图，整套重渲染（文案不动）" style="' + 'border:1px solid #c7d2fe;background:#eef2ff;color:#1d4ed8;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:600;cursor:pointer' + '">重新生成图</button>')
       +   '</div>'
     + '</div>'
     + '</div></div>';
@@ -6654,15 +6169,32 @@ function openBaoView(k){
      原来关窗后旧窗的 setInterval 还在天上跑（幽灵轮询），白烧接口还抢状态 */
   var TIMERS = [];
   function T(id){ TIMERS.push(id); return id; }
-  wrap.querySelector('#bao_close').addEventListener('click', function(){
+  /* 2026-11-28 用户令「关闭不要了，按键盘 ESC 键就退出」：右上关闭钮删掉，
+     ESC=关窗清轮询；选图面板/大图浮层开着时 ESC 不抢（上层自己处理）。 */
+  function baoEsc(e){
+    if (e.key !== 'Escape') return;
+    if (pickPanel || document.getElementById('bao_zoom')) return;
+    closeBao();
+  }
+  function closeBao(){
+    document.removeEventListener('keydown', baoEsc, true);
     TIMERS.forEach(function(id){ clearTimeout(id); clearInterval(id); });
     wrap.remove();
-  });
+  }
+  document.addEventListener('keydown', baoEsc, true);
   /* 2026-11-17 用户令：卡头删、按钮挪栏头；图片也包一个胶囊；图片组贴列底对齐
      （三列文案长短不一时，图组下缘对齐），与文案胶囊之间留 12px 间隔。 */
-  function baoCard(t){
+  /* 2026-11-27 用户令二改：栏头收进胶囊里面——列名 + 打开文件夹/复制图片/重新生成图
+     全部包进面板卡片；列头只剩文案相关按键（重新生成文案/样机/复制文案/选图/取消）。
+     按键 id/data 属性原样保留，绑定按 id/属性找，挪位置不受影响。 */
+  function baoCard(t, nm, btns){
     return '<div id="bao_card_' + t + '" style="flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;margin-top:12px">'
       +   '<div id="bao_cap_' + t + '" style="box-sizing:border-box;border:1px solid #e3e8f0;background:#fbfcfe;border-radius:14px;padding:10px">'
+      +     '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;row-gap:4px;margin-bottom:8px">'
+      +       '<b style="font-size:12.5px;color:#334155">' + nm + '</b>'
+      +       '<span style="flex:1"></span>'
+      +       btns
+      +     '</div>'
       +     '<div style="display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);justify-content:center;align-content:center;gap:6px" id="bao_grid_' + t + '"></div>'
       +   '</div>'
       + '</div>';
@@ -6693,6 +6225,7 @@ function openBaoView(k){
   function clearFail(t){ var m = failMap(); delete m[k + ':' + t]; try { localStorage.setItem(FKEY, JSON.stringify(m)); } catch(e){} }
   function failedBefore(t){ return !!failMap()[k + ':' + t]; }
   function failMsg(t, e){
+    _kcopyRun = false;
     var s = String((e && (e.message || e)) || '生成失败');
     markFail(t);
     if (s.indexOf('已取消') >= 0){ msg(t, '已取消'); return; }
@@ -6703,11 +6236,88 @@ function openBaoView(k){
   var SFILES = [];
   function kImg(n){ return '/api/kitimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('蓝底') + '/img_' + n + '.jpg'; }
   function sImg(f){ return '/pubimg/' + encodeURIComponent(k) + '/' + encodeURIComponent('聚光') + '/' + encodeURIComponent(f); }
+  /* 2026-11-27 用户令：黑条删了——每列自带进度条，生成到哪一步在干嘛一一列出
+     （最新在上、最多留 5 条）；秒数/百分比跳动的重复进度原位更新不刷屏。
+     2026-11-28 用户令：抓取阶段（官网/说明书/欣盛/中关村/潜行…）不堆细节，
+     只显示当前在干嘛一行，写文案/出图阶段恢复一一列出。 */
+  var PROG = {k: [], s: [], k2: []};
+  var CRAWL_RE = /抓取|爬虫|潜行|说明书|官网|欣盛|中关村/;
+  /* 2026-11-28 用户令「跑的时候可以在文案框里面跑，跑完再显示文案」：
+     科科文案重出期间进度直接画进 #bao_cpy_k（与东星斑/文案三同款），完成后
+     renderKCopy 把文案画回去。出图（genK）不受影响，仍走 #bao_prog_k。 */
+  var _kcopyRun = false;
+  /* 2026-11-28 用户令「这样显示我都不知道他在跑什么」：三步导航条 + 一句人话。
+     ①抓取素材（官网→说明书站→欣盛）②写文案（标题·卖点·售后）③出图（四张1080×1080），
+     当前步蓝底高亮；秒数/百分比照常保留原位跳动；✓完成/✗失败不走导航条。 */
+  var _PH_NAME = ['抓取素材', '写文案', '出图'];
+  var _PH_TXT = {1: '正在抓取图片和参数：官网 → 说明书站 → 欣盛商城',
+                 2: '正在写文案：标题 · 卖点 · 售后',
+                 3: '正在生成图片：四张 1080×1080'};
+  function _phaseOf(s){
+    if (/文案|标题|卖点|售后/.test(s)) return 2;
+    if (/渲染|出图|合成|首图|机器图|尺寸图|落盘|水印/.test(s)) return 3;
+    if (/抓|官网|说明书|欣盛|中关村|潜行|机图|下载|参数/.test(s)) return 1;
+    return 0;
+  }
+  function _stepHtml(ph, txt, tm){
+    var dots = '';
+    for (var i = 1; i <= 3; i++){
+      dots += '<span style="display:inline-block;padding:3px 12px;margin:0 8px 8px 0;border-radius:999px;font-size:11.5px;font-weight:600;'
+        + (i === ph ? 'background:#1d4ed8;color:#fff">▶ ' : 'background:#eef1f6;color:#98a0ac">') + _PH_NAME[i-1] + '</span>';
+    }
+    return '<div>' + dots + '</div>'
+      + '<div style="font-size:12.5px;color:#334155;line-height:1.7">' + esc(txt)
+      + (tm ? '<span style="color:#b4b9c2;font-size:10.5px;margin-left:8px">' + tm + '</span>' : '') + '</div>';
+  }
   function msg(t, s, bad){
-    /* 2026-11-04 用户令：进度/状态统一上顶栏，卡片行只留按钮 */
-    var el = wrap.querySelector('#bao_msg_' + t); if (!el) return;
-    el.textContent = s ? ((t === 'k' ? '蓝底 ' : '聚光 ') + s) : '';
-    el.style.color = bad ? '#fca5a5' : (t === 'k' ? '#9fe0a8' : '#fcd34d');
+    if (!s) return;
+    var txt = String(s);
+    /* 黑话直白化：按阶段统一改人话，原文秒数/百分比保留 */
+    var ph = _phaseOf(txt);
+    var _sec = txt.match(/（已\s*\d+\s*秒）/);
+    var _pct = txt.match(/（\d+%）/);
+    var det = ph ? (_PH_TXT[ph] + (_pct ? ' ' + _pct[0] : '') + (_sec ? ' ' + _sec[0] : '')) : txt;
+    var d0 = new Date();
+    var tm0 = ('0' + d0.getHours()).slice(-2) + ':' + ('0' + d0.getMinutes()).slice(-2) + ':' + ('0' + d0.getSeconds()).slice(-2);
+    if (t === 'k' && _kcopyRun){
+      var kbx = wrap.querySelector('#bao_cpy_k');
+      if (kbx){
+        kbx.innerHTML = _stepHtml(ph, det, tm0);
+        return;
+      }
+    }
+    var arr = PROG[t] || (PROG[t] = []);
+    var base = det.replace(/（已\s*\d+\s*秒）/g, '').replace(/（\d+%）/g, '');
+    if (CRAWL_RE.test(base)) arr.length = 0;
+    var d = new Date();
+    var tm = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2);
+    if (arr.length && arr[0].base === base){ arr[0].txt = det; arr[0].tm = tm; arr[0].bad = !!bad; }
+    else arr.unshift({base: base, txt: det, tm: tm, bad: !!bad});
+    if (arr.length > 5) arr.length = 5;
+    var el = wrap.querySelector('#bao_prog_' + t); if (!el) return;
+    var h = '';
+    arr.forEach(function(L, i){
+      var _p2 = i === 0 ? _phaseOf(L.txt) : 0;
+      if (_p2){
+        h += _stepHtml(_p2, L.txt, L.tm);
+      } else {
+        h += '<div style="font-size:11px;line-height:1.6;color:' + (i === 0 ? (L.bad ? '#d92d20' : '#1d4ed8') : '#8a929e')
+          + ';white-space:pre-wrap;overflow:hidden;text-overflow:ellipsis">' + esc(L.txt)
+          + '<span style="color:#b4b9c2;font-size:10px;margin-left:6px">' + L.tm + '</span></div>';
+      }
+    });
+    el.innerHTML = h;
+    el.style.display = 'block';
+    /* 2026-11-28 用户令「生成好了，这个就不用显示了」：✓ 完成消息亮 3 秒自动收，
+       不留一堆跑完的旧进度；失败（✗/bad）照旧常驻看得见。 */
+    if (/^✓|^已重出$|^文案已重出/.test(txt) && !bad){
+      T(setTimeout(function(){
+        var a2 = PROG[t] || (PROG[t] = []);
+        a2.length = 0;
+        var el2 = wrap.querySelector('#bao_prog_' + t);
+        if (el2){ el2.style.display = 'none'; el2.innerHTML = ''; }
+      }, 3000));
+    }
   }
   function zoom(src, title){
     var old = document.getElementById('bao_zoom'); if (old) old.remove();
@@ -6808,7 +6418,7 @@ function openBaoView(k){
       var c0 = document.getElementById('bao_card_' + tones[i]);
       if (!c0) continue;
       if (!card0) card0 = c0;
-      var availH0 = c0.clientHeight - 22;
+      var availH0 = c0.clientHeight - 54;   /* 2026-11-27 面板栏头（列名+重出图钮）占位 */
       if (availH0 < 100) return;
       var cc0 = Math.floor((availH0 - 6) / 2);
       if (!cell || cc0 < cell) cell = cc0; /* 三个网格取小的，宽度才对得齐 */
@@ -6856,8 +6466,8 @@ function openBaoView(k){
         (function(nn){
           /* 2026-11-26 用户令「这个可以不要了」：上传主图虚线格撤了——上传/选图
              统一走选图面板（栏头「选图」键随时重开，面板里每槽自带上传）。 */
-          g.appendChild(cell('k', kImg(nn), nn, KLAB[nn], '蓝底 · ' + KLAB[nn],
-            function(){ zoom(kImg(nn), '蓝底 · ' + KLAB[nn]); },
+          g.appendChild(cell('k', kImg(nn), nn, KLAB[nn], KLAB[nn],
+            function(){ zoom(kImg(nn), KLAB[nn]); },
             function(){ regenKOne(nn); }));
         })(n);
       }
@@ -6890,6 +6500,7 @@ function openBaoView(k){
         ? '<div style="display:flex;gap:10px">'
           + '<button data-zk="main" style="border:0;background:#1d4ed8;color:#fff;border-radius:9px;padding:9px 22px;font-size:13px;font-weight:700;cursor:pointer">✓ 设为主图</button>'
           + '<button data-zk="size" style="border:1px solid #b98f1f;background:#fdf6e3;color:#8a6a10;border-radius:9px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer">设为尺寸图</button>'
+          + '<button data-zk="size2" title="双机型号的第二张尺寸图，两张自动合并" style="border:1px solid #c99b2e;background:#fffaf0;color:#a16207;border-radius:9px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer">设为尺寸图2</button>'
           + '</div>'
         : '')
       + '</div>';
@@ -6921,12 +6532,13 @@ function openBaoView(k){
     pan.innerHTML =
       '<div style="padding:14px 18px 10px;border-bottom:1px solid #eef1f6;display:flex;align-items:center;gap:10px">'
       + '<b style="font-size:15px;color:#1a2230">选图 · ' + esc(k) + '</b>'
-      + '<span style="color:#8a929e;font-size:12px">抓到的图全在这——点图看大图，大图里一键「设为主图/设为尺寸图」；没有合适的直接上传。</span>'
+      + '<span style="color:#8a929e;font-size:12px">抓到的图全在这——点图看大图，大图里一键「设为主图/设为尺寸图/设为尺寸图2」；没有合适的直接上传。</span>'
       + '<span style="flex:1"></span>'
       + '<button id="pick_x" style="border:0;background:#f1f3f8;border-radius:8px;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#5a6472">收起</button></div>'
       + '<div style="display:flex;gap:12px;padding:12px 18px 6px">'
       + '<div id="pick_slot_main" style="flex:1;display:flex;align-items:center;gap:10px;border:1.5px dashed #5b8def;border-radius:10px;padding:10px"></div>'
       + '<div id="pick_slot_size" style="flex:1;display:flex;align-items:center;gap:10px;border:1.5px dashed #d4b34a;border-radius:10px;padding:10px"></div>'
+      + '<div id="pick_slot_size2" style="flex:1;display:flex;align-items:center;gap:10px;border:1.5px dashed #c99b2e;border-radius:10px;padding:10px"></div>'
       + '</div>'
       + '<div id="pick_grid" style="flex:1;overflow:auto;padding:8px 18px 6px;display:flex;flex-wrap:wrap;gap:10px;align-content:flex-start"></div>'
       + '<div style="padding:12px 18px;border-top:1px solid #eef1f6;display:flex;gap:10px;align-items:center">'
@@ -6940,7 +6552,7 @@ function openBaoView(k){
     /* 2026-11-26 用户铁律「我没选完图不能关」：主图/尺寸图没定齐时「收起」禁用
        （点了只提示不关），面板只能被「出图」关掉——出图=选完了。openPickPanel
        先按 missing 置初始态，refresh 拿到 cur 后 paintSlots 里实时更新。 */
-    var _cur = { main: null, size: null };
+    var _cur = { main: null, size: null, size2: null };
     var _bx = ov.querySelector('#pick_x');
     function _paintX(){
       /* 不用 disabled——disabled 按钮不派发 click，点了没反应用户会懵；
@@ -6988,11 +6600,15 @@ function openBaoView(k){
     function paintSlots(cur){
       _cur.main = cur.main || null;
       _cur.size = cur.size || null;
+      _cur.size2 = cur.size2 || null;
       _paintX();
       ov.querySelector('#pick_slot_main').innerHTML = pickSlotHtml('main', cur.main, '主图', '#1d4ed8');
       ov.querySelector('#pick_slot_size').innerHTML = pickSlotHtml('size', cur.size, '尺寸图', '#8a6a10');
+      /* 2026-11-27 用户令：双机型号（如 KF70/200 一套含两台）选两张尺寸图，出图自动合并成一张 */
+      ov.querySelector('#pick_slot_size2').innerHTML = pickSlotHtml('size2', cur.size2, '尺寸图2（可选·两张自动合并）', '#a16207');
       ov.querySelector('#pick_up_main').onclick = function(){ pickUpload('main'); };
       ov.querySelector('#pick_up_size').onclick = function(){ pickUpload('size'); };
+      ov.querySelector('#pick_up_size2').onclick = function(){ pickUpload('size2'); };
     }
     function refresh(){
       fetch('/api/kitcands?model=' + encodeURIComponent(k), {cache:'no-store'})
@@ -7002,7 +6618,7 @@ function openBaoView(k){
           paintSlots(j.cur || {});
           var items = j.items || [];
           var cur = j.cur || {};
-          tip.textContent = '候选 ' + items.length + ' 张' + (cur.main ? '' : ' · 主图待选') + (cur.size ? '' : ' · 尺寸图待选（实在没有就点「没尺寸图？自动画」，画好照样印三围）');
+          tip.textContent = '候选 ' + items.length + ' 张' + (cur.main ? '' : ' · 主图待选') + (cur.size ? '' : ' · 尺寸图待选（实在没有就点「没尺寸图？自动画」，画好照样印三围）') + (cur.size2 ? '' : ' · 尺寸图2 可选（双机型号再选一张，出图自动合并）');
           grid.innerHTML = '';
           if (!items.length){
             grid.innerHTML = '<div style="width:100%;padding:40px 0;text-align:center;color:#8a929e;font-size:13px">没有抓到候选图——直接用上面的「上传」塞主图/尺寸图</div>';
@@ -7140,13 +6756,13 @@ function openBaoView(k){
     g.innerHTML = '';
     /* 2026-11-23 用户令：上传入口放科科列（蓝底缺主图时），聚光列不再单设上传按键 */
     if (!SFILES.length){
-      g.innerHTML = '<div style="grid-column:1/-1;color:#b4b9c2;font-size:12px;padding:18px 0">还没生成——点栏头「重新生成」出一套<br><span style="font-size:11px;color:#c0c4cc">（有主图后科科出图，聚光自动跟）</span></div>';
+      g.innerHTML = '<div style="grid-column:1/-1;color:#b4b9c2;font-size:12px;padding:18px 0">还没生成——点面板右上角「重新生成图」出一套<br><span style="font-size:11px;color:#c0c4cc">（有主图后科科出图，东星斑自动跟）</span></div>';
       return;
     }
     SFILES.forEach(function(f, i){
       var lb = SLAB[String(f).replace(/\.(jpg|jpeg|png)$/i, '')] || f;
-      g.appendChild(cell('s', sImg(f), i + 1, lb, '聚光 · ' + lb,
-        function(){ zoom(sImg(f), '聚光 · ' + lb); },
+      g.appendChild(cell('s', sImg(f), i + 1, lb, lb,
+        function(){ zoom(sImg(f), lb); },
         function(){ regenSOne(f); }));
     });
     refit();
@@ -7158,6 +6774,7 @@ function openBaoView(k){
        （querySelector 返回 null 直接 return），重开窗会由 HEAD 探测/接管兜住 */
     T(pollJob('kitset:' + k, function(res){
       kGen = false;
+      _kcopyRun = false;
       setCancelVis('k', false); clearFail('k');
       if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
       /* 2026-11-26 用户令「AI选图跟代码选图全部删除，下载完了就全部铺出来我来选」：
@@ -7169,7 +6786,7 @@ function openBaoView(k){
         openPickPanel(res.missing || [], res.msg || '');
         return;
       }
-      msg('k', res && res.cached ? '缓存秒出' : (okMsg || '✓ 蓝底四张完成'));
+      msg('k', res && res.cached ? '缓存秒出' : (okMsg || '✓ 科科四张图完成'));
       /* 2026-11-24 用户问「怎么又要我上传」：生成中途开窗时 img_1 未出 → K_MISS=true，
          之后 img_1 出来了窗口还停在「上传主图」（完成回调只重画不重判）。
          完成回调重探一次 img_1 再画，图在就自动换回正常格子。 */
@@ -7180,6 +6797,7 @@ function openBaoView(k){
       if (done) done();
     }, function(err){
       kGen = false;
+      _kcopyRun = false;
       setCancelVis('k', false);
       if (btn){ btn.disabled = false; btn.textContent = '重新生成'; }
       failMsg('k', err);            // 2026-11-14：失败记档，重开窗不再自动重跑
@@ -7193,8 +6811,10 @@ function openBaoView(k){
      后端 copyonly=1 只重抓数据重算文案 + set.json 落盘，四张成片/水印/对账全跳过，
      图零动作——图的重出只走图片卡右上角自己的「重新生成」键。 */
   function genKCopy(btn){
-    if (kGen){ msg('k', '蓝底已在生成中…'); return; }
+    if (kGen){ msg('k', '科科已在生成中…'); return; }
     kGen = true;
+    _kcopyRun = true;
+    (function(){ var _pk = wrap.querySelector('#bao_prog_k'); if (_pk){ _pk.style.display = 'none'; _pk.innerHTML = ''; } PROG.k = []; })();
     setCancelVis('k', true); clearFail('k');
     if (btn){ btn.disabled = true; btn.textContent = '生成中…'; }
     msg('k', '重出文案（图片不动）…');
@@ -7221,7 +6841,7 @@ function openBaoView(k){
     })();
   }
   function genK(force, btn, done){
-    if (kGen){ msg('k', '蓝底已在生成中…'); return; }
+    if (kGen){ msg('k', '科科已在生成中…'); return; }
     kGen = true;
     setCancelVis('k', true); clearFail('k');
     if (btn){ btn.disabled = true; btn.textContent = '生成中…'; }
@@ -7267,7 +6887,7 @@ function openBaoView(k){
     failMsg('s', e);   /* 2026-11-14：失败记档，重开窗不再自动重跑；已取消灰显不红 */
   }
   function genS(btn, done){
-    if (sGen){ msg('s', '聚光已在生成中…'); return; }
+    if (sGen){ msg('s', '东星斑图片已在生成中…'); return; }
     sGen = true;
     setCancelVis('s', true); clearFail('s');
     if (btn){ btn.disabled = true; btn.textContent = '生成中…'; }
@@ -7395,6 +7015,11 @@ function openBaoView(k){
     document.body.appendChild(t);
     setTimeout(function(){ t.remove(); }, 1100);
   }
+  /* 2026-11-27 用户令：重新生成文案开关收进文案卡片标题行右侧（截图红框位置） */
+  function _regenBtnHtml(){
+    return '<button class="bao_regen" title="AI 重写这套文案（标题/卖点/售后），图片不动"'
+      + ' style="flex:0 0 auto;border:1px solid #e2e8f0;background:#fff;color:#64748b;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">↻ 重新生成文案</button>';
+  }
   function _kpaint(bx, D, mj, done){
     if (!bx) return;
     if (!D || !D.ok){
@@ -7408,8 +7033,11 @@ function openBaoView(k){
     /* 售后三版定稿（2026-11-17 用户锁定）：科科=这版；东星斑/文案三各有各的措辞 */
     var AF1 = _mjrep('全新机，官方全国联保。\n收货前记得验收，破损可拒收。\n想了解的随时找我聊。', mj);
     bx.innerHTML = '<div style="border:1px solid #e3e8f0;background:#fbfcfe;border-radius:14px;padding:10px 12px">'
-      + (KT ? '<div style="line-height:1.55;font-size:12.5px;font-weight:600;color:#1c1e22">' + esc(KT) + '</div>'
-            : '<div style="color:#b42318;font-size:12px">标题还没生成出来</div>')
+      + '<div style="display:flex;align-items:flex-start;gap:8px">'
+      + (KT ? '<div style="flex:1;min-width:0;line-height:1.55;font-size:12.5px;font-weight:600;color:#1c1e22">' + esc(KT) + '</div>'
+            : '<div style="flex:1;min-width:0;color:#b42318;font-size:12px">标题还没生成出来</div>')
+      + _regenBtnHtml()
+      + '</div>'
       + '<div style="height:10px"></div>'
       + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc(PTS) + '</div>'
       + '<div style="height:10px"></div>'
@@ -7417,6 +7045,8 @@ function openBaoView(k){
       + '</div>';
     /* 2026-11-17 用户令「点击文案复制不是点复制按键」：单击文案胶囊整套复制，
        鼠标处浮「✓ 已复制」；栏头「复制文案」钮照旧直复。 */
+    var _rbk = bx.querySelector('.bao_regen');
+    if (_rbk) _rbk.onclick = function(e){ e.stopPropagation(); genKCopy(_rbk); };
     KCTXT.k = [KT, PTS === '—' ? '' : PTS, AF1].filter(Boolean).join('\n\n');
     bx.onclick = function(e){
       copySafe(KCTXT.k, function(){
@@ -7443,17 +7073,22 @@ function openBaoView(k){
     var PTS = _mjrep((D.points || []).join('\n') || '—', MJD.k2);
     var AF1 = _mjrep('全新正品，官方联保。\n签收前先开箱检查，破损的可以拒收。\n有啥想问的尽管来聊。', MJD.k2);
     bx.innerHTML = '<div style="border:1px solid #d7e7dd;background:#f6fbf8;border-radius:14px;padding:10px 12px">'
-      + (KT ? '<div style="line-height:1.55;font-size:12.5px;font-weight:600;color:#1c1e22">' + esc(KT) + '</div>'
-            : '<div style="color:#b42318;font-size:12px">标题还没生成出来</div>')
+      + '<div style="display:flex;align-items:flex-start;gap:8px">'
+      + (KT ? '<div style="flex:1;min-width:0;line-height:1.55;font-size:12.5px;font-weight:600;color:#1c1e22">' + esc(KT) + '</div>'
+            : '<div style="flex:1;min-width:0;color:#b42318;font-size:12px">标题还没生成出来</div>')
+      + _regenBtnHtml()
+      + '</div>'
       + '<div style="height:10px"></div>'
       + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc(PTS) + '</div>'
       + '<div style="height:10px"></div>'
       + '<div style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33">' + esc(AF1) + '</div>'
       + '</div>';
+    var _rbk2 = bx.querySelector('.bao_regen');
+    if (_rbk2) _rbk2.onclick = function(e){ e.stopPropagation(); loadXCopy(true); };
     KCTXT.k2 = [KT, PTS === '—' ? '' : PTS, AF1].filter(Boolean).join('\n\n');
     bx.onclick = function(e){
       copySafe(KCTXT.k2, function(){
-        msg('k', '文案三整套已复制' + (MJD.k2 ? '（样机版）' : ''));
+        msg('k2', '文案三整套已复制' + (MJD.k2 ? '（样机版）' : ''));
         copyTipAt(e.clientX, e.clientY);
       });
     };
@@ -7461,7 +7096,7 @@ function openBaoView(k){
   function loadXCopy(force){
     var bx = wrap.querySelector('#bao_cpy_k2');
     if (!bx) return;
-    bx.innerHTML = '<div style="color:#475569;padding:20px 2px;font-size:12.5px">正在生成第三种文案…已 <b id="kx_secs">0</b> 秒（有缓存秒出）</div>';
+    bx.innerHTML = '<div style="color:#475569;padding:20px 2px;font-size:12.5px">正在生成第三种文案…已 <b id="kx_secs">0</b> 秒</div>';
     /* kind=x 独立任务键/独立缓存，跟聚光（kind=l）互不干扰 */
     fetch('/api/copy?model=' + encodeURIComponent(k) + '&kind=x' + (force ? '&force=1' : '') + '&bg=1')
       .then(function(r){ return r.json(); })
@@ -7510,14 +7145,19 @@ function openBaoView(k){
     var SCPTS = (D.points && D.points.length) ? D.points : ((KB && KB.points) || []);
     var SA = _mjrep('官方全新机全国联保。\n到货先当面验一下，有破损直接拒收就行。\n有想问的，私信我就行。', MJD.s);
     h += '<div style="border:1px solid ' + SCPY_BD + ';background:#faf9ff;border-radius:14px;padding:10px 12px">'
-      + (ST ? '<div style="line-height:1.55;font-size:12.5px;font-weight:600;color:#1c1e22">' + esc(ST) + '</div>'
-            : '<div style="color:#b42318;font-size:12px">标题还没生成出来</div>')
+      + '<div style="display:flex;align-items:flex-start;gap:8px">'
+      + (ST ? '<div style="flex:1;min-width:0;line-height:1.55;font-size:12.5px;font-weight:600;color:#1c1e22">' + esc(ST) + '</div>'
+            : '<div style="flex:1;min-width:0;color:#b42318;font-size:12px">标题还没生成出来</div>')
+      + _regenBtnHtml()
+      + '</div>'
       + '<div style="height:10px"></div>'
       + '<div style="font-size:12.5px;line-height:1.75;white-space:pre-line;color:#2a2d33">' + esc(_mjrep(SCPTS.join('\n') || '—', MJD.s)) + '</div>'
       + '<div style="height:10px"></div>'
       + '<div style="font-size:12.5px;line-height:1.7;white-space:pre-line;color:#2a2d33">' + esc(SA) + '</div>'
       + '</div>';
     box.innerHTML = h;
+    var _rbs = box.querySelector('.bao_regen');
+    if (_rbs) _rbs.onclick = function(e){ e.stopPropagation(); loadSCopy(true); };
     KCTXT.s = [ST, _mjrep(SCPTS.join('\n') || '', MJD.s), SA].filter(Boolean).join('\n\n');
     /* 2026-11-17 用户令：单击文案整套复制 + 浮标提示 */
     box.onclick = function(e){
@@ -7536,7 +7176,7 @@ function openBaoView(k){
       var rb = box.querySelector('#sc_retry');
       if (rb) rb.onclick = function(){ loadSCopy(true); };
     }
-    box.innerHTML = '<div style="color:#475569;padding:20px 2px;font-size:12.5px">正在生成聚光文案（参数直给口径）…已 <b id="sc_secs">0</b> 秒（有缓存秒出）</div>';
+    box.innerHTML = '<div style="color:#475569;padding:20px 2px;font-size:12.5px">正在生成聚光文案（参数直给口径）…已 <b id="sc_secs">0</b> 秒</div>';
     /* kind=l 与写文案页共用同一份缓存与同一个任务键 → 不双跑爬虫；Pro 页正在跑时
        接口会回「已在生成中」，那不是错误，接着轮询等它的结果就行 */
     fetch('/api/copy?model=' + encodeURIComponent(k) + '&kind=l' + (force ? '&force=1' : '') + '&bg=1')
@@ -7616,13 +7256,13 @@ function openBaoView(k){
     if (!b) return;
       b.onclick = function(){
       b.textContent = '复制中…';
-      copyImages4(p[1], p[1] === 's' ? 's' : 'k');
+      copyImages4(p[1], p[1]);
       setTimeout(function(){ b.textContent = '复制图片'; }, 1500);
     };
   });
   /* 复制文案钮（2026-11-17 用户令）：栏头一键整套复制，双击胶囊照旧。
      文案三（k2）的状态提示也走 'k' 顶栏（与双击行为一致）。 */
-  [['cpk_k', 'k', 'k'], ['cpk_s', 's', 's'], ['cpk_k2', 'k2', 'k']].forEach(function(p){
+  [['cpk_k', 'k', 'k'], ['cpk_s', 's', 's'], ['cpk_k2', 'k2', 'k2']].forEach(function(p){
     var b = wrap.querySelector('#' + p[0]);
     if (!b) return;
     b.onclick = function(){
@@ -7638,6 +7278,15 @@ function openBaoView(k){
   });
   var g3 = wrap.querySelector('#baogen3');
   if (g3) g3.onclick = function(){ loadXCopy(true); };
+  /* 图片面板右上角「重新生成图」（2026-11-27 用户令）：科科/文案三=蓝底整套重渲染
+     （有快照走重渲染，文案不动）；东星斑=这一列整套 AI 重出。 */
+  [['bimg_k', 'k'], ['bimg_k2', 'k2'], ['bimg_s', 's']].forEach(function(p){
+    var b = wrap.querySelector('#' + p[0]);
+    if (!b) return;
+    b.onclick = function(){
+      if (p[1] === 's') genS(b); else genK(true, b);
+    };
+  });
   showK();
   loadKCopy();
   /* 聚光文案开窗就开写（2026-11-04 用户令「文案也要一起写了啊，不要我点了再写」）：
@@ -7681,7 +7330,7 @@ function openBaoView(k){
         }
       }).catch(function(){ if (sNeed && sAuto && !failedBefore('k')) _sStart(); else loadXCopy(false); });
     } catch (e) { if (sNeed && sAuto && !failedBefore('k')) _sStart(); else loadXCopy(false); }
-    if (!sNeed) msg('s', '缓存秒出');
+    /* 2026-11-28 用户令：缓存命中不再弹「缓存秒出」pill——文案秒出即完成，不用额外显示 */
   });
 }
 
@@ -8151,8 +7800,6 @@ function openCopyView(k, kind, force, tb, host){
       +     '<button class="railbtn" data-pubstyle="scene" style="text-align:left">发布图 · 实景合成</button>'
       +     '<div style="font-size:11px;color:#6b7a94;padding:8px 8px 2px">生成首图</div>'
       +     '<button class="railbtn" id="pv_hero" style="text-align:left">生成首图</button>'
-      +     '<div style="font-size:11px;color:#6b7a94;padding:8px 8px 2px">AI</div>'
-      +     '<button class="railbtn" id="pv_qa" style="text-align:left">AI 成片自检</button>'
       +     '<div style="font-size:11px;color:#6b7a94;padding:8px 8px 2px">工具</div>'
       +     '<button class="railbtn" id="pv_import" style="text-align:left">导入图片</button>'
       +     '<button class="railbtn" id="pv_openrail" style="text-align:left">打开素材</button>'
@@ -8790,39 +8437,7 @@ function openCopyView(k, kind, force, tb, host){
       cvChain = ['spot'];
       pubStart('/api/pubgen', {model: k, style: 'studio', price: pubPrice(), ver: pubVer()});
     };
-    var pq = wrap.querySelector('#pv_qa');
-    if (pq) pq.onclick = function(){
-      var rail = wrap.querySelector('#cv_rail');
-      pq.disabled = true; pq.textContent = '自检中…';
-      fetch('/api/pubqa', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({model: k, bg: 1})})
-        .then(function(r){ return r.json(); })
-        .then(function(j){
-          if (!j || !j.ok || !j.started){ throw new Error((j && j.msg) || '启动失败'); }
-          pollJob('pubqa:' + k, function(res){
-          pq.disabled = false; pq.textContent = 'AI 成片自检';
-          var iss = (res && res.issues) || [];
-          var qh = '<div style="position:fixed;inset:0;background:rgba(10,16,28,.5);z-index:82;display:flex;align-items:center;justify-content:center" data-qaclose="1">'
-            + '<div style="background:#fff;border-radius:12px;max-width:640px;width:92%;max-height:78%;overflow:auto;padding:18px 20px;font-size:13px">';
-          if (!iss.length){
-            qh += '<b style="color:#047857">✓ 没挑出毛病，可以发了</b>';
-          } else {
-            qh += '<b>AI 自检：发现 ' + iss.length + ' 处待优化（按严重程度排）</b><div style="height:8px"></div>';
-            var sevmap = {'高': ['#fee2e2', '#b42318', '严重'], '中': ['#fef3c7', '#92400e', '注意'], '低': ['#eef2ff', '#4338ca', '轻微']};
-            for (var c2 = 0; c2 < iss.length; c2++){
-              var sv = sevmap[iss[c2].severity] || sevmap['低'];
-              qh += '<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px">'
-                + '<span style="flex:0 0 auto;border-radius:6px;padding:2px 8px;font-size:11.5px;font-weight:600;background:' + sv[0] + ';color:' + sv[1] + '">第 ' + esc(iss[c2].slot || '?') + ' 张 · ' + sv[2] + '</span>'
-                + '<div style="flex:1;border:1px solid #e3e8f0;background:#fff;border-radius:8px;padding:7px 10px;line-height:1.5">' + esc(iss[c2].issue || '') + '</div></div>';
-            }
-          }
-          qh += '<div style="height:12px"></div><button data-qaclose="1" style="width:100%;border:none;background:#4f46e5;color:#fff;border-radius:8px;padding:8px;font-size:13px;font-weight:600">知道了</button></div></div>';
-          var old = document.getElementById('pubqamask'); if (old) old.remove();
-          var qd = document.createElement('div'); qd.id = 'pubqamask'; qd.innerHTML = qh;
-          document.body.appendChild(qd);
-          });
-        })
-        .catch(function(e){ pq.disabled = false; pq.textContent = 'AI 成片自检'; alert('自检失败：' + e); });
-    };
+    /* 2026-11-27 用户令「AI 选主图 + 成片自检这两个删」：AI 成片自检按钮已整体移除 */
     var pi = wrap.querySelector('#pv_import');
     var pfile = wrap.querySelector('#pv_file');
     if (pi && pfile){
@@ -9016,6 +8631,15 @@ listEl.addEventListener('click', function(e){
     } else { fb(_mv, mo); }
     return;
   }
+  var _nc = e.target.closest('[data-nmcopy]');
+  if (_nc){
+    /* 复制标题（2026-11-28 用户令）：跟复制纯型号同一套 toast 回弹 */
+    var _nv = _nc.getAttribute('data-nmcopy');
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(_nv).then(function(){ toast(_nc, true); }, function(){ fb(_nv, _nc); });
+    } else { fb(_nv, _nc); }
+    return;
+  }
   var xc = e.target.closest('[data-xidcopy]');
   if (xc){
     /* 复制闲鱼ID（2026-10-14 用户改稿：卡片行 × 删除键改成复制键）；复用 toast 回弹「已复制」 */
@@ -9133,13 +8757,6 @@ listEl.addEventListener('click', function(e){
   }
   var c = e.target.closest('[data-copy]');
   if (c){ var item = UID[+c.dataset.copy]; if (item) doCopy(copyText(item), c); return; }
-  var cw = e.target.closest('[data-copydoc]');
-  if (cw){
-    /* 写文案常驻入口（2026-10-17）：任意卡片直接进配文 PRO（不用先走发布那步的顺手一问）；
-       口径跟卡片走（正品/滞销/样机），进去后还能「换型号重开」 */
-    openCopyView(cw.getAttribute('data-copydoc'), cw.getAttribute('data-copykind') || 'z', false);
-    return;
-  }
   var gw = e.target.closest('[data-gwview]');
   if (gw){
     /* 官网图库入口（2026-11-03 用户令「按键对应的是我的机型，不是打开官网」）：
@@ -9153,15 +8770,31 @@ listEl.addEventListener('click', function(e){
     openBaoView(bb.getAttribute('data-baodoc'));
     return;
   }
-  var wb = e.target.closest('[data-whiteview]');
-  if (wb){
-    /* 白字首图入口（2026-11-03 用户令：卡片按钮行独立入口，不塞配文窗） */
-    openWhiteView(wb.getAttribute('data-whiteview'));
-    return;
-  }
-  var tw = e.target.closest('[data-tbdoc]');
-  if (tw){
-    /* 婷宝电器优选入口（2026-10-17）：内嵌婷宝版文案窗（独立权限 tbyp，管理号决定给谁用） */    openCopyView(tw.getAttribute('data-tbdoc'), tw.getAttribute('data-tbkind') || 'z', false, true);
+  var kf = e.target.closest('[data-kitflush]');
+  if (kf){
+    /* 2026-11-27 用户令「清缓存重出对应到我的生成型号」：每张卡一个，只清重出这一台 */
+    var km = kf.getAttribute('data-kitflush');
+    if (!confirm('清掉「' + km + '」的抓取/文案缓存并全部重出？\n（手选图/主图/说明书/抓取图保留，约1-3分钟）')) return;
+    kf.disabled = true; kf.textContent = '清缓存重出…';
+    fetch('/api/kitflush?model=' + encodeURIComponent(km), {method: 'POST'})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j || !j.ok) throw new Error((j && j.msg) || '启动失败');
+        toastMsg('已开始清缓存重出：' + km);
+        pollJob('kitflush:' + km, function(res){
+          kf.disabled = false; kf.textContent = '清缓存重出';
+          toastMsg('清缓存重出完成：' + km + ((res && res.msg) ? '（' + res.msg + '）' : ''));
+        }, function(err){
+          kf.disabled = false; kf.textContent = '清缓存重出';
+          toastMsg('清缓存重出失败：' + err.message);
+        }, function(sec){
+          kf.textContent = '清缓存重出 ' + sec + 's';
+        });
+      })
+      .catch(function(e2){
+        kf.disabled = false; kf.textContent = '清缓存重出';
+        toastMsg('清缓存重出：' + e2.message);
+      });
     return;
   }
   var f = e.target.closest('[data-fill]');
@@ -10884,12 +10517,10 @@ function openJobs(){
             var st = x.running ? '<span style="color:#c2760a">跑着</span>'
                    : (x.ok === true ? '<span class="ok">完成</span>' : '<span class="bad">失败</span>');
             /* 2026-11-14 用户令「能直接点击就跳到他生成文案的那个界面」：
-               copy:<型号>:<kind> → 打开写文案页；kitset:/kitwhite: → 打开宝套图/婷套图窗。
+               kitset:<型号> → 打开宝套图窗（2026-11-27 用户令：配文/婷整体下线，只跳宝）。
                认不出的 key（pubqa 等内部任务）不可点。 */
-            var jk = String(x.k || ''), mm = jk.match(/^copy:(.+):(l|s|z)$/), jump = '';
-            if (mm) jump = 'copy';
-            else if (jk.indexOf('kitset:') === 0) jump = 'bao';
-            else if (jk.indexOf('kitwhite:') === 0) jump = 'white';
+            var jk = String(x.k || ''), jump = '';
+            if (jk.indexOf('kitset:') === 0) jump = 'bao';
             return '<tr' + (jump ? ' data-jump="' + jump + '" data-jk="' + esc(jk) + '" style="cursor:pointer" title="点击打开对应界面"' : '')
               + '><td class="mono" style="font-size:11.5px">' + esc(x.k) + '</td><td>' + st + '</td>'
               + '<td style="font-size:12px">' + esc(x.prog || x.err || '—') + '</td></tr>';
@@ -10900,15 +10531,8 @@ function openJobs(){
         tr.addEventListener('click', function(){
           var jk = tr.getAttribute('data-jk') || '';
           var jp = tr.getAttribute('data-jump');
-          if (jp === 'copy'){
-            var mm = jk.match(/^copy:(.+):(l|s|z)$/);
-            if (mm) openCopyView(mm[1], mm[2], false);
-          } else if (jp === 'bao'){
+          if (jp === 'bao'){
             openBaoView(jk.slice('kitset:'.length));
-          } else if (jp === 'white'){
-            /* kitwhite:<型号>:<tone> → 婷套图窗 */
-            var k2 = jk.slice('kitwhite:'.length).replace(/:(blue|purple)$/, '');
-            openWhiteView(k2);
           }
           m.remove();   /* 跳过去就把任务列表收起来，别挡着 */
         });
@@ -11303,6 +10927,40 @@ function toastMsg(s){
     setTimeout(function(){ d.remove(); }, 1800);
   } catch (e) {}
 }
+
+/* 清缓存全部重出（2026-11-27 用户令「给我一个按键，清理缓存出的，全部重新出」）：
+   POST /api/kitflush（仅管理号）→ jobman 后台跑清缓存+全型号 force 重出，
+   轮询 /api/jobget?key=kitflush 刷按钮文案；中途左下「任务」面板可取消。 */
+(function(){
+  var b = document.getElementById('kitflushbtn');
+  if (!b) return;
+  function rst(){ b.disabled = false; b.textContent = '清缓存重出'; }
+  b.onclick = function(){
+    if (!confirm('清掉全部文案缓存和每型号缓存（手选图/主图/说明书/抓取图保留），然后所有型号全部重新出一遍？\n\n全部重出每个型号要几分钟，总耗时较长；中途可在「任务」面板取消。')) return;
+    b.disabled = true; b.textContent = '清缓存重出…';
+    fetch('/api/kitflush', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j || !j.ok){ toastMsg((j && j.msg) || '启动失败'); rst(); return; }
+        toastMsg('已开始：清缓存 → 全部重出（左下「任务」可看进度/取消）');
+        (function poll(){
+          fetch('/api/jobget?key=kitflush', { cache: 'no-store' })
+            .then(function(r){ return r.json(); })
+            .then(function(st){
+              if (st.phase === 'running'){
+                b.textContent = st.prog ? ('重出中…' + String(st.prog).slice(-18)) : '清缓存中…';
+                setTimeout(poll, 5000); return;
+              }
+              rst();
+              if (st.phase === 'done') toastMsg((st.res && st.res.msg) || '全部重出完成');
+              else if (st.phase === 'cancelled') toastMsg('清缓存重出已取消');
+              else if (st.phase === 'failed') toastMsg('重出失败：' + ((st.res && st.res.msg) || st.err || ''));
+            }).catch(function(){ setTimeout(poll, 5000); });
+        })();
+      })
+      .catch(function(e){ toastMsg('请求失败：' + e); rst(); });
+  };
+})();
 
 ensureAuth().then(function(){
 if (DATA){

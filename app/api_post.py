@@ -394,20 +394,29 @@ class ApiPostMixin:
             od = os.path.join(mdir, "官网")
             os.makedirs(od, exist_ok=True)
             _ext = os.path.splitext(src)[1].lower() or ".jpg"
-            _kind_stem = "主图_手选" if kind == "main" else "尺寸图_手选"
+            # 2026-11-27 用户令「尺寸图未必只有一台，像 KF70/200 就有两张，选两个合并」：
+            # kind=size2 落 尺寸图2_手选，出图时 _manual_overrides 纵向合并成一张 sizeimg。
+            _kind_stem = {"main": "主图_手选", "size": "尺寸图_手选",
+                          "size2": "尺寸图2_手选"}.get(kind)
+            if not _kind_stem:
+                self._send(400, json.dumps({"ok": False, "msg": "kind 不合法"},
+                                           ensure_ascii=False))
+                return
             # 清掉本槽全部旧变体（上传的 主图.png 和历史手选 主图_*.png 一起清，防 _find 挑错）
+            # 注意：清 尺寸图 槽不许波及 尺寸图2（那是另一台机器的图）
             for f in os.listdir(od):
                 _st, _ex = os.path.splitext(f)
                 if _ex.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
                     continue
-                _base = _st.replace("_手选", "")
-                if kind == "main" and (_st == "主图" or _st.startswith("主图")):
-                    try:
-                        os.remove(os.path.join(od, f))
-                    except Exception:
-                        pass
-                elif kind == "size" and (_st == "尺寸图" or _st.startswith("尺寸图") or
-                                         _st.startswith("尺寸") or _st == "zol_0"):
+                _hit = False
+                if kind == "main":
+                    _hit = (_st == "主图" or _st.startswith("主图"))
+                elif kind == "size":
+                    _hit = ((_st.startswith(("尺寸图", "尺寸")) and
+                             not _st.startswith(("尺寸图2", "尺寸2"))) or _st == "zol_0")
+                elif kind == "size2":
+                    _hit = _st.startswith(("尺寸图2", "尺寸2"))
+                if _hit:
                     try:
                         os.remove(os.path.join(od, f))
                     except Exception:
@@ -473,7 +482,7 @@ class ApiPostMixin:
                 else:
                     dd = os.path.join(_ks.model_dir(model), "官网")
                     os.makedirs(dd, exist_ok=True)
-                    _stem = "尺寸图" if kind == "size" else "主图"
+                    _stem = "尺寸图2" if kind == "size2" else ("尺寸图" if kind == "size" else "主图")
                     # 清掉旧变体（主图.jpg/主图_2.png 之类），只留刚传的这张，避免 override 挑错
                     for _f in os.listdir(dd):
                         _st, _ex = os.path.splitext(_f)
@@ -499,6 +508,101 @@ class ApiPostMixin:
                 self._send(200, json.dumps({"ok": True, "saved": fp}, ensure_ascii=False))
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False))
+            return
+
+        # ---------- 清缓存全部重出（2026-11-27 用户令「给我一个按键，清理缓存出的，全部重新出」） ----------
+        # 清两处机器缓存：①文案缓存（copy_root 下 *_v*.json，314 个）②每型号缓存
+        # （info.json/set.json/cand.json/_state_pick.json/_neg.json/_xs_read_params.json/_cand_ocr.png）。
+        # 手选图/上传主图/说明书 PDF/官网欣盛中关村抓取归档图保留——那些是素材不是缓存。
+        # 然后后台把 kitset 全部型号 force=1 重出一遍（jobman 进度，可取消）。仅管理号。
+        if u.path == "/api/kitflush":
+            if state.PERM_STATE.get("role") != "admin":
+                self._send(403, json.dumps({"ok": False, "msg": "只有管理号能清缓存重出"},
+                                           ensure_ascii=False))
+                return
+            import jobman as _jm
+            # 2026-11-27 用户令「清缓存重出对应到我的生成型号」：带 ?model=X 只清重出这一台
+            # （卡片按钮行逐型号按键），不带 = 全部型号（侧栏原按键口径）。
+            # 手选图/主图/说明书/抓取归档图一律保留。
+            _one = (urllib.parse.parse_qs(u.query).get("model") or [""])[0].strip()
+            _kk = ("kitflush:" + _one) if _one else "kitflush"
+
+            def _do():
+                import kitset as _kf
+                import copywriter as _cw2
+                import re as _re
+
+                def _p(s):
+                    state.LOG.append("[清缓存重出] " + str(s))
+                    _jm.prog(_kk, str(s))
+                    if _jm.is_cancelled(_kk):
+                        raise _jm.CancelledError("已取消")
+
+                n1 = 0
+                try:
+                    _cr = _cw2.copy_root()
+                    _pfx = ""
+                    if _one:
+                        _nm = _cw2.norm_model(_one) or _one
+                        _pfx = _re.sub(r"[^0-9A-Za-z._-]", "_", _nm)
+                    for _f in os.listdir(_cr):
+                        if _f.endswith(".json") and "_v" in _f:
+                            if _pfx and not _f.startswith(_pfx):
+                                continue
+                            try:
+                                os.remove(os.path.join(_cr, _f))
+                                n1 += 1
+                            except OSError:
+                                pass
+                except Exception:
+                    pass
+                _p("文案缓存已清 %d 个" % n1)
+                _FLUSH = ("info.json", "set.json", "cand.json", "_state_pick.json",
+                          "_neg.json", "_xs_read_params.json", "_cand_ocr.png")
+                if _one:
+                    _mdir0 = _kf.model_dir(_one)
+                    for _fn in _FLUSH:
+                        _p2 = os.path.join(_mdir0, _fn)
+                        if os.path.isfile(_p2):
+                            try:
+                                os.remove(_p2)
+                            except OSError:
+                                pass
+                    _models = [_one]
+                    _p("已清 %s 的缓存数据（手选/主图/说明书/抓取图保留）" % _one)
+                else:
+                    _root = _kf.kit_root()
+                    _models = sorted(_d for _d in os.listdir(_root)
+                                     if os.path.isdir(os.path.join(_root, _d))
+                                     and not _d.startswith("."))
+                    for _m in _models:
+                        for _fn in _FLUSH:
+                            _p2 = os.path.join(_root, _m, _fn)
+                            if os.path.isfile(_p2):
+                                try:
+                                    os.remove(_p2)
+                                except OSError:
+                                    pass
+                    _p("已清 %d 个型号的缓存数据（手选/主图/说明书/抓取图保留）" % len(_models))
+                ok, fail = 0, 0
+                for _i, _m in enumerate(_models):
+                    _p("全部重出 %s（%d/%d）…" % (_m, _i + 1, len(_models)))
+                    try:
+                        _kf.generate(_m, 1, log=_p)
+                        ok += 1
+                    except _jm.CancelledError:
+                        raise
+                    except Exception as _e:
+                        fail += 1
+                        _p("⚠ %s 重出失败：%s" % (_m, _e))
+                return {"ok": True, "models": len(_models), "done": ok, "fail": fail,
+                        "msg": "重出完成：%d 成功 / %d 失败" % (ok, fail)}
+
+            if not _jm.submit(_kk, _do, _log=lambda s: state.LOG.append("[清缓存重出] " + s)):
+                self._send(200, json.dumps({"ok": False, "busy": True,
+                                            "msg": "清缓存重出已经在跑了"}, ensure_ascii=False))
+                return
+            self._send(200, json.dumps({"ok": True, "started": True, "key": _kk}, ensure_ascii=False))
             return
 
         # ---------- 素材存储路径（2026-10-24 用户定稿：界面可改，peiwork+copy 共用，老数据搬） ----------
@@ -530,9 +634,9 @@ class ApiPostMixin:
                                        ensure_ascii=False))
             return
 
-        if u.path in ("/api/pubgen", "/api/pubhero", "/api/pubsel", "/api/pubqa",
-                      "/api/pubauto", "/api/pubimport", "/api/pubopen",
-                      "/api/pubxy", "/api/kitwhite"):
+        if u.path in ("/api/pubgen", "/api/pubhero", "/api/pubsel",
+                      "/api/pubimport", "/api/pubopen",
+                      "/api/pubxy"):
             import pubwork
             try:
                 n = int(self.headers.get("Content-Length") or 0)
@@ -576,48 +680,12 @@ class ApiPostMixin:
                                      args=(model, price, ver), daemon=True).start()
                     self._send(200, json.dumps({"ok": True, "started": True}, ensure_ascii=False))
                     return
-                if u.path == "/api/kitwhite":
-                    # 白字首图（2026-11-03 配文入口复制蓝底）：tone=blue/purple，
-                    # jobman 后台跑（没参数快照时会先整套跑一遍蓝底，可能 1-2 分钟）。
-                    # key 带 tone（2026-11-03 用户令「点进来直接生成」：两种色调开窗自动并行跑，互不抢锁）
-                    tone = str(d.get("tone") or "blue")
-                    if tone not in ("blue", "purple"):
-                        self._send(400, json.dumps({"ok": False, "msg": "tone 只能是 blue/purple"}, ensure_ascii=False))
-                        return
-                    import jobman
-                    import kitset
-                    key = "kitwhite:%s:%s" % (model, tone)
-
-                    def _do():
-                        return kitset.white_hero(model, tone, log=lambda s: jobman.prog(key, s))
-                    if not jobman.submit(key, _do):
-                        self._send(200, json.dumps({"ok": True, "key": key, "busy": True}, ensure_ascii=False))
-                        return
-                    self._send(200, json.dumps({"ok": True, "key": key}, ensure_ascii=False))
-                    return
                 if u.path == "/api/pubsel":
                     rels = [str(x).replace("\\", "/") for x in (d.get("files") or [])
                             if str(x) and ".." not in str(x)]
                     r = pubwork.sel_save(model, rels, sell_price=price, version=ver)
-                elif u.path == "/api/pubqa":
-                    if d.get("bg"):
-                        # Mac WKWebView fetch ~60s 超时（"Load failed"）→ AI 自检走后台，前端轮询 /api/jobget
-                        import jobman
-                        if not jobman.submit("pubqa:" + model, pubwork.qa_run, model):
-                            r = {"ok": False, "msg": "已有自检在跑，等一下"}
-                        else:
-                            r = {"ok": True, "started": True}
-                    else:
-                        r = pubwork.qa_run(model)
-                elif u.path == "/api/pubauto":
-                    if d.get("bg"):
-                        import jobman
-                        if not jobman.submit("pubauto:" + model, pubwork.qa_auto, model):
-                            r = {"ok": False, "msg": "已有自动优化在跑，等一下"}
-                        else:
-                            r = {"ok": True, "started": True}
-                    else:
-                        r = pubwork.qa_auto(model)
+                # 2026-11-27 用户令：/api/pubqa 与 /api/pubauto（AI 成片自检/自动优化）随
+                # qa_render 整体下马，端点撤销——前端按钮已删，打过来一律落 404 分支
                 elif u.path == "/api/pubimport":
                     r = pubwork.import_imgs(model, d.get("files") or [])
                 elif u.path == "/api/pubxy":

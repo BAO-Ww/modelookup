@@ -23,7 +23,7 @@ _WAIT_TIMEOUT = 900          # 排队上限（秒）；2026-11-10 600→900：�
 
 def serialized(fn):
     """出图入口排队装饰器：@serialized 加在 kitset.generate / white_hero、
-    pubwork.gen_style / gen_hero / _auto_qa_spot 上。"""
+    pubwork.gen_style / gen_hero 上。"""
     @functools.wraps(fn)
     def _w(*args, **kw):
         if not RENDER_LOCK.acquire(blocking=False):

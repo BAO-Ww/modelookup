@@ -1026,63 +1026,6 @@ def _last_get(model):
 
 
 @serialized
-def _auto_qa_spot(model, info, src, out, style, paths, prog=None):
-    """聚光四件套生成完自动 AI 复检（2026-10-29 用户令「做好的四张让AI过一遍」）。
-    商汤免费额度优先；无 key/视觉不可用静默跳过不挡出货。
-    压字/出画/截断等确定性布局问题自动微调重渲（复用 qa_render + auto_optimize）。
-
-    2026-10-30 用户实锤「聚光的图一直出不来」：复检原本跑在生成线程里、还占着进度条，
-    四张图早落盘了前端却一直「生成中 92%」等到复检跑完（1~3 分钟）。现在复检走独立
-    后台线程、prog 传 None = 不碰 JOB 进度（图先亮出来，修好的再静默替换）。
-
-    2026-11-14 用户令「把 AI 复检去掉」：成片复检拦不住烂图还白烧视觉额度 → 停用。
-    要恢复把下面这行 return 删掉即可。"""
-    return
-    import pei_core
-    _prog = prog or (lambda p, m: None)
-    key = _ai_key() or pei_core._sf_key()
-    if not key:
-        _logf()("AI 复检跳过：未配置视觉 key")
-        return
-    _prog(92, "AI 复检成片 ...")
-    res = pei_core.qa_render(key, paths, info)
-    if res is None:
-        _logf()("AI 复检不可用（视觉模型无应答），跳过")
-        return
-    if not res:
-        _logf()("AI 复检通过：%d 张成片无问题" % len(paths))
-        return
-    _logf()("AI 复检发现 %d 处问题：%s" % (
-        len(res), "；".join("%s(%s)" % (x["issue"], x["severity"]) for x in res)))
-    # 2026-11-10：AI 老报「图片背景颜色与其他图片不一致」。聚光四张底色是深色系
-    # 渐变（实测 (32,32,48) vs (0,0,0) 同族，人眼看是统一深色底），先像素实测——
-    # 同族就是误报，别让它挤掉真正要修的布局问题、也别占「需人工」的坑。
-    try:
-        _bad_bg, _ref_bg = pei_core.bg_mismatch_slots(paths)
-    except Exception:
-        _bad_bg, _ref_bg = [], None
-    _res2 = []
-    for x in res:
-        if x.get("code") == "style_mismatch" and x.get("slot") not in _bad_bg:
-            _c = tuple(_ref_bg or (0, 0, 0))
-            _logf()("  %s —— 像素实测底色同族（#%02X%02X%02X），判 AI 误报，忽略"
-                    % ((x.get("issue"),) + _c))
-            continue
-        _res2.append(x)
-    if not _res2:
-        _logf()("AI 复检其余均为误报，无需修复")
-        return
-    import pei_ai9
-    r = pei_ai9.auto_optimize(key, info, src, out, style, _res2, rounds=2,
-                              progress=_prog, log=lambda s: _logf()(s),
-                              skip_scale_slots=(4,))
-    if r.get("fixed"):
-        _logf()("AI 自动修复槽位 %s，重渲完成" % r["fixed"])
-    for x in (r.get("remaining") or []):
-        _logf()("需人工确认：%s（%s）" % (x.get("issue"), x.get("severity")))
-
-
-@serialized
 def gen_style(model, style, sell_price=None, version="N", entry_title=None, only=None):
     """生成一套 6 张精修（后台线程跑，JOB 汇报进度）。
     entry_title（2026-11-04 用户令）：软件条目标题，聚光首图大字用它——
@@ -1179,7 +1122,7 @@ def gen_style(model, style, sell_price=None, version="N", entry_title=None, only
         _job_end(False, str(e))
         return
     # 2026-11-11 用户令「AI 检查有什么用呢还不如不要」：聚光四件套的 AI 复检整个取消。
-    # _auto_qa_spot 函数保留备用，不再有任何调用方。
+    # AI 成片复检已整体下马（2026-11-27 用户令），无任何调用方。
 
 
 @serialized
@@ -1346,49 +1289,6 @@ def sel_save(model, rels, sell_price=None, version="N"):
     except Exception:
         pass
     return {"ok": True, "count": n, "dir": sel}
-
-
-# ---------------------------------------------------------------- AI 自检 / 自动优化
-
-def qa_run(model):
-    """AI 成片自检：对最近一次生成的套图出报告（peiwen：core.qa_render）"""
-    last = _last_get(model)
-    paths = last.get("paths") or []
-    if not paths:
-        raise RuntimeError("先点风格按钮生成发布图，再做自检")
-    import pei_core
-    res = pei_core.qa_render(_ai_key(), paths, load_info(model))
-    if res is None:
-        raise RuntimeError("视觉模型暂不可用，无法自检")
-    return {"ok": True, "issues": res}
-
-
-def qa_auto(model):
-    """自检 + 自动优化（确定性布局类：文字压机器/机器被裁/文字截断，重渲问题槽位）"""
-    last = _last_get(model)
-    paths, out, style = last.get("paths") or [], last.get("out"), last.get("style")
-    if not paths or not out or not style:
-        raise RuntimeError("先点风格按钮生成发布图，再做自动优化")
-    import pei_core
-    import pei_ai9
-    res = pei_core.qa_render(_ai_key(), paths, load_info(model))
-    if res is None:
-        raise RuntimeError("视觉模型暂不可用，无法自检+自动优化")
-    info = load_info(model)
-    if style == "spot":
-        # 聚光独立体系：自动优化重渲的图源/成品都在 kitset（2026-10-29 用户令）
-        import kitset as _ks
-        _ks.ensure_data(model)
-        _kinfo = _ks.load_kinfo(model) or info
-        info = dict(_kinfo)
-        info["dir"] = _ks.model_dir(model)
-        src = os.path.join(info["dir"], "官网")
-    else:
-        src = info["dir"]
-    r = pei_ai9.auto_optimize(_ai_key(), info, src, out, style, res,
-                              rounds=2, progress=_job_prog)
-    new = pei_core.qa_render(_ai_key(), paths, info)
-    return {"ok": True, "issues": (new if new is not None else res), "optimized": r}
 
 
 # ---------------------------------------------------------------- 导入图片
